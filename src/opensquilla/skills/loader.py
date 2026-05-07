@@ -459,17 +459,14 @@ class SkillLoader:
             homepage = frontmatter.get("homepage", "")
 
             # Conditional activation fields
-            hermes_meta: dict[str, Any] = {}
+            activation_meta: dict[str, Any] = {}
             raw_meta_dict = frontmatter.get("metadata", {})
             if isinstance(raw_meta_dict, dict):
-                raw_hermes_meta = raw_meta_dict.get(
-                    "hermes",
-                    raw_meta_dict.get("opensquilla", {}),
-                )
-                if isinstance(raw_hermes_meta, dict):
-                    hermes_meta = cast(dict[str, Any], raw_hermes_meta)
-            requires_tools = hermes_meta.get("requires_tools", [])
-            fallback_for_toolsets = hermes_meta.get("fallback_for_toolsets", [])
+                raw_activation_meta = raw_meta_dict.get("opensquilla", {})
+                if isinstance(raw_activation_meta, dict):
+                    activation_meta = cast(dict[str, Any], raw_activation_meta)
+            requires_tools = activation_meta.get("requires_tools", [])
+            fallback_for_toolsets = activation_meta.get("fallback_for_toolsets", [])
 
             return SkillSpec(
                 name=name,

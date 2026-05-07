@@ -87,6 +87,6 @@ class SkillSpec:
     homepage: str = ""
     file_path: str = ""
     base_dir: str = ""
-    # Conditional activation (Hermes-style)
+    # Conditional activation metadata
     requires_tools: list[str] = field(default_factory=list)
     fallback_for_toolsets: list[str] = field(default_factory=list)

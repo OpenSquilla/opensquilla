@@ -8,7 +8,7 @@ provenance:
   maintained_by: OpenSquilla
 metadata:
   {
-    "hermes":
+    "opensquilla":
       {
         "requires_tools": ["background_process", "exec_command", "process"],
       },

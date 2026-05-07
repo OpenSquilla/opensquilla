@@ -12,7 +12,7 @@ provenance:
   upstream_url: ""
   maintained_by: OpenSquilla
 metadata:
-  hermes:
+  opensquilla:
     requires_tools:
       - memory_search
       - memory_get

@@ -29,7 +29,7 @@ _VALID_CRON_ACTIONS = ("list", "add", "remove", "run")
 
 
 # ---------------------------------------------------------------------------
-# Cron prompt injection scanner (reference: hermes-agent _scan_cron_prompt)
+# Cron prompt injection scanner
 # ---------------------------------------------------------------------------
 
 # Hard-block patterns — always rejected

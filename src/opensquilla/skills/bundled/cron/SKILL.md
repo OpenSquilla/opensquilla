@@ -21,7 +21,7 @@ provenance:
   upstream_url: https://github.com/openclaw/openclaw
   maintained_by: OpenSquilla
 metadata:
-  hermes:
+  opensquilla:
     requires_tools:
       - cron
 ---
