@@ -75,6 +75,11 @@ def _print_restart_notice() -> None:
     )
 
 
+def _print_channel_verification_next_step(name: str) -> None:
+    typer.echo("Next: opensquilla gateway restart")
+    typer.echo(f"Verify: uv run opensquilla channels status {name} --json")
+
+
 _SOURCE_LABEL = {
     "explicit": "from --config",
     "env": "from OPENSQUILLA_GATEWAY_CONFIG_PATH",
@@ -313,6 +318,7 @@ def channels_add(
     if persist.backup_path:
         typer.echo(f"Backup: {persist.backup_path}")
     _print_restart_notice()
+    _print_channel_verification_next_step(name)
 
 
 @channels_app.command("remove")
@@ -417,6 +423,7 @@ def channels_edit(
     if persist.backup_path:
         typer.echo(f"Backup: {persist.backup_path}")
     _print_restart_notice()
+    _print_channel_verification_next_step(name)
 
 
 @channels_app.command("types")

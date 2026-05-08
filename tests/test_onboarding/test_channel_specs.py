@@ -96,7 +96,38 @@ def test_feishu_connection_mode_choices():
     spec = get_channel_setup_spec("feishu")
     field = next(f for f in spec.fields if f.name == "connection_mode")
     assert field.field_type == "select"
+    assert field.default == "websocket"
     assert field.choices == ("webhook", "websocket")
+
+
+def test_feishu_webhook_fields_are_conditional():
+    spec = get_channel_setup_spec("feishu")
+    fields = {f.name: f for f in spec.fields}
+    assert fields["webhook_path"].show_when == {"connection_mode": "webhook"}
+    assert fields["verification_token"].show_when == {"connection_mode": "webhook"}
+    assert fields["encrypt_key"].advanced is True
+
+
+def test_telegram_webhook_fields_are_conditional():
+    spec = get_channel_setup_spec("telegram")
+    fields = {f.name: f for f in spec.fields}
+    assert fields["transport_name"].default == "polling"
+    assert fields["webhook_path"].show_when == {"transport_name": "webhook"}
+    assert fields["webhook_url"].show_when == {"transport_name": "webhook"}
+    assert fields["webhook_secret_token"].show_when == {"transport_name": "webhook"}
+    assert fields["poll_timeout_s"].show_when == {"transport_name": "polling"}
+
+
+def test_channel_catalog_payload_exposes_ui_metadata():
+    payload = channel_catalog_payload()
+    feishu = next(c for c in payload if c["type"] == "feishu")
+    fields = {f["name"]: f for f in feishu["fields"]}
+    assert fields["app_secret"]["group"] == "credentials"
+    assert fields["app_secret"]["placeholder"]
+    assert fields["webhook_path"]["showWhen"] == {"connection_mode": "webhook"}
+    assert fields["encrypt_key"]["advanced"] is True
+    slack = next(c for c in payload if c["type"] == "slack")
+    assert "public URL" in slack["help"]
 
 
 def test_matrix_encryption_choices():

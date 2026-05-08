@@ -228,7 +228,7 @@ async def _provider_configure(params: Any, ctx: RpcContext) -> dict[str, Any]:
     from opensquilla.onboarding.mutations import upsert_llm_provider
 
     provider_id = _require(params, "providerId")
-    model = _require(params, "model")
+    model = params.get("model", "") if isinstance(params, dict) else ""
     cfg = _active_config(ctx)
     res = upsert_llm_provider(
         cfg,
@@ -266,8 +266,10 @@ async def _router_configure(params: Any, ctx: RpcContext) -> dict[str, Any]:
     cfg = _active_config(ctx)
     mode = params.get("mode", "recommended") if isinstance(params, dict) else "recommended"
     default_tier = params.get("defaultTier") if isinstance(params, dict) else None
-    res = upsert_router(cfg, mode=mode, default_tier=default_tier)
+    tiers = params.get("tiers") if isinstance(params, dict) else None
+    res = upsert_router(cfg, mode=mode, default_tier=default_tier, tiers=tiers)
     _apply_inplace(ctx, res.config)
+    _sync_provider_selector(ctx, res.config.llm)
     config_path = _persist(ctx, res.config, restart_required=res.restart_required)
     return {
         "changed": res.changed,
@@ -275,6 +277,25 @@ async def _router_configure(params: Any, ctx: RpcContext) -> dict[str, Any]:
         "configPath": config_path,
         "entry": res.public_payload,
         "warnings": res.warnings,
+    }
+
+
+@_d.method("onboarding.channel.probe", scope="operator.admin")
+async def _channel_probe(params: Any, ctx: RpcContext) -> dict[str, Any]:
+    from opensquilla.onboarding.mutations import validate_channel_entry
+    from opensquilla.onboarding.redaction import redact_channel_entry
+
+    entry = _require(params, "entry")
+    if not isinstance(entry, dict):
+        raise ValueError("params.entry must be an object")
+    normalized = validate_channel_entry(entry)
+    type_name = str(normalized.get("type") or "")
+    return {
+        "status": "ready",
+        "connected": False,
+        "restartRequired": True,
+        "entry": redact_channel_entry(type_name, normalized),
+        "warnings": [],
     }
 
 
@@ -288,6 +309,7 @@ async def _search_configure(params: Any, ctx: RpcContext) -> dict[str, Any]:
         cfg,
         provider_id=provider_id,
         api_key=params.get("apiKey", "") if isinstance(params, dict) else "",
+        api_key_env=params.get("apiKeyEnv", "") if isinstance(params, dict) else "",
         max_results=params.get("maxResults", 5) if isinstance(params, dict) else 5,
         proxy=params.get("proxy", "") if isinstance(params, dict) else "",
         use_env_proxy=(params.get("useEnvProxy", False) if isinstance(params, dict) else False),

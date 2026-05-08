@@ -148,12 +148,15 @@ dependencies; they use different Python environments.
 
 ### First-run config
 
-`opensquilla onboard` walks you through provider setup and (unless
-skipped) channels and search, then writes a config file. The router
-defaults to `recommended`, which enables SquillaRouter for supported
-provider profiles. Pass `--router disabled` only if you intentionally
-want direct single-model routing, or `--router openrouter-mix` to keep
-the built-in OpenRouter mixed model routes. Useful invocations:
+`opensquilla onboard --if-needed` is the recommended post-install
+entrypoint for first-run setup and automation. It writes the active
+config file, skips when an LLM provider is already configured, and keeps
+provider secrets in environment variables when you pass `--api-key-env`.
+The router defaults to `recommended`, which enables SquillaRouter for
+supported provider profiles. Pass `--router disabled` only if you
+intentionally want direct single-model routing, or `--router
+openrouter-mix` to keep the built-in OpenRouter mixed model routes.
+Useful invocations:
 
 ```sh
 opensquilla onboard                # full interactive wizard
@@ -169,7 +172,6 @@ the environment and pass its **name**, not its value, to onboard:
 export OPENROUTER_API_KEY="sk-..."
 opensquilla onboard \
   --provider openrouter \
-  --model deepseek/deepseek-v4-flash \
   --api-key-env OPENROUTER_API_KEY
 ```
 
@@ -178,14 +180,31 @@ wizard:
 
 ```sh
 opensquilla configure provider --provider openai --model gpt-4o
+opensquilla configure router --router recommended
 opensquilla configure search   --search-provider brave
 opensquilla configure channels                # interactive section
 ```
 
 Sections: `provider`, `router`, `channels`, `search`,
-`image-generation`, `memory-embedding`. Onboarding is CLI-only — the
-Web UI at `/control/` is the agent control console, not a setup
-wizard.
+`image-generation`, `memory-embedding`. The Web UI also exposes a setup
+flow at `/control/setup` for provider, router tiers, optional channels,
+and extras. Later CLI edits should use `opensquilla configure
+<section>` rather than provider-specific aliases.
+
+Messaging channel saves are config changes, not runtime connectivity
+proof. Restart the gateway process after channel edits, then verify the
+live adapter state:
+
+```sh
+opensquilla gateway restart
+opensquilla channels status <name> --json
+```
+
+Treat a channel as connected only when the status payload reports
+`enabled=true`, `configured=true`, and `connected=true`. Feishu defaults
+to websocket mode and does not need a public URL in that mode; Feishu
+webhook mode, Slack, WeCom, and Microsoft Teams require a public
+provider-reachable URL.
 
 **Config load order:** `OPENSQUILLA_GATEWAY_CONFIG_PATH` →
 `./opensquilla.toml` → `~/.opensquilla/config.toml` → built-in

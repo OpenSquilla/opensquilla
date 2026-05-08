@@ -136,6 +136,7 @@ def search_query(
 def search_configure(
     provider: str = typer.Argument(..., help="Search provider id (e.g. brave)."),
     api_key: str = typer.Option("", "--api-key", "-k"),
+    api_key_env: str = typer.Option("", "--api-key-env"),
     max_results: int = typer.Option(5, "--max-results"),
     proxy: str = typer.Option("", "--proxy"),
     use_env_proxy: bool = typer.Option(
@@ -155,6 +156,7 @@ def search_configure(
             cfg,
             provider_id=provider,
             api_key=api_key,
+            api_key_env=api_key_env,
             max_results=max_results,
             proxy=proxy,
             use_env_proxy=use_env_proxy,

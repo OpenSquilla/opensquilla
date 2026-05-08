@@ -58,13 +58,35 @@ def test_setup_view_loads_catalog_and_status():
     assert "current.mode" in txt
 
 
-def test_setup_view_is_temporarily_gated_with_cli_fallbacks():
+def test_setup_view_is_available_and_uses_canonical_cli_fallbacks():
     txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
-    assert "const SETUP_UI_AVAILABLE = false;" in txt
-    assert "Web setup is temporarily unavailable" in txt
+    assert "SETUP_UI_AVAILABLE" not in txt
     assert "opensquilla onboard" in txt
-    assert "opensquilla providers configure" in txt
-    assert "~/.opensquilla/config.toml" in txt
+    assert "opensquilla configure provider" in txt
+    assert "opensquilla providers configure" not in txt
+    assert "onboarding.router.configure" in txt
+    assert "onboarding.channel.probe" in txt
+    assert "channels.status" in txt
+    assert "Connected" in txt
+
+
+def test_setup_view_keeps_channel_fields_in_config_shape():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "scope === 'channel' ? label.dataset.name : _camel" in txt
+
+
+def test_setup_view_preserves_selected_channel_type_while_redrawing_fields():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "let _channelType" in txt
+    assert "_channelType = type" in txt
+    assert "channels.some(c => c.type === _channelType)" in txt
+
+
+def test_setup_view_rebinds_conditional_fields_after_dynamic_redraw():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "function _bindConditionalSelects" in txt
+    assert "_bindConditionalSelects(_el)" in txt
+    assert "_bindConditionalSelects(box || _el)" in txt
 
 
 def test_setup_view_is_loaded_and_registered():
@@ -84,6 +106,14 @@ def test_setup_view_treats_image_configure_as_capability_enable_action():
     txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
     assert "field.default !== false" in txt
     assert "imageGenerationEnabled === false" in txt
+
+
+def test_setup_router_controls_use_user_facing_labels():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "SquillaRouter" in txt
+    assert "OpenRouter mix" not in txt
+    assert "Balanced default (t1)" in txt
+    assert "Stronger reasoning (t2)" in txt
 
 
 def test_config_view_exposes_memory_tab_and_restart_notice():

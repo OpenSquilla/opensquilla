@@ -38,7 +38,7 @@ def onboard_command(
             typer.echo("Onboarding already complete; nothing to do.")
             raise typer.Exit(code=0)
 
-    if provider and model:
+    if provider:
         result = run_noninteractive_provider_configure(
             provider,
             {
@@ -70,6 +70,7 @@ def onboard_command(
     if "tty_required" in result.warnings:
         raise typer.Exit(code=2)
     typer.echo(f"Onboarding complete. Config: {result.path}")
+    typer.echo(format_next_steps(load_config(result.path), config_path=result.path))
 
 
 def configure_command(
@@ -104,7 +105,7 @@ def configure_command(
 
         normalized = selected.strip().lower()
         try:
-            if normalized in {"provider", "providers"} and provider and model:
+            if normalized in {"provider", "providers"} and provider:
                 engine = SetupEngine()
                 engine.apply(
                     "provider",
@@ -132,6 +133,7 @@ def configure_command(
                     {
                         "providerId": search_provider,
                         "apiKey": api_key,
+                        "apiKeyEnv": api_key_env,
                         "maxResults": max_results,
                     },
                 )

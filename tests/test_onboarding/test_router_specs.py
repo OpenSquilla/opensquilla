@@ -18,6 +18,11 @@ def test_router_catalog_exposes_supported_profiles_and_tiers():
     assert deepseek["tiers"]["t0"]["provider"] == "deepseek"
     assert "description" in deepseek["tiers"]["t0"]
     assert "thinkingLevel" in deepseek["tiers"]["t0"]
+    openrouter = profiles["openrouter"]
+    assert "image_model" in openrouter["tiers"]
+    assert openrouter["tiers"]["image_model"]["supportsImage"] is True
+    assert payload["defaultTier"] == "t1"
+    assert set(payload["textTiers"]) == {"t0", "t1", "t2", "t3"}
 
 
 def test_get_router_setup_profile_rejects_unknown_profile():

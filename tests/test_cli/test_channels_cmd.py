@@ -254,6 +254,17 @@ def test_channels_add_restart_notice_disambiguates(tmp_path, monkeypatch):
     assert "channels restart" in out
 
 
+def test_channels_add_prints_status_verification_next_step(tmp_path, monkeypatch):
+    _setenv(monkeypatch, tmp_path)
+    result = runner.invoke(
+        app, ["channels", "add", "slack", "--name", "w", "--token", "x"]
+    )
+    assert result.exit_code == 0
+    out = result.stdout.lower()
+    assert "opensquilla gateway restart" in out
+    assert "opensquilla channels status w --json" in out
+
+
 def test_channels_add_echoes_resolved_path_and_source(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

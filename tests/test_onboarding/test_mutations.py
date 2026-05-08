@@ -418,6 +418,20 @@ def test_upsert_search_provider_configures_brave():
     assert res.public_payload["api_key"] == REDACTED_PLACEHOLDER
 
 
+def test_upsert_search_provider_can_use_env_key_reference():
+    cfg = GatewayConfig()
+    res = upsert_search_provider(
+        cfg,
+        provider_id="brave",
+        api_key="",
+        api_key_env="BRAVE_SEARCH_API_KEY",
+    )
+    assert res.config.search_provider == "brave"
+    assert res.config.search_api_key == ""
+    assert res.config.search_api_key_env == "BRAVE_SEARCH_API_KEY"
+    assert res.public_payload["api_key_source"] == "env"
+
+
 def test_upsert_image_generation_provider_configures_openrouter(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     cfg = GatewayConfig()
@@ -466,7 +480,7 @@ def test_search_provider_requiring_key_can_reuse_existing_key():
 def test_search_provider_requiring_key_rejects_missing_key():
     cfg = GatewayConfig()
     with pytest.raises(ValueError, match="api_key"):
-        upsert_search_provider(cfg, provider_id="brave", api_key="")
+        upsert_search_provider(cfg, provider_id="brave", api_key="", api_key_env="")
 
 
 def test_unsupported_search_provider_rejected():

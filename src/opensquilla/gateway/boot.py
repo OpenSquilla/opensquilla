@@ -1296,18 +1296,23 @@ async def build_services(
     try:
         import opensquilla.search.providers.brave  # noqa: F401 — registers provider
         import opensquilla.search.providers.duckduckgo  # noqa: F401 — registers provider
+        from opensquilla.search.registry import get_provider_spec
         from opensquilla.tools.builtin.web import configure_search
 
         provider = config.search_provider
+        search_api_key = config.search_api_key
+        if not search_api_key:
+            env_key = config.search_api_key_env or get_provider_spec(provider).env_key
+            search_api_key = os.environ.get(env_key, "") if env_key else ""
         # Auto-select: use brave if key is available and provider is default
         if provider == "duckduckgo":
-            if config.search_api_key or os.environ.get("BRAVE_SEARCH_API_KEY"):
+            if search_api_key or os.environ.get("BRAVE_SEARCH_API_KEY"):
                 provider = "brave"
 
         configure_search(
             provider_name=provider,
             max_results=config.search_max_results,
-            api_key=config.search_api_key,
+            api_key=search_api_key,
             proxy=config.search_proxy,
             use_env_proxy=config.search_use_env_proxy,
             fallback_policy=config.search_fallback_policy,

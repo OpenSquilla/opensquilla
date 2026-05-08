@@ -58,6 +58,31 @@ def test_onboard_noninteractive_provider_can_use_env_key_and_router(tmp_path, mo
     assert "DEEPSEEK_API_KEY" in result.stdout
 
 
+def test_onboard_noninteractive_provider_can_omit_model_for_router_profile(
+    tmp_path,
+    monkeypatch,
+):
+    target = tmp_path / "c.toml"
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))
+    result = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--provider",
+            "deepseek",
+            "--api-key-env",
+            "DEEPSEEK_API_KEY",
+            "--minimal",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    data = tomllib.loads(target.read_text())
+    assert data["llm"]["provider"] == "deepseek"
+    assert data["llm"]["model"] == "deepseek-v4-flash"
+    assert data["squilla_router"]["tier_profile"] == "deepseek"
+
+
 def test_onboard_noninteractive_provider_without_router_profile_disables_router(
     tmp_path, monkeypatch
 ):
@@ -148,6 +173,28 @@ def test_configure_provider_noninteractive_uses_setup_engine(tmp_path, monkeypat
     assert "api_key" not in data["llm"]
 
 
+def test_configure_provider_can_omit_model_for_router_profile(tmp_path, monkeypatch):
+    target = tmp_path / "c.toml"
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))
+
+    result = runner.invoke(
+        app,
+        [
+            "configure",
+            "provider",
+            "--provider",
+            "deepseek",
+            "--api-key-env",
+            "DEEPSEEK_API_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    data = tomllib.loads(target.read_text())
+    assert data["llm"]["provider"] == "deepseek"
+    assert data["llm"]["model"] == "deepseek-v4-flash"
+
+
 def test_configure_provider_recomputes_existing_router_profile(tmp_path, monkeypatch):
     target = tmp_path / "c.toml"
     target.write_text(
@@ -224,6 +271,29 @@ def test_configure_search_noninteractive(tmp_path, monkeypatch):
     data = tomllib.loads(target.read_text())
     assert data["search_provider"] == "duckduckgo"
     assert data["search_max_results"] == 7
+
+
+def test_configure_search_can_use_env_key_reference(tmp_path, monkeypatch):
+    target = tmp_path / "c.toml"
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))
+
+    result = runner.invoke(
+        app,
+        [
+            "configure",
+            "search",
+            "--search-provider",
+            "brave",
+            "--api-key-env",
+            "BRAVE_SEARCH_API_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    data = tomllib.loads(target.read_text())
+    assert data["search_provider"] == "brave"
+    assert data["search_api_key_env"] == "BRAVE_SEARCH_API_KEY"
+    assert "search_api_key" not in data
 
 
 def test_configure_channel_noninteractive_adds_slack(tmp_path, monkeypatch):

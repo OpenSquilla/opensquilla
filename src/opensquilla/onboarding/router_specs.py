@@ -36,16 +36,16 @@ def _profile_to_setup(profile_id: str) -> RouterSetupProfile:
     if normalized not in ROUTER_TIER_PROFILE_IDS:
         raise KeyError(f"unknown router profile: {profile_id!r}")
     raw_tiers = _router_tier_profile_defaults(normalized)
-    text_tiers = {
+    exposed_tiers = {
         name: dict(value)
         for name, value in raw_tiers.items()
-        if name in {"t0", "t1", "t2", "t3"}
+        if name in {"t0", "t1", "t2", "t3", "image_model"}
     }
     return RouterSetupProfile(
         profile_id=normalized,
         provider_id=normalized,
         label=_PROFILE_LABELS.get(normalized, normalized),
-        tiers=text_tiers,
+        tiers=exposed_tiers,
     )
 
 
@@ -69,6 +69,8 @@ def _tier_payload(tier: dict[str, Any]) -> dict[str, Any]:
 
 def router_catalog_payload() -> dict[str, Any]:
     return {
+        "defaultTier": "t1",
+        "textTiers": ["t0", "t1", "t2", "t3"],
         "modes": [
             {
                 "mode": "recommended",

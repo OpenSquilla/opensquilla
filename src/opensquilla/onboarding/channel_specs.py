@@ -19,6 +19,11 @@ class ChannelSetupField:
     choices: tuple[str, ...] = ()
     description: str = ""
     secret: bool = False
+    group: str = "basic"
+    advanced: bool = False
+    show_when: dict[str, str] | None = None
+    help: str = ""
+    placeholder: str = ""
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,7 @@ class ChannelSetupSpec:
     restart_required: bool
     docs_hint: str
     fields: tuple[ChannelSetupField, ...]
+    help: str = ""
 
 
 def _common_fields() -> tuple[ChannelSetupField, ...]:
@@ -59,14 +65,17 @@ def _slack_spec() -> ChannelSetupSpec:
         dependency_extra=None,
         restart_required=True,
         docs_hint="https://api.slack.com/apps",
+        help="Slack webhooks require a public URL reachable by Slack.",
         fields=(
             *_common_fields(),
             ChannelSetupField("token", "Bot token (xoxb-...)", "password",
-                              required=True, secret=True),
+                              required=True, secret=True, group="credentials",
+                              placeholder="xoxb-..."),
             ChannelSetupField("slack_channel_id", "Default channel id", "text",
                               required=False, default=""),
             ChannelSetupField("signing_secret", "Signing secret", "password",
-                              required=False, secret=True),
+                              required=False, secret=True, group="credentials",
+                              advanced=True),
             ChannelSetupField("reply_in_thread", "Reply in thread", "bool",
                               required=False, default=False),
         ),
@@ -83,24 +92,37 @@ def _feishu_spec() -> ChannelSetupSpec:
         dependency_extra="feishu",
         restart_required=True,
         docs_hint="https://open.feishu.cn/document/",
+        help=(
+            "Default websocket mode only needs App id and App secret. "
+            "Webhook verification fields are only needed when connection_mode=webhook."
+        ),
         fields=(
             *_common_fields(),
-            ChannelSetupField("app_id", "App id", "text", required=True),
+            ChannelSetupField("app_id", "App id", "text", required=True,
+                              group="credentials", placeholder="cli_..."),
             ChannelSetupField("app_secret", "App secret", "password",
-                              required=True, secret=True),
+                              required=True, secret=True, group="credentials",
+                              placeholder="app secret"),
             ChannelSetupField("encrypt_key", "Encrypt key", "password",
-                              required=False, secret=True, default=""),
+                              required=False, secret=True, default="",
+                              group="webhook", advanced=True,
+                              show_when={"connection_mode": "webhook"}),
             ChannelSetupField("verification_token", "Verification token", "password",
-                              required=False, secret=True, default=""),
+                              required=False, secret=True, default="",
+                              group="webhook", advanced=True,
+                              show_when={"connection_mode": "webhook"}),
             ChannelSetupField("default_chat_id", "Default chat id", "text",
                               required=False, default=""),
             ChannelSetupField("webhook_path", "Webhook path", "text",
-                              required=False, default="/feishu/events"),
+                              required=False, default="/feishu/events",
+                              group="webhook",
+                              show_when={"connection_mode": "webhook"}),
             ChannelSetupField("api_base", "API base", "text",
                               required=False,
-                              default="https://open.feishu.cn/open-apis"),
+                              default="https://open.feishu.cn/open-apis",
+                              advanced=True),
             ChannelSetupField("connection_mode", "Connection mode", "select",
-                              required=False, default="webhook",
+                              required=False, default="websocket",
                               choices=("webhook", "websocket")),
             ChannelSetupField("domain", "Domain", "select",
                               required=False, default="feishu",
@@ -165,6 +187,7 @@ def _wecom_spec() -> ChannelSetupSpec:
         dependency_extra="wecom",
         restart_required=True,
         docs_hint="https://developer.work.weixin.qq.com/document/",
+        help="WeCom webhook mode requires a public URL reachable by WeCom.",
         fields=(
             *_common_fields(),
             ChannelSetupField("corp_id", "Corp id", "text", required=True),
@@ -214,6 +237,7 @@ def _msteams_spec() -> ChannelSetupSpec:
         dependency_extra="msteams",
         restart_required=True,
         docs_hint="https://learn.microsoft.com/microsoftteams/platform/",
+        help="Microsoft Teams Bot Framework webhooks require a public HTTPS URL.",
         fields=(
             *_common_fields(),
             ChannelSetupField("app_id", "App id", "text", required=True),
@@ -267,7 +291,8 @@ def _telegram_spec() -> ChannelSetupSpec:
         fields=(
             *_common_fields(),
             ChannelSetupField("token", "Bot token", "password",
-                              required=True, secret=True),
+                              required=True, secret=True, group="credentials",
+                              placeholder="123456:ABC..."),
             ChannelSetupField("default_chat_id", "Default chat id", "text",
                               required=False, default=""),
             ChannelSetupField("api_base", "API base", "text",
@@ -276,19 +301,28 @@ def _telegram_spec() -> ChannelSetupSpec:
                               required=False, default="polling",
                               choices=("polling", "webhook")),
             ChannelSetupField("webhook_path", "Webhook path", "text",
-                              required=False, default="/telegram/events"),
+                              required=False, default="/telegram/events",
+                              group="webhook",
+                              show_when={"transport_name": "webhook"}),
             ChannelSetupField("webhook_url", "Webhook URL (webhook only)", "text",
-                              required=False, default=""),
+                              required=False, default="", group="webhook",
+                              show_when={"transport_name": "webhook"},
+                              placeholder="https://example.com/telegram/events"),
             ChannelSetupField("webhook_secret_token", "Webhook secret token",
-                              "password", required=False, secret=True, default=""),
+                              "password", required=False, secret=True, default="",
+                              group="webhook",
+                              show_when={"transport_name": "webhook"}),
             ChannelSetupField("drop_pending_updates", "Drop pending updates",
                               "bool", required=False, default=False),
             ChannelSetupField("poll_timeout_s", "Polling timeout (s)", "int",
-                              required=False, default=30),
+                              required=False, default=30, group="polling",
+                              show_when={"transport_name": "polling"}),
             ChannelSetupField("poll_limit", "Poll limit", "int",
-                              required=False, default=100),
+                              required=False, default=100, group="polling",
+                              show_when={"transport_name": "polling"}),
             ChannelSetupField("poll_idle_sleep_s", "Poll idle sleep (s)", "float",
-                              required=False, default=0.1),
+                              required=False, default=0.1, group="polling",
+                              show_when={"transport_name": "polling"}),
         ),
     )
 
@@ -327,6 +361,7 @@ def channel_catalog_payload() -> list[dict[str, Any]]:
             "dependencyExtra": s.dependency_extra,
             "restartRequired": s.restart_required,
             "docsHint": s.docs_hint,
+            "help": s.help,
             "fields": [
                 {
                     "name": f.name,
@@ -337,6 +372,11 @@ def channel_catalog_payload() -> list[dict[str, Any]]:
                     "choices": list(f.choices),
                     "description": f.description,
                     "secret": f.secret,
+                    "group": f.group,
+                    "advanced": f.advanced,
+                    "showWhen": dict(f.show_when or {}),
+                    "help": f.help,
+                    "placeholder": f.placeholder,
                 }
                 for f in s.fields
             ],

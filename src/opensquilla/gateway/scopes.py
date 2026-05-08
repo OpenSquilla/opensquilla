@@ -184,6 +184,7 @@ METHOD_SCOPES: dict[str, str] = {
     "onboarding.memory_embedding.configure": ADMIN_SCOPE,
     "onboarding.search.configure": ADMIN_SCOPE,
     "onboarding.imageGeneration.configure": ADMIN_SCOPE,
+    "onboarding.channel.probe": ADMIN_SCOPE,
     "onboarding.channel.upsert": ADMIN_SCOPE,
     "onboarding.channel.remove": ADMIN_SCOPE,
     "onboarding.channel.enable": ADMIN_SCOPE,

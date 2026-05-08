@@ -120,7 +120,7 @@ class SetupEngine:
             res = upsert_llm_provider(
                 self.config,
                 provider_id=str(payload["providerId"]),
-                model=str(payload["model"]),
+                model=str(payload.get("model", "")),
                 api_key=str(payload.get("apiKey", "")),
                 api_key_env=str(payload.get("apiKeyEnv", "")),
                 base_url=str(payload.get("baseUrl", "")),
@@ -131,12 +131,14 @@ class SetupEngine:
                 self.config,
                 mode=str(payload.get("mode", "recommended")),
                 default_tier=payload.get("defaultTier"),
+                tiers=payload.get("tiers"),
             )
         elif normalized == "search":
             res = upsert_search_provider(
                 self.config,
                 provider_id=str(payload["providerId"]),
                 api_key=str(payload.get("apiKey", "")),
+                api_key_env=str(payload.get("apiKeyEnv", "")),
                 max_results=int(payload.get("maxResults", 5)),
                 proxy=str(payload.get("proxy", "")),
                 use_env_proxy=bool(payload.get("useEnvProxy", False)),

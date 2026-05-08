@@ -91,6 +91,22 @@ async def test_provider_configure_redacts_api_key(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_provider_configure_can_omit_model_for_router_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.provider.configure",
+        {"providerId": "deepseek", "apiKeyEnv": "DEEPSEEK_API_KEY"},
+        _admin_ctx(),
+    )
+    assert res.error is None, res.error
+    assert res.payload["entry"]["model"] == "deepseek-v4-flash"
+    data = tomllib.loads((tmp_path / "c.toml").read_text())
+    assert data["llm"]["model"] == "deepseek-v4-flash"
+    assert data["squilla_router"]["tier_profile"] == "deepseek"
+
+
+@pytest.mark.asyncio
 async def test_router_configure_recommended_profile(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
     from opensquilla.gateway.config import GatewayConfig
@@ -112,6 +128,68 @@ async def test_router_configure_recommended_profile(tmp_path, monkeypatch):
     persisted = tomllib.loads((tmp_path / "c.toml").read_text())
     assert persisted["squilla_router"]["tier_profile"] == "deepseek"
     assert "tiers" not in persisted["squilla_router"]
+
+
+@pytest.mark.asyncio
+async def test_router_configure_accepts_tier_overrides_and_syncs_llm_model(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
+    from opensquilla.gateway.config import GatewayConfig
+
+    ctx = _admin_ctx()
+    ctx.config = GatewayConfig(llm={"provider": "openai", "model": "gpt-5.4-mini"})
+    ctx.config.config_path = str(tmp_path / "c.toml")
+
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.router.configure",
+        {
+            "mode": "recommended",
+            "defaultTier": "t2",
+            "tiers": {
+                "t2": {"provider": "openai", "model": "gpt-5.5-custom"},
+                "image_model": {
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                    "supportsImage": True,
+                },
+            },
+        },
+        ctx,
+    )
+
+    assert res.error is None, res.error
+    assert ctx.config.llm.model == "gpt-5.5-custom"
+    assert ctx.config.squilla_router.default_tier == "t2"
+    persisted = tomllib.loads((tmp_path / "c.toml").read_text())
+    assert persisted["llm"]["model"] == "gpt-5.5-custom"
+    assert persisted["squilla_router"]["tiers"]["t2"]["model"] == "gpt-5.5-custom"
+    assert persisted["squilla_router"]["tiers"]["image_model"]["supports_image"] is True
+
+
+@pytest.mark.asyncio
+async def test_router_configure_rejects_image_model_as_default_tier(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
+    from opensquilla.gateway.config import GatewayConfig
+
+    ctx = _admin_ctx()
+    ctx.config = GatewayConfig(llm={"provider": "openrouter", "model": "m"})
+    ctx.config.config_path = str(tmp_path / "c.toml")
+
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.router.configure",
+        {"mode": "recommended", "defaultTier": "image_model"},
+        ctx,
+    )
+
+    assert res.error is not None
+    assert "defaultTier must reference a text tier" in res.error.message
 
 
 @pytest.mark.asyncio
@@ -203,6 +281,30 @@ async def test_channel_upsert_redacts_secrets(tmp_path, monkeypatch):
     assert res.payload["changed"] is True
     assert res.payload["restartRequired"] is True
     assert res.payload["entry"]["token"] == "***"
+
+
+@pytest.mark.asyncio
+async def test_channel_probe_validates_and_redacts_without_persisting(tmp_path, monkeypatch):
+    target = tmp_path / "c.toml"
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.channel.probe",
+        {
+            "entry": {
+                "type": "telegram",
+                "name": "tg",
+                "token": "123:secret",
+                "transport_name": "polling",
+            }
+        },
+        _admin_ctx(),
+    )
+    assert res.error is None, res.error
+    assert res.payload["status"] in {"ready", "action_needed"}
+    assert res.payload["entry"]["token"] == "***"
+    assert "123:secret" not in str(res.payload)
+    assert not target.exists()
 
 
 @pytest.mark.asyncio

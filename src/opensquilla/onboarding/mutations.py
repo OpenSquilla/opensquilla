@@ -16,6 +16,7 @@ from opensquilla.gateway.config import (
     LlmProviderConfig,
     MemoryEmbeddingConfig,
     SquillaRouterConfig,
+    _router_tier_profile_defaults,
 )
 from opensquilla.onboarding.image_generation_specs import (
     get_image_generation_provider_setup_spec,
@@ -32,6 +33,13 @@ from opensquilla.onboarding.search_specs import get_search_provider_setup_spec
 
 SearchFallbackPolicy = Literal["off", "network"]
 RouterMode = Literal["recommended", "openrouter-mix", "disabled"]
+_TEXT_ROUTER_TIERS = ("t0", "t1", "t2", "t3")
+_ROUTER_TIER_KEYS = set(_TEXT_ROUTER_TIERS) | {"image_model"}
+_TIER_KEY_ALIASES = {
+    "thinkingLevel": "thinking_level",
+    "supportsImage": "supports_image",
+    "imageOnly": "image_only",
+}
 _REMOTE_MEMORY_EMBEDDING_PROVIDERS = {"openai", "openai-compatible"}
 _DEFAULT_REMOTE_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 _DEFAULT_OLLAMA_EMBEDDING_BASE_URL = "http://localhost:11434"
@@ -83,11 +91,78 @@ def _reconcile_router_profile_for_provider(
     cfg.squilla_router = SquillaRouterConfig(**router_payload)
 
 
+def _default_text_tier(default_tier: str | None) -> str:
+    tier = (default_tier or "t1").strip()
+    return tier if tier in _TEXT_ROUTER_TIERS else "t1"
+
+
+def _router_default_model_for_provider(provider_id: str, default_tier: str | None) -> str:
+    if provider_id not in ROUTER_TIER_PROFILE_IDS:
+        return ""
+    tiers = _router_tier_profile_defaults(provider_id)
+    tier = tiers.get(_default_text_tier(default_tier)) or tiers.get("t1") or {}
+    return str(tier.get("model") or "").strip()
+
+
+def _normalize_tier_payload(name: str, payload: Any) -> dict[str, Any]:
+    if name not in _ROUTER_TIER_KEYS:
+        raise ValueError(f"unknown router tier {name!r}")
+    if not isinstance(payload, dict):
+        raise ValueError(f"router tier {name!r} must be an object")
+    out: dict[str, Any] = {}
+    for key, value in payload.items():
+        out[_TIER_KEY_ALIASES.get(str(key), str(key))] = value
+    return out
+
+
+def _merge_router_tiers(
+    base: dict[str, Any],
+    overrides: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = {name: dict(value) for name, value in base.items()}
+    if not overrides:
+        return merged
+    if not isinstance(overrides, dict):
+        raise ValueError("router tiers must be an object")
+    for name, raw_override in overrides.items():
+        tier_name = str(name)
+        override = _normalize_tier_payload(tier_name, raw_override)
+        current = dict(merged.get(tier_name, {}))
+        current.update(override)
+        merged[tier_name] = current
+    return merged
+
+
+def _validate_router_tiers(tiers: dict[str, Any], default_tier: str) -> None:
+    if default_tier not in _TEXT_ROUTER_TIERS:
+        raise ValueError("defaultTier must reference a text tier")
+    for tier_name in _TEXT_ROUTER_TIERS:
+        tier = tiers.get(tier_name)
+        if not isinstance(tier, dict):
+            raise ValueError(f"router tier {tier_name!r} must be an object")
+        if not str(tier.get("provider") or "").strip():
+            raise ValueError(f"router tier {tier_name!r} requires provider")
+        if not str(tier.get("model") or "").strip():
+            raise ValueError(f"router tier {tier_name!r} requires model")
+
+
+def _sync_llm_model_to_router_default(cfg: GatewayConfig) -> None:
+    router = cfg.squilla_router
+    if not getattr(router, "enabled", True):
+        return
+    default_tier = str(getattr(router, "default_tier", "t1") or "t1")
+    _validate_router_tiers(router.tiers, default_tier)
+    tier = router.tiers[default_tier]
+    model = str(tier.get("model") or "").strip()
+    if model:
+        cfg.llm.model = model
+
+
 def upsert_llm_provider(
     config: GatewayConfig,
     *,
     provider_id: str,
-    model: str,
+    model: str = "",
     api_key: str = "",
     api_key_env: str = "",
     base_url: str = "",
@@ -99,7 +174,13 @@ def upsert_llm_provider(
         raise ValueError(
             f"provider {provider_id!r} is not runtime-supported and cannot be configured"
         )
-    if not model:
+    model_clean = _clean_optional_str(model)
+    if not model_clean:
+        model_clean = _router_default_model_for_provider(
+            provider_id,
+            getattr(config.squilla_router, "default_tier", "t1"),
+        )
+    if not model_clean:
         raise ValueError("model is required")
     # When the operator omits an api_key while reconfiguring the same
     # provider that already has one stored, treat that as "leave key
@@ -128,7 +209,7 @@ def upsert_llm_provider(
     new_cfg = _clone(config)
     new_cfg.llm = LlmProviderConfig(
         provider=provider_id,
-        model=model,
+        model=model_clean,
         api_key=effective_api_key,
         api_key_env=effective_api_key_env,
         base_url=effective_base_url,
@@ -141,7 +222,7 @@ def upsert_llm_provider(
 
     payload = {
         "provider": provider_id,
-        "model": model,
+        "model": model_clean,
         "api_key": effective_api_key,
         "api_key_env": effective_api_key_env,
         "api_key_source": (
@@ -165,6 +246,7 @@ def upsert_router(
     *,
     mode: str = "recommended",
     default_tier: str | None = None,
+    tiers: dict[str, Any] | None = None,
 ) -> MutationResult:
     if mode not in {"recommended", "openrouter-mix", "disabled"}:
         raise ValueError("router mode must be recommended, openrouter-mix, or disabled")
@@ -173,8 +255,9 @@ def upsert_router(
     router_payload = config.squilla_router.model_dump(mode="python")
     router_payload.pop("tiers", None)
 
+    default_tier_clean = str(default_tier or router_payload.get("default_tier") or "t1")
     if default_tier is not None:
-        router_payload["default_tier"] = default_tier
+        router_payload["default_tier"] = default_tier_clean
 
     public_payload: dict[str, Any] = {"mode": router_mode}
     if router_mode == "disabled":
@@ -186,6 +269,10 @@ def upsert_router(
             raise ValueError("openrouter-mix router mode is only valid for openrouter LLM provider")
         router_payload["enabled"] = True
         router_payload["tier_profile"] = None
+        router_payload["tiers"] = _merge_router_tiers(
+            _router_tier_profile_defaults("openrouter"),
+            tiers,
+        )
         public_payload.update({"enabled": True, "tier_profile": None})
     else:
         if provider not in ROUTER_TIER_PROFILE_IDS:
@@ -195,10 +282,22 @@ def upsert_router(
         else:
             router_payload["enabled"] = True
             router_payload["tier_profile"] = provider
+            router_payload["tiers"] = _merge_router_tiers(
+                _router_tier_profile_defaults(provider),
+                tiers,
+            )
             public_payload.update({"enabled": True, "tier_profile": provider})
+    if router_payload.get("enabled"):
+        _validate_router_tiers(
+            cast(dict[str, Any], router_payload.get("tiers") or {}),
+            default_tier_clean,
+        )
 
     new_cfg = _clone(config)
     new_cfg.squilla_router = SquillaRouterConfig(**router_payload)
+    _sync_llm_model_to_router_default(new_cfg)
+    public_payload["default_tier"] = new_cfg.squilla_router.default_tier
+    public_payload["tiers"] = new_cfg.squilla_router.tiers
     return MutationResult(
         config=new_cfg,
         changed=True,
@@ -213,6 +312,7 @@ def upsert_search_provider(
     *,
     provider_id: str,
     api_key: str = "",
+    api_key_env: str = "",
     max_results: int = 5,
     proxy: str = "",
     use_env_proxy: bool = False,
@@ -231,19 +331,22 @@ def upsert_search_provider(
     fallback_policy_value = cast(SearchFallbackPolicy, fallback_policy)
 
     effective_api_key = api_key
+    effective_api_key_env = "" if api_key else api_key_env.strip()
     if (
         not effective_api_key
+        and not effective_api_key_env
         and spec.requires_api_key
         and config.search_provider == provider_id
         and config.search_api_key
     ):
         effective_api_key = config.search_api_key
-    if spec.requires_api_key and not effective_api_key:
+    if spec.requires_api_key and not effective_api_key and not effective_api_key_env:
         raise ValueError(f"search provider {provider_id!r} requires an api_key")
 
     new_cfg = _clone(config)
     new_cfg.search_provider = provider_id
     new_cfg.search_api_key = effective_api_key
+    new_cfg.search_api_key_env = effective_api_key_env
     new_cfg.search_max_results = max_results
     new_cfg.search_proxy = proxy
     new_cfg.search_use_env_proxy = bool(use_env_proxy)
@@ -252,9 +355,14 @@ def upsert_search_provider(
     if api_key:
         new_cfg.clear_runtime_secret("search_api_key")
 
+    api_key_source = (
+        "explicit" if effective_api_key else ("env" if effective_api_key_env else "none")
+    )
     payload = {
         "provider": provider_id,
         "api_key": effective_api_key,
+        "api_key_env": effective_api_key_env,
+        "api_key_source": api_key_source,
         "max_results": max_results,
         "proxy": proxy,
         "use_env_proxy": bool(use_env_proxy),

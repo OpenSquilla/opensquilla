@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,12 @@ _KEY_URLS = {
     "anthropic": "https://console.anthropic.com/settings/keys",
     "deepseek": "https://platform.deepseek.com/api_keys",
 }
+
+
+def _set_env_hint(env_key: str) -> str:
+    if platform.system().lower().startswith("win"):
+        return f'PowerShell: $env:{env_key} = "<your-key>"'
+    return f'export {env_key}="<your-key>"'
 
 
 def format_next_steps(config: Any, *, config_path: str | Path | None = None) -> str:
@@ -47,10 +54,12 @@ def format_next_steps(config: Any, *, config_path: str | Path | None = None) -> 
             )
         ),
         "  Start gateway: uv run opensquilla gateway start --json",
+        "  If a gateway is already running, restart it so it loads this config.",
+        "  Restart gateway: uv run opensquilla gateway restart --json",
         "  Web UI: http://127.0.0.1:18790/control/",
     ]
     if key_source == "missing_env" and env_key:
-        lines.append(f"  Set key before starting: ${env_key}=<your-key>")
+        lines.append(f"  Set key before starting gateway: {_set_env_hint(env_key)}")
     key_url = _KEY_URLS.get(provider)
     if key_url:
         lines.append(f"  Provider keys: {key_url}")

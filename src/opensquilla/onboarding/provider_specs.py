@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from opensquilla.gateway.config import ROUTER_TIER_PROFILE_IDS, _router_tier_profile_defaults
 from opensquilla.provider.registry import ProviderSpec, list_provider_specs
 
 FieldType = Literal["text", "password", "select", "bool"]
@@ -32,6 +33,8 @@ class ProviderSetupSpec:
     default_base_url: str
     requires_api_key: bool
     requires_base_url: bool
+    router_supported: bool
+    default_direct_model: str
     capabilities: tuple[str, ...]
     fields: tuple[ProviderSetupField, ...]
 
@@ -85,17 +88,26 @@ _ONBOARDING_VERIFIED_PROVIDER_IDS = frozenset(
 )
 
 
+def _default_direct_model(provider_id: str) -> str:
+    if provider_id in ROUTER_TIER_PROFILE_IDS:
+        tiers = _router_tier_profile_defaults(provider_id)
+        tier = tiers.get("t1") or tiers.get("t0") or {}
+        return str(tier.get("model") or "")
+    return ""
+
+
 def _fields_for(spec: ProviderSpec) -> tuple[ProviderSetupField, ...]:
+    router_supported = spec.provider_id in ROUTER_TIER_PROFILE_IDS
     return (
         ProviderSetupField(
             name="model",
             label="Model id",
             field_type="text",
-            required=True,
-            default="",
+            required=not router_supported,
+            default=_default_direct_model(spec.provider_id),
             description=(
-                "Model identifier passed to the provider "
-                "(e.g. 'deepseek/deepseek-v4-flash')."
+                "Direct fallback model. Router-supported providers can leave this "
+                "blank to use the selected router default tier."
             ),
         ),
         ProviderSetupField(
@@ -146,6 +158,8 @@ def _to_setup_spec(spec: ProviderSpec) -> ProviderSetupSpec:
         default_base_url=spec.default_base_url,
         requires_api_key=spec.requires_api_key(),
         requires_base_url=spec.requires_base_url(),
+        router_supported=spec.provider_id in ROUTER_TIER_PROFILE_IDS,
+        default_direct_model=_default_direct_model(spec.provider_id),
         capabilities=tuple(sorted(spec.capabilities)),
         fields=_fields_for(spec),
     )
@@ -174,6 +188,8 @@ def provider_catalog_payload() -> list[dict[str, Any]]:
             "defaultBaseUrl": s.default_base_url,
             "requiresApiKey": s.requires_api_key,
             "requiresBaseUrl": s.requires_base_url,
+            "routerSupported": s.router_supported,
+            "defaultDirectModel": s.default_direct_model,
             "capabilities": list(s.capabilities),
             "fields": [
                 {

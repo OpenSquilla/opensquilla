@@ -29,6 +29,62 @@ def test_setup_engine_applies_provider_and_router_without_persisting_secret(tmp_
     assert "tiers" not in data["squilla_router"]
 
 
+def test_setup_engine_can_derive_provider_model_from_router_default_tier(tmp_path):
+    target = tmp_path / "config.toml"
+    engine = SetupEngine(path=target)
+
+    engine.apply(
+        "provider",
+        {
+            "providerId": "deepseek",
+            "apiKeyEnv": "DEEPSEEK_API_KEY",
+        },
+    )
+    result = engine.persist()
+
+    data = tomllib.loads(target.read_text())
+    assert result.path == target
+    assert data["llm"]["provider"] == "deepseek"
+    assert data["llm"]["model"] == "deepseek-v4-flash"
+    assert data["squilla_router"]["tier_profile"] == "deepseek"
+    assert data["squilla_router"]["default_tier"] == "t1"
+
+
+def test_setup_engine_router_tier_override_updates_direct_fallback_model(tmp_path):
+    target = tmp_path / "config.toml"
+    engine = SetupEngine(path=target)
+
+    engine.apply(
+        "provider",
+        {
+            "providerId": "openai",
+            "apiKeyEnv": "OPENAI_API_KEY",
+        },
+    )
+    engine.apply(
+        "router",
+        {
+            "mode": "recommended",
+            "defaultTier": "t2",
+            "tiers": {
+                "t2": {
+                    "provider": "openai",
+                    "model": "gpt-5.5-custom",
+                    "thinkingLevel": "high",
+                }
+            },
+        },
+    )
+    engine.persist()
+
+    data = tomllib.loads(target.read_text())
+    assert data["llm"]["model"] == "gpt-5.5-custom"
+    assert data["squilla_router"]["tier_profile"] == "openai"
+    assert data["squilla_router"]["default_tier"] == "t2"
+    assert data["squilla_router"]["tiers"]["t2"]["model"] == "gpt-5.5-custom"
+    assert data["squilla_router"]["tiers"]["t2"]["thinking_level"] == "high"
+
+
 def test_setup_engine_next_steps_do_not_include_secret(tmp_path):
     engine = SetupEngine(path=tmp_path / "config.toml")
     engine.apply(

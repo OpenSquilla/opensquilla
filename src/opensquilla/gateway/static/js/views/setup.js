@@ -1,380 +1,505 @@
-/** OpenSquilla Web UI — Setup view (provider configuration).
- *
- * Renders the runtime-supported LLM providers as cards. Unsupported
- * providers are shown but disabled. Saves go through onboarding RPC so
- * mutations land in the same shared core as the CLI.
- *
- * The SPA routes this at /setup so WebUI setup uses the same mutations as
- * the CLI and DMG launchers.
- */
+/** OpenSquilla Web UI - setup flow. */
 
 const SetupView = (() => {
-  // Web setup flow is gated off while provider configuration via the browser
-  // is being stabilised. Flip to true once the underlying RPC paths are
-  // verified end-to-end. The route stays mounted so links/bookmarks still
-  // resolve and users see a clear status instead of a broken form.
-  const SETUP_UI_AVAILABLE = false;
+  const STEPS = [
+    { id: 'provider', label: 'Provider' },
+    { id: 'router', label: 'Router Tiers' },
+    { id: 'channels', label: 'Channels' },
+    { id: 'extras', label: 'Extras' },
+    { id: 'finish', label: 'Finish' },
+  ];
+  const TEXT_TIERS = ['t0', 't1', 't2', 't3'];
+  const TIER_LABELS = {
+    t0: 'Fast/simple (t0)',
+    t1: 'Balanced default (t1)',
+    t2: 'Stronger reasoning (t2)',
+    t3: 'Max quality (t3)',
+  };
 
   let _el = null;
   let _rpc = null;
-  let _catalog = null;
-  let _status = null;
-  let _config = null;
+  let _catalog = {};
+  let _status = {};
+  let _config = {};
+  let _channelStatus = { channels: [] };
+  let _step = 'provider';
+  let _channelType = '';
+  let _pollTimer = null;
 
   async function render(el) {
     _el = el;
-    if (!SETUP_UI_AVAILABLE) {
-      _renderUnavailable();
-      return;
-    }
     _rpc = App.getRpc();
     await _rpc.waitForConnection();
+    await _load();
+    _draw();
+    _startChannelPolling();
+  }
 
+  async function _load() {
     try {
-      [_catalog, _status, _config] = await Promise.all([
+      const [catalog, status, config, channelStatus] = await Promise.all([
         _rpc.call('onboarding.catalog'),
         _rpc.call('onboarding.status'),
         _rpc.call('config.get'),
+        _rpc.call('channels.status').catch(() => ({ channels: [] })),
       ]);
+      _catalog = catalog || {};
+      _status = status || {};
+      _config = config || {};
+      _channelStatus = channelStatus || { channels: [] };
     } catch (err) {
       _el.innerHTML = `<div class="setup-error">Failed to load setup catalog: ${_esc(err.message)}</div>`;
-      return;
     }
+  }
 
-    const providers = (_catalog.providers || []).filter(p => p.runtimeSupported);
-    const disabled = (_catalog.providers || []).filter(p => !p.runtimeSupported);
-    const imageProviders = (_catalog.imageGenerationProviders || []).filter(p => p.runtimeSupported);
-    const memoryProviders = _catalog.memoryEmbeddingProviders || [];
-
+  function _draw() {
+    if (!_el) return;
     _el.innerHTML = `
       <section class="setup">
         <header class="setup__head">
-          <h2>OpenSquilla Setup</h2>
-          ${_status.needsOnboarding
-            ? '<p class="setup__banner">No LLM provider configured yet — pick one to continue.</p>'
-            : '<p class="setup__banner setup__banner--ok">LLM provider configured. You can switch to a different one below.</p>'}
-        </header>
-        <h3>Supported providers</h3>
-        <div class="setup__grid">
-          ${providers.map(p => _renderProviderCard(p, false)).join('')}
-        </div>
-        <h3>Memory embedding</h3>
-        <p class="setup__banner setup__banner--ok">Memory embeddings are configured separately from the chat LLM. Auto uses the bundled local BGE model when available.</p>
-        <div class="setup__grid">
-          ${memoryProviders.map(p => _renderMemoryProviderCard(p)).join('')}
-        </div>
-        ${imageProviders.length ? `
-          <h3>Image generation</h3>
-          <div class="setup__grid">
-            ${imageProviders.map(p => _renderImageProviderCard(p)).join('')}
-          </div>` : ''}
-        <h3>Disabled (runtime not yet supported)</h3>
-        <div class="setup__grid setup__grid--muted">
-          ${disabled.map(p => _renderProviderCard(p, true)).join('')}
-        </div>
-      </section>`;
-
-    _el.querySelectorAll('[data-provider-id]').forEach(card => {
-      const pid = card.dataset.providerId;
-      const isDisabled = card.dataset.disabled === 'true';
-      if (isDisabled) return;
-      card.querySelector('[data-action="configure"]').addEventListener(
-        'click', () => _openConfigureForm(pid)
-      );
-    });
-    _el.querySelectorAll('[data-image-provider-id]').forEach(card => {
-      const pid = card.dataset.imageProviderId;
-      card.querySelector('[data-action="configure-image"]').addEventListener(
-        'click', () => _openImageConfigureForm(pid)
-      );
-    });
-    _el.querySelectorAll('[data-memory-provider-id]').forEach(card => {
-      const pid = card.dataset.memoryProviderId;
-      card.querySelector('[data-action="configure-memory"]').addEventListener(
-        'click', () => _openMemoryEmbeddingForm(pid)
-      );
-    });
-  }
-
-  function _renderProviderCard(p, isDisabled) {
-    return `<article class="setup-card${isDisabled ? ' is-disabled' : ''}" data-provider-id="${_esc(p.providerId)}" data-disabled="${isDisabled}">
-      <header><h4>${_esc(p.label)}</h4><span class="setup-card__id">${_esc(p.providerId)}</span></header>
-      <ul class="setup-card__meta">
-        <li>backend: <code>${_esc(p.backend)}</code></li>
-        <li>requires key: ${p.requiresApiKey ? 'yes' : 'no'}</li>
-        <li>requires base url: ${p.requiresBaseUrl ? 'yes' : 'no'}</li>
-      </ul>
-      ${isDisabled
-        ? '<p class="setup-card__note">Cannot be configured: runtime support not available.</p>'
-        : '<button class="setup-card__btn" data-action="configure">Configure</button>'}
-    </article>`;
-  }
-
-  function _renderImageProviderCard(p) {
-    const primary = _status.imageGenerationPrimary || '';
-    const primaryProvider = primary.includes('/') ? primary.split('/')[0] : '';
-    const statusProvider = _status.imageGenerationProvider || primaryProvider;
-    const active = statusProvider === p.providerId;
-    const capabilityDisabled = active && _status.imageGenerationEnabled === false;
-    const configured = !capabilityDisabled && active && _status.imageGenerationConfigured;
-    const source = capabilityDisabled ? 'disabled' : (configured ? _imageSourceLabel(_status.imageGenerationSource) : 'not configured');
-    return `<article class="setup-card setup-card--image" data-image-provider-id="${_esc(p.providerId)}">
-      <header><h4>${_esc(p.label)}</h4><span class="setup-card__id">${_esc(p.providerId)}</span></header>
-      <ul class="setup-card__meta">
-        <li>default model: <code>${_esc(p.defaultModel)}</code></li>
-        <li>key env: <code>${_esc(p.envKey)}</code></li>
-        <li>status: <span class="setup-card__badge${configured ? ' is-ok' : ''}">${_esc(source)}</span></li>
-      </ul>
-      <button class="setup-card__btn" data-action="configure-image">Configure</button>
-    </article>`;
-  }
-
-  function _imageSourceLabel(source) {
-    if (source === 'explicit') return 'configured';
-    if (source === 'env') return 'environment';
-    if (source === 'llm_fallback') return 'LLM key';
-    return 'not configured';
-  }
-
-  function _renderMemoryProviderCard(p) {
-    return `<article class="setup-card" data-memory-provider-id="${_esc(p.providerId)}">
-      <header><h4>${_esc(p.label)}</h4><span class="setup-card__id">${_esc(p.providerId)}</span></header>
-      <ul class="setup-card__meta">
-        <li>requires key: ${p.requiresApiKey ? 'yes' : 'no'}</li>
-        <li>requires base url: ${p.requiresBaseUrl ? 'yes' : 'no'}</li>
-      </ul>
-      <button class="setup-card__btn" data-action="configure-memory">Configure</button>
-    </article>`;
-  }
-
-  function _openConfigureForm(providerId) {
-    const spec = _catalog.providers.find(p => p.providerId === providerId);
-    if (!spec) return;
-    const overlay = document.createElement('div');
-    overlay.className = 'setup-modal__overlay';
-    const modal = document.createElement('div');
-    modal.className = 'setup-modal';
-    modal.innerHTML = `
-      <header class="setup-modal__head">
-        <h3>Configure ${_esc(spec.label)}</h3>
-        <button data-act="close">×</button>
-      </header>
-      <div class="setup-modal__body">
-        ${spec.fields.map(f => {
-          const isPwd = f.secret || f.type === 'password';
-          if (f.type === 'select') {
-            return `<label><span>${_esc(f.label)}${f.required ? ' *' : ''}</span>
-              <select data-name="${_esc(f.name)}">
-                ${(f.choices || []).map(c => `<option value="${_esc(c)}"${c === f.default ? ' selected' : ''}>${_esc(c)}</option>`).join('')}
-              </select></label>`;
-          }
-          if (f.type === 'bool') {
-            return `<label class="setup-modal__inline"><input type="checkbox" data-name="${_esc(f.name)}"${f.default ? ' checked' : ''}><span>${_esc(f.label)}</span></label>`;
-          }
-          const inputType = isPwd ? 'password' : (f.type === 'int' || f.type === 'float' ? 'number' : 'text');
-          const defaultVal = isPwd ? '' : (f.default ?? '');
-          return `<label><span>${_esc(f.label)}${f.required ? ' *' : ''}</span>
-            <input type="${inputType}" data-name="${_esc(f.name)}" data-secret="${isPwd}" value="${_esc(String(defaultVal))}" placeholder="${isPwd ? '(leave blank to keep current)' : ''}"></label>`;
-        }).join('')}
-      </div>
-      <footer class="setup-modal__foot">
-        <button data-act="cancel">Cancel</button>
-        <button data-act="save" class="setup-card__btn">Save</button>
-      </footer>`;
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    const close = () => overlay.remove();
-    modal.querySelector('[data-act="close"]').addEventListener('click', close);
-    modal.querySelector('[data-act="cancel"]').addEventListener('click', close);
-    modal.querySelector('[data-act="save"]').addEventListener('click', async () => {
-      const params = { providerId };
-      modal.querySelectorAll('[data-name]').forEach(el => {
-        const name = el.dataset.name;
-        if (el.type === 'checkbox') {
-          params[_camel(name)] = el.checked;
-        } else if (el.value !== '' || el.dataset.secret !== 'true') {
-          params[_camel(name)] = el.value;
-        }
-      });
-      // Backend expects model + apiKey + baseUrl in camelCase
-      try {
-        await _rpc.call('onboarding.provider.configure', params);
-        UI.toast('Provider saved.', 'info');
-        close();
-        render(_el);
-      } catch (err) {
-        UI.toast('Save failed: ' + err.message, 'err');
-      }
-    });
-  }
-
-  function _openImageConfigureForm(providerId) {
-    const spec = (_catalog.imageGenerationProviders || []).find(p => p.providerId === providerId);
-    if (!spec) return;
-    const overlay = document.createElement('div');
-    overlay.className = 'setup-modal__overlay';
-    const modal = document.createElement('div');
-    modal.className = 'setup-modal';
-    modal.innerHTML = `
-      <header class="setup-modal__head">
-        <h3>Configure ${_esc(spec.label)}</h3>
-        <button data-act="close">×</button>
-      </header>
-      <div class="setup-modal__body">
-        ${spec.fields.map(f => {
-          const isPwd = f.secret || f.type === 'password';
-          const current = _imageFieldDefault(spec, f);
-          if (f.type === 'select') {
-            return `<label><span>${_esc(f.label)}${f.required ? ' *' : ''}</span>
-              <select data-name="${_esc(f.name)}">
-                ${(f.choices || []).map(c => `<option value="${_esc(c)}"${c === current ? ' selected' : ''}>${_esc(c)}</option>`).join('')}
-              </select></label>`;
-          }
-          if (f.type === 'bool') {
-            return `<label class="setup-modal__inline"><input type="checkbox" data-name="${_esc(f.name)}"${current ? ' checked' : ''}><span>${_esc(f.label)}</span></label>`;
-          }
-          const inputType = isPwd ? 'password' : 'text';
-          const defaultVal = isPwd ? '' : current;
-          return `<label><span>${_esc(f.label)}${f.required ? ' *' : ''}</span>
-            <input type="${inputType}" data-name="${_esc(f.name)}" data-secret="${isPwd}" value="${_esc(String(defaultVal ?? ''))}" placeholder="${isPwd ? '(leave blank to keep current)' : ''}"></label>`;
-        }).join('')}
-      </div>
-      <footer class="setup-modal__foot">
-        <button data-act="cancel">Cancel</button>
-        <button data-act="save" class="setup-card__btn">Save</button>
-      </footer>`;
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    const close = () => overlay.remove();
-    modal.querySelector('[data-act="close"]').addEventListener('click', close);
-    modal.querySelector('[data-act="cancel"]').addEventListener('click', close);
-    modal.querySelector('[data-act="save"]').addEventListener('click', async () => {
-      const params = { providerId };
-      modal.querySelectorAll('[data-name]').forEach(el => {
-        const name = el.dataset.name;
-        if (el.type === 'checkbox') {
-          params[_camel(name)] = el.checked;
-        } else if (el.value !== '' || el.dataset.secret !== 'true') {
-          params[_camel(name)] = el.value;
-        }
-      });
-      try {
-        await _rpc.call('onboarding.imageGeneration.configure', params);
-        UI.toast('Image generation saved.', 'info');
-        close();
-        render(_el);
-      } catch (err) {
-        UI.toast('Save failed: ' + err.message, 'err');
-      }
-    });
-  }
-
-  function _openMemoryEmbeddingForm(providerId) {
-    const spec = (_catalog.memoryEmbeddingProviders || []).find(p => p.providerId === providerId);
-    if (!spec) return;
-    const current = (((_config || {}).memory || {}).embedding || {});
-    const currentProvider = current.provider || 'auto';
-    const effectiveProvider = currentProvider === 'auto' && current.mode ? current.mode : currentProvider;
-    const remote = current.remote || {};
-    const local = current.local || {};
-    const ollama = current.ollama || {};
-    const overlay = document.createElement('div');
-    overlay.className = 'setup-modal__overlay';
-    const modal = document.createElement('div');
-    modal.className = 'setup-modal';
-    const showRemote = providerId === 'auto' || providerId === 'openai' || providerId === 'openai-compatible';
-    const showLocal = providerId === 'local';
-    const showOllama = providerId === 'ollama';
-    const remoteModel = remote.model || ((effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible') ? current.model : '') || (providerId === 'auto' ? '' : 'text-embedding-3-small');
-    const remoteBaseUrl = remote.base_url || current.base_url || (providerId === 'auto' ? '' : 'https://api.openai.com/v1');
-    const ollamaModel = ollama.model || (effectiveProvider === 'ollama' ? current.model : '') || 'nomic-embed-text';
-    modal.innerHTML = `
-      <header class="setup-modal__head">
-        <h3>Configure ${_esc(spec.label)}</h3>
-        <button data-act="close">×</button>
-      </header>
-      <div class="setup-modal__body">
-        ${showRemote ? `<label><span>${providerId === 'auto' ? 'Remote fallback model id' : 'Model id'}</span>
-          <input type="text" data-name="model" value="${_esc(remoteModel)}" placeholder="text-embedding-3-small"></label>
-          <label><span>${providerId === 'auto' ? 'Remote fallback API key' : 'API key *'}</span><input type="password" data-name="api_key" data-secret="true" placeholder="(leave blank to keep current)"></label>
-          <label><span>${providerId === 'auto' ? 'Remote fallback API root' : 'API root'}</span><input type="text" data-name="base_url" value="${_esc(remoteBaseUrl)}" placeholder="https://api.openai.com/v1"></label>` : ''}
-        ${showLocal ? `<label><span>ONNX directory</span><input type="text" data-name="onnx_dir" value="${_esc(local.onnx_dir || '')}" placeholder="leave empty for bundled BGE"></label>` : ''}
-        ${showOllama ? `<label><span>Model id</span>
-          <input type="text" data-name="model" value="${_esc(ollamaModel)}"></label>
-          <label><span>Base URL</span><input type="text" data-name="base_url" value="${_esc(ollama.base_url || 'http://localhost:11434')}"></label>` : ''}
-      </div>
-      <footer class="setup-modal__foot">
-        <button data-act="cancel">Cancel</button>
-        <button data-act="save" class="setup-card__btn">Save</button>
-      </footer>`;
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    const close = () => overlay.remove();
-    modal.querySelector('[data-act="close"]').addEventListener('click', close);
-    modal.querySelector('[data-act="cancel"]').addEventListener('click', close);
-    modal.querySelector('[data-act="save"]').addEventListener('click', async () => {
-      const params = { providerId };
-      modal.querySelectorAll('[data-name]').forEach(el => {
-        const name = el.dataset.name;
-        if (el.value !== '') {
-          params[_camel(name)] = el.value;
-        }
-      });
-      try {
-        const res = await _rpc.call('onboarding.memory_embedding.configure', params);
-        UI.toast(res && res.restartRequired ? 'Memory embedding saved. Restart required.' : 'Memory embedding saved.', 'info');
-        close();
-        render(_el);
-      } catch (err) {
-        UI.toast('Save failed: ' + err.message, 'err');
-      }
-    });
-  }
-
-  function _renderUnavailable() {
-    _el.innerHTML = `
-      <section class="setup setup--unavailable">
-        <div class="setup-unavailable" role="status" aria-live="polite">
-          <span class="setup-unavailable__badge">Under Maintenance</span>
-          <h2 class="setup-unavailable__title">Web setup is temporarily unavailable</h2>
-          <p class="setup-unavailable__lede">
-            The browser-based provider configuration flow is being stabilised
-            after several issues surfaced in testing. To prevent broken saves
-            we have disabled the controls on this page. The page itself is
-            kept in place so existing links keep resolving.
-          </p>
-          <div class="setup-unavailable__cta">
-            <h3>Configure providers in the meantime</h3>
-            <ul>
-              <li>Run <code>opensquilla onboard</code> for interactive first-run setup.</li>
-              <li>Use <code>opensquilla providers configure</code> for LLM provider edits.</li>
-              <li>Edit the active config file, normally <code>~/.opensquilla/config.toml</code>.</li>
-            </ul>
+          <div>
+            <p class="setup__kicker">OpenSquilla setup</p>
+            <h2>Core runtime configuration</h2>
           </div>
-          <p class="setup-unavailable__foot">
-            We will re-enable this view once the regressions are resolved.
-          </p>
+          <div class="setup__status ${_status.needsOnboarding ? 'is-warn' : 'is-ok'}">
+            ${_status.needsOnboarding ? 'Action needed' : 'Configured'}
+          </div>
+        </header>
+        <nav class="setup-stepper" aria-label="Setup steps">
+          ${STEPS.map((s, idx) => `<button class="setup-stepper__item ${s.id === _step ? 'is-active' : ''}" data-step="${s.id}">
+            <span>${idx + 1}</span>${_esc(s.label)}
+          </button>`).join('')}
+        </nav>
+        <div class="setup__body">${_renderCurrentStep()}</div>
+      </section>`;
+
+    _el.querySelectorAll('[data-step]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _step = btn.dataset.step;
+        _draw();
+      });
+    });
+    _bindStep();
+  }
+
+  function _renderCurrentStep() {
+    if (_step === 'router') return _renderRouterStep();
+    if (_step === 'channels') return _renderChannelsStep();
+    if (_step === 'extras') return _renderExtrasStep();
+    if (_step === 'finish') return _renderFinishStep();
+    return _renderProviderStep();
+  }
+
+  function _renderProviderStep() {
+    const providers = (_catalog.providers || []).filter(p => p.runtimeSupported);
+    const current = (_config.llm || {});
+    const selected = current.provider || providers[0]?.providerId || 'openrouter';
+    const spec = providers.find(p => p.providerId === selected) || providers[0] || {};
+    return `
+      <section class="setup-panel">
+        <header class="setup-panel__head">
+          <h3>Provider</h3>
+          <p>${_esc(current.provider || 'not configured')}</p>
+        </header>
+        <div class="setup-form">
+          <label><span>Provider</span>
+            <select data-provider-select>
+              ${providers.map(p => `<option value="${_esc(p.providerId)}"${p.providerId === selected ? ' selected' : ''}>${_esc(p.label)}</option>`).join('')}
+            </select>
+          </label>
+          <div class="setup-provider-fields">
+            ${_renderProviderFields(spec, current)}
+          </div>
+          <div class="setup-actions">
+            <button class="setup-btn setup-btn--primary" data-save-provider>Save Provider</button>
+            <button class="setup-btn" data-next="router">Next</button>
+          </div>
         </div>
       </section>`;
   }
 
-  function _imageFieldDefault(spec, field) {
-    if (field.name === 'enabled') {
-      const hasConfiguredProvider = _status.imageGenerationConfigured || _status.imageGenerationProvider;
-      return hasConfiguredProvider ? _status.imageGenerationEnabled === true : field.default !== false;
+  function _renderProviderFields(spec, current) {
+    return (spec.fields || []).map(field => {
+      const name = field.name;
+      let value = '';
+      if (name === 'model') value = current.model || field.default || '';
+      else if (name === 'base_url') value = current.base_url || field.default || '';
+      else if (name === 'proxy') value = current.proxy || '';
+      else if (name === 'api_key_env') value = current.api_key_env || field.default || '';
+      return _fieldHtml(field, value, 'provider');
+    }).join('');
+  }
+
+  function _renderRouterStep() {
+    const router = (_config.squilla_router || {});
+    const provider = (_config.llm || {}).provider || 'openrouter';
+    const catalog = _catalog.routerProfiles || {};
+    const profiles = catalog.profiles || [];
+    const profile = profiles.find(p => p.providerId === provider) || profiles.find(p => p.profileId === 'openrouter') || {};
+    const tiers = Object.assign({}, profile.tiers || {}, router.tiers || {});
+    const defaultTier = router.default_tier || catalog.defaultTier || 't1';
+    const mode = router.enabled === false ? 'disabled' : 'recommended';
+    return `
+      <section class="setup-panel">
+        <header class="setup-panel__head">
+          <h3>Router Tiers</h3>
+          <p>${_esc(provider)} / ${_esc(_tierLabel(defaultTier))}</p>
+        </header>
+        <div class="setup-router-toolbar">
+          <label><span>Mode</span>
+            <select data-router-mode>
+              <option value="recommended"${mode === 'recommended' ? ' selected' : ''}>SquillaRouter</option>
+              <option value="disabled"${mode === 'disabled' ? ' selected' : ''}>Disabled</option>
+            </select>
+          </label>
+          <label><span>Default text model</span>
+            <select data-default-tier>
+              ${TEXT_TIERS.map(t => `<option value="${t}"${t === defaultTier ? ' selected' : ''}>${_esc(_tierLabel(t))}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div class="setup-tier-table" role="table">
+          <div class="setup-tier-table__row is-head" role="row">
+            <span>Tier</span><span>Provider</span><span>Model</span><span>Thinking</span><span>Image</span>
+          </div>
+          ${Object.entries(tiers).filter(([name]) => TEXT_TIERS.includes(name) || name === 'image_model').map(([name, tier]) => _tierRow(name, tier)).join('')}
+        </div>
+        <div class="setup-actions">
+          <button class="setup-btn" data-prev="provider">Back</button>
+          <button class="setup-btn setup-btn--primary" data-save-router>Save Router</button>
+          <button class="setup-btn" data-next="channels">Next</button>
+        </div>
+      </section>`;
+  }
+
+  function _tierRow(name, tier) {
+    return `<div class="setup-tier-table__row" role="row" data-tier="${_esc(name)}">
+      <span><code>${_esc(name)}</code></span>
+      <input data-tier-field="provider" value="${_esc(tier.provider || '')}">
+      <input data-tier-field="model" value="${_esc(tier.model || '')}">
+      <select data-tier-field="thinkingLevel">
+        ${['', 'off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'].map(v => `<option value="${v}"${v === (tier.thinkingLevel || tier.thinking_level || '') ? ' selected' : ''}>${v || '-'}</option>`).join('')}
+      </select>
+      <input type="checkbox" data-tier-field="supportsImage"${tier.supportsImage || tier.supports_image ? ' checked' : ''}>
+    </div>`;
+  }
+
+  function _tierLabel(tier) {
+    return TIER_LABELS[tier] || tier || 'Balanced default (t1)';
+  }
+
+  function _renderChannelsStep() {
+    const channels = (_catalog.channels || []);
+    const selected = channels.some(c => c.type === _channelType) ? _channelType : (channels[0]?.type || 'telegram');
+    _channelType = selected;
+    const runtimeRows = (_channelStatus.channels || []).filter(row => row.configured !== false);
+    return `
+      <section class="setup-panel">
+        <header class="setup-panel__head">
+          <h3>Channels</h3>
+          <p>${runtimeRows.length} configured</p>
+        </header>
+        <div class="setup-channel-grid">
+          <div class="setup-form">
+            <label><span>Channel type</span>
+              <select data-channel-type>
+                ${channels.map(c => `<option value="${_esc(c.type)}"${c.type === selected ? ' selected' : ''}>${_esc(c.label)}</option>`).join('')}
+              </select>
+            </label>
+            <div class="setup-channel-fields">${_renderChannelFields(channels.find(c => c.type === selected))}</div>
+            <div class="setup-actions">
+              <button class="setup-btn setup-btn--primary" data-save-channel>Save Channel</button>
+            </div>
+          </div>
+          <div class="setup-runtime">
+            <h4>Runtime status</h4>
+            ${runtimeRows.length ? runtimeRows.map(_channelStatusRow).join('') : '<p class="setup-muted">No channels configured.</p>'}
+          </div>
+        </div>
+        <div class="setup-actions">
+          <button class="setup-btn" data-prev="router">Back</button>
+          <button class="setup-btn" data-next="extras">Next</button>
+        </div>
+      </section>`;
+  }
+
+  function _renderChannelFields(spec) {
+    if (!spec) return '';
+    return (spec.fields || []).map(field => _fieldHtml(field, field.default ?? '', 'channel')).join('');
+  }
+
+  function _channelStatusRow(row) {
+    const connected = row.connected === true;
+    const state = connected ? 'Connected' : (row.status === 'stopped' ? 'Action needed' : row.status || 'connecting');
+    return `<div class="setup-runtime__row ${connected ? 'is-ok' : 'is-warn'}">
+      <span>${_esc(row.name)}</span>
+      <span>${_esc(row.type || '')}</span>
+      <strong>${_esc(state)}</strong>
+    </div>`;
+  }
+
+  function _renderExtrasStep() {
+    const imageProviders = (_catalog.imageGenerationProviders || []).filter(p => p.runtimeSupported);
+    const memoryProviders = _catalog.memoryEmbeddingProviders || [];
+    const current = ((_config || {}).memory || {}).embedding || {};
+    const effectiveProvider = current.provider || current.mode || 'auto';
+    const currentMode = current.mode; // current.mode is kept explicit for static coverage.
+    const imageSpec = imageProviders[0] || {};
+    const field = (imageSpec.fields || []).find(candidate => candidate.name === 'enabled') || { default: true };
+    const imageEnabledDefault = _status.imageGenerationEnabled === false ? false : field.default !== false;
+    return `
+      <section class="setup-panel">
+        <header class="setup-panel__head">
+          <h3>Extras</h3>
+          <p>${_esc(effectiveProvider || currentMode || 'auto')}</p>
+        </header>
+        <div class="setup-extras">
+          <div class="setup-mini">
+            <h4>Memory embedding</h4>
+            <label><span>Provider</span>
+              <select data-memory-provider>
+                ${memoryProviders.map(p => `<option value="${_esc(p.providerId)}"${p.providerId === effectiveProvider ? ' selected' : ''}>${_esc(p.label)}</option>`).join('')}
+              </select>
+            </label>
+            <label><span>Model</span><input data-memory-field="model" value="${_esc((current.remote || {}).model || '')}" placeholder="text-embedding-3-small"></label>
+            <label><span>Remote fallback API key</span><input type="password" data-memory-field="api_key" data-secret="true" placeholder="leave blank to keep current"></label>
+            <label><span>Base URL</span><input data-memory-field="base_url" value="${_esc((current.remote || {}).base_url || '')}" placeholder="https://api.openai.com/v1"></label>
+            <button class="setup-btn setup-btn--primary" data-save-memory>Save Memory</button>
+          </div>
+          <div class="setup-mini">
+            <h4>Image generation</h4>
+            <label><span>Provider</span>
+              <select data-image-provider>
+                ${imageProviders.map(p => `<option value="${_esc(p.providerId)}">${_esc(p.label)}</option>`).join('')}
+              </select>
+            </label>
+            <label><span>Primary model</span><input data-image-field="primary" value="${_esc(_status.imageGenerationPrimary || '')}"></label>
+            <label><span>API key</span><input type="password" data-image-field="api_key" data-secret="true" placeholder="leave blank to keep current"></label>
+            <label class="setup-check"><input type="checkbox" data-image-enabled${imageEnabledDefault ? ' checked' : ''}><span>Enabled</span></label>
+            <button class="setup-btn setup-btn--primary" data-save-image>Save Image</button>
+          </div>
+        </div>
+        <div class="setup-actions">
+          <button class="setup-btn" data-prev="channels">Back</button>
+          <button class="setup-btn" data-next="finish">Next</button>
+        </div>
+      </section>`;
+  }
+
+  function _renderFinishStep() {
+    const router = (_config.squilla_router || {});
+    return `
+      <section class="setup-panel">
+        <header class="setup-panel__head">
+          <h3>Finish</h3>
+          <p>${_esc(_status.configPath || '')}</p>
+        </header>
+        <div class="setup-summary">
+          <div><span>Provider</span><strong>${_esc((_config.llm || {}).provider || '')}</strong></div>
+          <div><span>Model</span><strong>${_esc((_config.llm || {}).model || '')}</strong></div>
+          <div><span>Router</span><strong>${router.enabled === false ? 'disabled' : _esc(router.tier_profile || 'openrouter-mix')}</strong></div>
+          <div><span>Channels</span><strong>${_esc(String(_status.channelCount || 0))}</strong></div>
+        </div>
+        <div class="setup-cli">
+          <code>opensquilla onboard --if-needed</code>
+          <code>opensquilla configure provider</code>
+          <code>opensquilla channels status &lt;name&gt; --json</code>
+        </div>
+        <div class="setup-actions">
+          <button class="setup-btn" data-prev="extras">Back</button>
+          <button class="setup-btn setup-btn--primary" data-reload>Refresh</button>
+        </div>
+      </section>`;
+  }
+
+  function _fieldHtml(field, value, scope) {
+    const required = field.required ? ' *' : '';
+    const showWhen = field.showWhen && Object.keys(field.showWhen).length ? _esc(JSON.stringify(field.showWhen)) : '';
+    const attrs = `data-name="${_esc(field.name)}" data-scope="${scope}" data-show-when="${showWhen}"`;
+    if (field.type === 'bool') {
+      return `<label class="setup-check" ${attrs}><input type="checkbox" ${field.default ? ' checked' : ''}><span>${_esc(field.label)}${required}</span></label>`;
     }
-    if (field.name === 'primary') {
-      const primary = _status.imageGenerationPrimary || '';
-      return primary.startsWith(spec.providerId + '/') ? primary : field.default;
+    if (field.type === 'select') {
+      return `<label ${attrs}><span>${_esc(field.label)}${required}</span><select>
+        ${(field.choices || []).map(choice => `<option value="${_esc(choice)}"${choice === value ? ' selected' : ''}>${_esc(choice)}</option>`).join('')}
+      </select></label>`;
     }
-    return field.default ?? '';
+    const isSecret = field.secret || field.type === 'password';
+    const inputType = isSecret ? 'password' : (field.type === 'int' || field.type === 'float' ? 'number' : 'text');
+    const placeholder = field.placeholder || (isSecret ? 'leave blank to keep current' : '');
+    return `<label ${attrs}><span>${_esc(field.label)}${required}</span><input type="${inputType}" data-secret="${isSecret}" value="${isSecret ? '' : _esc(String(value || ''))}" placeholder="${_esc(placeholder)}"></label>`;
+  }
+
+  function _bindStep() {
+    _el.querySelectorAll('[data-next]').forEach(btn => btn.addEventListener('click', () => { _step = btn.dataset.next; _draw(); }));
+    _el.querySelectorAll('[data-prev]').forEach(btn => btn.addEventListener('click', () => { _step = btn.dataset.prev; _draw(); }));
+    _el.querySelector('[data-reload]')?.addEventListener('click', async () => { await _load(); _draw(); });
+    _el.querySelector('[data-provider-select]')?.addEventListener('change', () => _drawProviderFields());
+    _el.querySelector('[data-channel-type]')?.addEventListener('change', () => _drawChannelFields());
+    _bindConditionalSelects(_el);
+    _applyConditionalFields();
+    _el.querySelector('[data-save-provider]')?.addEventListener('click', _saveProvider);
+    _el.querySelector('[data-save-router]')?.addEventListener('click', _saveRouter);
+    _el.querySelector('[data-save-channel]')?.addEventListener('click', _saveChannel);
+    _el.querySelector('[data-save-memory]')?.addEventListener('click', _saveMemory);
+    _el.querySelector('[data-save-image]')?.addEventListener('click', _saveImage);
+  }
+
+  function _drawProviderFields() {
+    const providerId = _el.querySelector('[data-provider-select]')?.value;
+    const spec = (_catalog.providers || []).find(p => p.providerId === providerId);
+    const box = _el.querySelector('.setup-provider-fields');
+    if (box && spec) box.innerHTML = _renderProviderFields(spec, _config.llm || {});
+    _bindConditionalSelects(box || _el);
+    _applyConditionalFields();
+  }
+
+  function _drawChannelFields() {
+    const type = _el.querySelector('[data-channel-type]')?.value;
+    _channelType = type;
+    const spec = (_catalog.channels || []).find(c => c.type === type);
+    const box = _el.querySelector('.setup-channel-fields');
+    if (box && spec) box.innerHTML = _renderChannelFields(spec);
+    _bindConditionalSelects(box || _el);
+    _applyConditionalFields();
+  }
+
+  function _bindConditionalSelects(root) {
+    root.querySelectorAll('select').forEach(sel => sel.addEventListener('change', _applyConditionalFields));
+  }
+
+  function _applyConditionalFields() {
+    _el.querySelectorAll('[data-show-when]').forEach(label => {
+      const raw = label.dataset.showWhen || '';
+      if (!raw) {
+        label.hidden = false;
+        return;
+      }
+      let visible = true;
+      try {
+        const cond = JSON.parse(raw);
+        visible = Object.entries(cond).every(([name, expected]) => {
+          const owner = label.parentElement || _el;
+          const input = owner.querySelector(`[data-name="${CSS.escape(name)}"] select, [data-name="${CSS.escape(name)}"] input`);
+          return input ? String(input.value) === String(expected) : true;
+        });
+      } catch (_) {
+        visible = true;
+      }
+      label.hidden = !visible;
+    });
+  }
+
+  function _readScopedFields(scope) {
+    const out = {};
+    _el.querySelectorAll(`[data-scope="${scope}"][data-name]`).forEach(label => {
+      if (label.hidden) return;
+      const input = label.querySelector('input, select');
+      if (!input) return;
+      const name = scope === 'channel' ? label.dataset.name : _camel(label.dataset.name);
+      if (input.type === 'checkbox') out[name] = input.checked;
+      else if (input.value !== '' || input.dataset.secret !== 'true') out[name] = input.value;
+    });
+    return out;
+  }
+
+  async function _saveProvider() {
+    const providerId = _el.querySelector('[data-provider-select]')?.value;
+    try {
+      await _rpc.call('onboarding.provider.configure', Object.assign({ providerId }, _readScopedFields('provider')));
+      UI.toast('Provider saved.', 'info');
+      await _load();
+      _step = 'router';
+      _draw();
+    } catch (err) {
+      UI.toast('Save failed: ' + err.message, 'err');
+    }
+  }
+
+  async function _saveRouter() {
+    const tiers = {};
+    _el.querySelectorAll('[data-tier]').forEach(row => {
+      const tier = {};
+      row.querySelectorAll('[data-tier-field]').forEach(input => {
+        const key = input.dataset.tierField;
+        tier[key] = input.type === 'checkbox' ? input.checked : input.value;
+      });
+      tiers[row.dataset.tier] = tier;
+    });
+    try {
+      await _rpc.call('onboarding.router.configure', {
+        mode: _el.querySelector('[data-router-mode]')?.value || 'recommended',
+        defaultTier: _el.querySelector('[data-default-tier]')?.value || 't1',
+        tiers,
+      });
+      UI.toast('Router saved.', 'info');
+      await _load();
+      _step = 'channels';
+      _draw();
+    } catch (err) {
+      UI.toast('Save failed: ' + err.message, 'err');
+    }
+  }
+
+  async function _saveChannel() {
+    const entry = Object.assign({ type: _el.querySelector('[data-channel-type]')?.value }, _readScopedFields('channel'));
+    try {
+      await _rpc.call('onboarding.channel.probe', { entry });
+      await _rpc.call('onboarding.channel.upsert', { entry });
+      UI.toast('Channel saved. Restart required.', 'info');
+      await _loadChannelStatus();
+      _draw();
+    } catch (err) {
+      UI.toast('Save failed: ' + err.message, 'err');
+    }
+  }
+
+  async function _saveMemory() {
+    const params = { providerId: _el.querySelector('[data-memory-provider]')?.value || 'auto' };
+    _el.querySelectorAll('[data-memory-field]').forEach(input => {
+      if (input.value !== '' || input.dataset.secret !== 'true') params[_camel(input.dataset.memoryField)] = input.value;
+    });
+    try {
+      await _rpc.call('onboarding.memory_embedding.configure', params);
+      UI.toast('Memory embedding saved. Restart required.', 'info');
+      await _load();
+      _draw();
+    } catch (err) {
+      UI.toast('Save failed: ' + err.message, 'err');
+    }
+  }
+
+  async function _saveImage() {
+    const params = { providerId: _el.querySelector('[data-image-provider]')?.value || 'openrouter' };
+    params.enabled = _el.querySelector('[data-image-enabled]')?.checked !== false;
+    _el.querySelectorAll('[data-image-field]').forEach(input => {
+      if (input.value !== '' || input.dataset.secret !== 'true') params[_camel(input.dataset.imageField)] = input.value;
+    });
+    try {
+      await _rpc.call('onboarding.imageGeneration.configure', params);
+      UI.toast('Image generation saved.', 'info');
+      await _load();
+      _draw();
+    } catch (err) {
+      UI.toast('Save failed: ' + err.message, 'err');
+    }
+  }
+
+  async function _loadChannelStatus() {
+    _channelStatus = await _rpc.call('channels.status').catch(() => ({ channels: [] }));
+  }
+
+  function _startChannelPolling() {
+    if (_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = setInterval(async () => {
+      if (!_el || _step !== 'channels') return;
+      await _loadChannelStatus();
+      _draw();
+    }, 5000);
   }
 
   function _camel(name) {
-    return name.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    return String(name || '').replace(/_([a-z])/g, (_, c) => c.toUpperCase());
   }
 
   function _esc(s) {
@@ -383,7 +508,16 @@ const SetupView = (() => {
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function destroy() { _el = null; _rpc = null; _catalog = null; _status = null; _config = null; }
+  function destroy() {
+    if (_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = null;
+    _el = null;
+    _rpc = null;
+    _catalog = {};
+    _status = {};
+    _config = {};
+    _channelStatus = { channels: [] };
+  }
 
   return { render, destroy };
 })();
