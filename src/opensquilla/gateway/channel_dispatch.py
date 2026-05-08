@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, cast
 import structlog
 
 from opensquilla.agents.scope import resolve_agent_model
-from opensquilla.artifacts import artifact_payload
+from opensquilla.artifacts import ArtifactStore, artifact_payload
 from opensquilla.channels._util import ChannelAccessPolicy, evaluate_policy
 from opensquilla.channels.stream_policy import resolve_channel_stream_policy
 from opensquilla.channels.types import IncomingMessage, OutgoingMessage
@@ -335,7 +335,12 @@ async def run_channel_dispatch(
                 continue
 
             transcript_watermark = await _transcript_watermark(session_manager, session_key)
-            stream_relay = _RuntimeChannelStreamRelay.maybe_start(channel, msg, task_runtime)
+            stream_relay = _RuntimeChannelStreamRelay.maybe_start(
+                channel,
+                msg,
+                task_runtime,
+                config,
+            )
             # Ghost-turn fix: enqueue BEFORE appending to transcript.
             # If enqueue raises TaskQueueFullError the user message is never
             # written, so no orphaned "ghost" turn is left in the transcript.
@@ -630,7 +635,7 @@ async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any,
         _reservation_token = None  # type: ignore[assignment]
 
     transcript_watermark = await _transcript_watermark(session_manager, session_key)
-    stream_relay = _RuntimeChannelStreamRelay.maybe_start(channel, msg, task_runtime)
+    stream_relay = _RuntimeChannelStreamRelay.maybe_start(channel, msg, task_runtime, config)
     # Ghost-turn fix: enqueue BEFORE appending to transcript (same as
     # run_channel_dispatch). On TaskQueueFullError, transcript is not written.
     # Reservation is released in the finally block below regardless of outcome.
@@ -931,6 +936,26 @@ async def _emit_run_heartbeat(
     )
 
 
+def _is_channel_admin_sender(config: Any, envelope: Any) -> bool:
+    admin_senders = getattr(config, "channel_admin_senders", None)
+    if not isinstance(admin_senders, dict):
+        return False
+
+    source_name = getattr(envelope, "source_name", None)
+    sender_id = getattr(envelope, "sender_id", None)
+    if not isinstance(source_name, str) or not source_name:
+        return False
+    if not isinstance(sender_id, str) or not sender_id:
+        return False
+
+    configured = admin_senders.get(source_name)
+    if isinstance(configured, str):
+        return sender_id == configured
+    if not isinstance(configured, list | tuple | set | frozenset):
+        return False
+    return sender_id in {str(item) for item in configured}
+
+
 async def _run_turn_with_streaming(
     channel: Any,
     turn_runner: Any,
@@ -969,7 +994,7 @@ async def _run_turn_with_streaming(
     )
     tool_ctx = tool_context_from_envelope(
         envelope,
-        is_owner=False,
+        is_owner=_is_channel_admin_sender(config, envelope),
         workspace_dir=str(workspace_dir),
         workspace_strict=workspace_strict,
     )
@@ -1029,9 +1054,10 @@ _STREAM_DONE = object()
 class _RuntimeChannelStreamRelay:
     """Bridge one runtime task's stream events into a channel streaming adapter."""
 
-    def __init__(self, channel: Any, inbound: IncomingMessage) -> None:
+    def __init__(self, channel: Any, inbound: IncomingMessage, config: Any = None) -> None:
         self._channel = channel
         self._inbound = inbound
+        self._config = config
         self._queue: asyncio.Queue[str | object] = asyncio.Queue()
         self._artifacts: list[dict[str, Any]] = []
         self._task: asyncio.Task[Any] | None = None
@@ -1045,13 +1071,14 @@ class _RuntimeChannelStreamRelay:
         channel: Any,
         inbound: IncomingMessage,
         task_runtime: Any,
+        config: Any = None,
     ) -> _RuntimeChannelStreamRelay | None:
         if not resolve_channel_stream_policy(channel).relay_stream:
             return None
         enqueue = getattr(task_runtime, "enqueue", None)
         if not callable(enqueue) or not _accepts_keyword_arg(enqueue, "stream_event_sink"):
             return None
-        relay = cls(channel, inbound)
+        relay = cls(channel, inbound, config)
         relay._task = asyncio.create_task(relay._run())
         return relay
 
@@ -1100,7 +1127,11 @@ class _RuntimeChannelStreamRelay:
         if self._closed:
             return
         self._closed = True
-        artifact_lines = _artifact_fallback_lines(self._artifacts)
+        artifact_lines = (
+            []
+            if _can_deliver_channel_files(self._channel)
+            else _artifact_fallback_lines(self._artifacts)
+        )
         if artifact_lines:
             prefix = "\n\n" if self.text_emitted else ""
             artifact_text = "\n".join(artifact_lines)
@@ -1118,6 +1149,23 @@ class _RuntimeChannelStreamRelay:
                 await self._task
         except Exception as exc:  # noqa: BLE001 - error already becomes batch fallback.
             self.stream_error = exc
+
+        if _can_deliver_channel_files(self._channel):
+            undelivered = await _deliver_artifacts_as_channel_files(
+                self._channel,
+                self._inbound,
+                self._artifacts,
+                self._config,
+            )
+            fallback_lines = _artifact_fallback_lines(undelivered)
+            if fallback_lines:
+                await self._channel.send(
+                    _build_reply_message(
+                        self._channel,
+                        "\n".join(fallback_lines),
+                        self._inbound,
+                    )
+                )
 
 
 def _text_delta_from_event(event: Any) -> str:
@@ -1163,6 +1211,51 @@ def _artifact_fallback_lines(artifacts: list[dict[str, Any]]) -> list[str]:
         else:
             lines.append(f"Generated file: {name} -> available in WebUI")
     return lines
+
+
+def _artifact_media_root_from_config(config: Any) -> Path:
+    attachments_cfg = getattr(config, "attachments", None)
+    media_root_raw = getattr(attachments_cfg, "media_root", None)
+    return Path(media_root_raw) if media_root_raw else Path(".opensquilla") / "media"
+
+
+def _can_deliver_channel_files(channel: Any) -> bool:
+    return callable(getattr(channel, "send_file", None))
+
+
+async def _deliver_artifacts_as_channel_files(
+    channel: Any,
+    msg: IncomingMessage,
+    artifacts: list[dict[str, Any]],
+    config: Any,
+) -> list[dict[str, Any]]:
+    send_file = getattr(channel, "send_file", None)
+    if not callable(send_file) or not artifacts:
+        return artifacts
+
+    store = ArtifactStore(_artifact_media_root_from_config(config))
+    undelivered: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        artifact_id = artifact.get("id")
+        session_id = artifact.get("session_id")
+        if not isinstance(artifact_id, str) or not isinstance(session_id, str):
+            undelivered.append(artifact)
+            continue
+        try:
+            _ref, path = store.resolve_for_download(artifact_id, session_id=session_id)
+            result = send_file(msg.channel_id, str(path))
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:  # noqa: BLE001 - preserve text fallback on delivery failure.
+            log.warning(
+                "channel_dispatch.artifact_file_delivery_failed",
+                artifact_id=artifact_id,
+                channel_type=type(channel).__name__,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            undelivered.append(artifact)
+    return undelivered
 
 
 async def _read_transcript_rows(session_manager: Any, session_key: str) -> list[Any]:
@@ -1488,11 +1581,19 @@ async def _run_turn_batch_path(
 
     if not error_occurred:
         content = "".join(text_parts)
-        artifact_lines = _artifact_fallback_lines(artifacts)
-        if artifact_lines:
-            content = "\n\n".join(part for part in (content, "\n".join(artifact_lines)) if part)
-        if content:
-            await channel.send(_build_reply_message(channel, content, msg))
+        if _can_deliver_channel_files(channel):
+            if content:
+                await channel.send(_build_reply_message(channel, content, msg))
+            undelivered = await _deliver_artifacts_as_channel_files(channel, msg, artifacts, config)
+            artifact_lines = _artifact_fallback_lines(undelivered)
+            if artifact_lines:
+                await channel.send(_build_reply_message(channel, "\n".join(artifact_lines), msg))
+        else:
+            artifact_lines = _artifact_fallback_lines(artifacts)
+            if artifact_lines:
+                content = "\n\n".join(part for part in (content, "\n".join(artifact_lines)) if part)
+            if content:
+                await channel.send(_build_reply_message(channel, content, msg))
 
 
 async def _run_turn_streaming_path(
@@ -1612,9 +1713,15 @@ async def _run_turn_streaming_path(
                 _build_reply_message(channel, f"Error: {stream_error}", msg),
             )
     elif artifacts:
-        await channel.send(
-            _build_reply_message(channel, "\n".join(_artifact_fallback_lines(artifacts)), msg),
-        )
+        if _can_deliver_channel_files(channel):
+            undelivered = await _deliver_artifacts_as_channel_files(channel, msg, artifacts, config)
+        else:
+            undelivered = artifacts
+        fallback_lines = _artifact_fallback_lines(undelivered)
+        if fallback_lines:
+            await channel.send(
+                _build_reply_message(channel, "\n".join(fallback_lines), msg),
+            )
 
 
 # ── Gap 5: Event emission ────────────────────────────────────────────────
