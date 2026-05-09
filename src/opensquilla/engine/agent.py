@@ -698,9 +698,15 @@ class Agent:
         self._write_context_stage("session:loaded", loaded_history)
         sanitized_history, sanitize_result = sanitize_session_messages(loaded_history)
         sanitized_history = repair_tool_pairing(sanitized_history)
+        preserve_reasoning_content = bool(
+            thinking_enabled
+            and self.config.model_capabilities is not None
+            and getattr(self.config.model_capabilities, "reasoning_format", "") == "deepseek"
+        )
         sanitized_history = drop_reasoning(
             sanitized_history,
             preserve_tool_call_reasoning=thinking_enabled,
+            preserve_reasoning_content=preserve_reasoning_content,
         )
         sanitized_history = _strip_historical_image_blocks(sanitized_history)
         self._write_context_stage(
