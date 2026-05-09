@@ -1012,7 +1012,12 @@ class FeishuChannel:
                     upload_data.get("msg", "image upload failed"),
                     code=upload_data.get("code"),
                 )
-            key = upload_data["data"]["image_key"]
+            key = (upload_data.get("data") or {}).get("image_key")
+            if not key:
+                raise FeishuApiError(
+                    "image upload response missing image_key",
+                    code=upload_data.get("code"),
+                )
             message_type = "image"
             content = {"image_key": key}
         else:
@@ -1032,7 +1037,12 @@ class FeishuChannel:
                     upload_data.get("msg", "file upload failed"),
                     code=upload_data.get("code"),
                 )
-            key = upload_data["data"]["file_key"]
+            key = (upload_data.get("data") or {}).get("file_key")
+            if not key:
+                raise FeishuApiError(
+                    "file upload response missing file_key",
+                    code=upload_data.get("code"),
+                )
             message_type = "file"
             content = {"file_key": key}
 
