@@ -478,3 +478,37 @@ async def test_agent_preserves_reasoning_content_for_deepseek_tool_replay() -> N
         and any(getattr(block, "type", None) == "tool_use" for block in message.content)
     )
     assert assistant_replay.reasoning_content == "I should call echo before finalizing."
+
+
+@pytest.mark.asyncio
+async def test_agent_preserves_reasoning_content_for_deepseek_text_replay() -> None:
+    provider = CapturingProvider()
+    agent = Agent(
+        provider=provider,
+        config=AgentConfig(
+            max_iterations=1,
+            thinking=ThinkingLevel.HIGH,
+            model_capabilities=ModelCapabilities(
+                supports_reasoning=True,
+                supports_tools=True,
+                reasoning_format="deepseek",
+            ),
+        ),
+    )
+    agent.set_history(
+        [
+            Message(role="user", content="old question"),
+            Message(
+                role="assistant",
+                content=[ContentBlockText(text="old answer")],
+                reasoning_content="I reasoned before answering.",
+            ),
+        ]
+    )
+
+    events = [event async for event in agent.run_turn("continue")]
+
+    assert any(event.kind == "done" for event in events)
+    assert provider.calls
+    sent_assistant = provider.calls[0]["messages"][1]
+    assert sent_assistant.reasoning_content == "I reasoned before answering."
