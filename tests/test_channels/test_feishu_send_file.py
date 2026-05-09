@@ -6,7 +6,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from opensquilla.channels.feishu import FeishuChannel, FeishuChannelConfig, _TokenState
+from opensquilla.channels.feishu import (
+    FeishuApiError,
+    FeishuChannel,
+    FeishuChannelConfig,
+    _TokenState,
+)
 from opensquilla.channels.stream_policy import resolve_channel_stream_policy
 from opensquilla.gateway.attachment_ingest import MAX_ATTACHMENT_BYTES
 
@@ -50,6 +55,71 @@ async def test_send_file_sends_image_to_private_open_id(tmp_path: Path) -> None:
         "/open-apis/im/v1/images",
         "/open-apis/im/v1/messages",
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_file_raises_when_image_upload_response_lacks_image_key(
+    tmp_path: Path,
+) -> None:
+    """A successful HTTP status with `code == 0` but no `data.image_key`
+    used to crash with `KeyError: 'data'`. The send must surface a
+    `FeishuApiError` instead so callers see a domain-typed failure
+    consistent with other Feishu API errors in this module.
+    """
+    image_path = tmp_path / "result.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/open-apis/im/v1/images":
+            return httpx.Response(200, json={"code": 0})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    channel = FeishuChannel(
+        FeishuChannelConfig(app_id="app", app_secret="secret", connection_mode="webhook")
+    )
+    channel._token_state = _TokenState(token="tenant-token", expires_at=999999999.0)
+    channel._client = httpx.AsyncClient(
+        base_url="https://open.feishu.cn/open-apis",
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        with pytest.raises(FeishuApiError, match="image_key"):
+            await channel.send_file("ou_private_user", str(image_path))
+    finally:
+        await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_file_raises_when_file_upload_response_lacks_file_key(
+    tmp_path: Path,
+) -> None:
+    """Mirror of the image_key guard for the non-image upload branch:
+    `code == 0` with `data` either missing or empty must surface a
+    `FeishuApiError` rather than a raw `KeyError`.
+    """
+    file_path = tmp_path / "report.pdf"
+    file_path.write_bytes(b"%PDF-1.4\nstub\n")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/open-apis/im/v1/files":
+            return httpx.Response(200, json={"code": 0, "data": {}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    channel = FeishuChannel(
+        FeishuChannelConfig(app_id="app", app_secret="secret", connection_mode="webhook")
+    )
+    channel._token_state = _TokenState(token="tenant-token", expires_at=999999999.0)
+    channel._client = httpx.AsyncClient(
+        base_url="https://open.feishu.cn/open-apis",
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        with pytest.raises(FeishuApiError, match="file_key"):
+            await channel.send_file("ou_private_user", str(file_path))
+    finally:
+        await channel.stop()
 
 
 def test_feishu_uses_final_only_channel_stream_policy() -> None:
