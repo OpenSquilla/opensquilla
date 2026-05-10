@@ -56,6 +56,7 @@ from opensquilla.observability.decision_log import (
 from opensquilla.observability.prompt_report import PromptReport, build_prompt_report
 from opensquilla.observability.trace import TraceContext, TraceEvent, write_trace_event
 from opensquilla.observability.turn_call_log import TurnCallLogger, is_turn_call_log_enabled
+from opensquilla.paths import media_root_from_config
 from opensquilla.provider import (
     ErrorEvent as ProviderErrorEvent,
 )
@@ -4052,9 +4053,7 @@ class TurnRunner:
 
     @staticmethod
     def _attachment_media_root_from_config(config: Any | None) -> Path:
-        attachments_cfg = getattr(config, "attachments", None)
-        media_root_raw = getattr(attachments_cfg, "media_root", None)
-        return Path(media_root_raw) if media_root_raw else Path(".opensquilla") / "media"
+        return media_root_from_config(config)
 
     def _attachment_media_root(self) -> Path:
         return self._attachment_media_root_from_config(self._config)

@@ -90,6 +90,10 @@ async def publish_artifact(
         )
     except ArtifactBudgetError as exc:
         raise ToolError(str(exc)) from exc
+    except FileNotFoundError as exc:
+        if not target.exists():
+            raise ToolError(f"artifact file not found: {path}") from exc
+        raise ToolError(f"artifact storage path is unavailable: {exc}") from exc
 
     payload = artifact_payload(ref)
     ctx.published_artifacts.append(payload)

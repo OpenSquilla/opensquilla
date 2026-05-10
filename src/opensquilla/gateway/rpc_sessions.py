@@ -21,6 +21,7 @@ from opensquilla.gateway.session_services import (
     set_session_epoch,
 )
 from opensquilla.gateway.session_streams import get_session_streams
+from opensquilla.paths import media_root_from_config
 from opensquilla.session.compaction import (
     build_compaction_config_from_provider,
     call_compact_with_optional_config,
@@ -689,16 +690,9 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
 
     message_text: str = params["message"]
     semantic_message_text = message_text
-    from pathlib import Path as _Path
-
     attachments_cfg = getattr(ctx.config, "attachments", None)
     persist_enabled = bool(getattr(attachments_cfg, "persist_transcripts", True))
-    media_root_raw = getattr(attachments_cfg, "media_root", None)
-    media_root = (
-        _Path(media_root_raw)
-        if media_root_raw
-        else _Path(".opensquilla") / "media"
-    )
+    media_root = media_root_from_config(ctx.config)
     session_id = key.split(":")[-1] or key
     disk_budget = getattr(attachments_cfg, "transcript_disk_budget_bytes", None)
     ingested_attachments = await _attachment_ingest.ingest_attachments(

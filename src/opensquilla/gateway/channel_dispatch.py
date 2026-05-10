@@ -34,6 +34,7 @@ from opensquilla.channels.types import IncomingMessage, OutgoingMessage
 from opensquilla.engine.start_turn import start_turn_via_runtime
 from opensquilla.engine.types import ArtifactEvent, ErrorEvent, RunHeartbeatEvent, TextDeltaEvent
 from opensquilla.gateway.attachment_ingest import AttachmentIngestResult, ingest_attachments
+from opensquilla.paths import media_root_from_config
 from opensquilla.session.terminal_reply import build_terminal_reply
 
 if TYPE_CHECKING:
@@ -1259,9 +1260,7 @@ def _artifact_fallback_lines(artifacts: list[dict[str, Any]]) -> list[str]:
 
 
 def _artifact_media_root_from_config(config: Any) -> Path:
-    attachments_cfg = getattr(config, "attachments", None)
-    media_root_raw = getattr(attachments_cfg, "media_root", None)
-    return Path(media_root_raw) if media_root_raw else Path(".opensquilla") / "media"
+    return media_root_from_config(config)
 
 
 def _strip_artifact_markers_from_channel_text(text: str) -> str:
@@ -1452,8 +1451,7 @@ async def _append_channel_user_message(
 
         attachments_cfg = getattr(config, "attachments", None)
         persist_enabled = bool(getattr(attachments_cfg, "persist_transcripts", True))
-        media_root_raw = getattr(attachments_cfg, "media_root", None)
-        media_root = Path(media_root_raw) if media_root_raw else Path(".opensquilla") / "media"
+        media_root = media_root_from_config(config)
         disk_budget = getattr(attachments_cfg, "transcript_disk_budget_bytes", None)
         session_id = session_key.split(":")[-1] or session_key
         envelope, _writes = build_transcript_attachment_envelope(

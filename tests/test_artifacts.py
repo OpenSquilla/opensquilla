@@ -176,6 +176,33 @@ async def test_publish_artifact_tool_allows_workspace_file_only(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_publish_artifact_tool_reports_storage_write_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = workspace / "report.txt"
+    output.write_text("ready", encoding="utf-8")
+    ctx = ToolContext(
+        workspace_dir=str(workspace),
+        artifact_media_root=str(tmp_path / "media"),
+        artifact_session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+    )
+
+    def fail_publish_file(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("media temp path unavailable")
+
+    monkeypatch.setattr(ArtifactStore, "publish_file", fail_publish_file)
+    token = current_tool_context.set(ctx)
+    try:
+        with pytest.raises(ToolError, match="artifact storage path is unavailable"):
+            await publish_artifact(path="report.txt", name="final.txt", mime="text/plain")
+    finally:
+        current_tool_context.reset(token)
+
+
+@pytest.mark.asyncio
 async def test_publish_artifact_tool_rejects_missing_workspace_and_escape(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
