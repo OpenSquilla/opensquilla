@@ -91,6 +91,12 @@ from .types import (
 
 logger = structlog.get_logger("opensquilla.engine.agent")
 
+
+def _is_deepseek_model_id(model_id: str | None) -> bool:
+    normalized = (model_id or "").strip().lower()
+    return normalized.startswith("deepseek") or "/deepseek" in normalized
+
+
 _TOOL_RESULT_SUMMARY_SYSTEM = (
     "You compress tool output before it is passed to another agent. Preserve exact "
     "filenames, paths, ids, numbers, commands, error messages, and code-relevant snippets. "
@@ -702,6 +708,7 @@ class Agent:
             thinking_enabled
             and self.config.model_capabilities is not None
             and getattr(self.config.model_capabilities, "reasoning_format", "") == "deepseek"
+            and _is_deepseek_model_id(self.config.model_id)
         )
         sanitized_history = drop_reasoning(
             sanitized_history,
@@ -793,6 +800,7 @@ class Agent:
         window_input_tokens = 0
         window_output_tokens = 0
         final_text_parts: list[str] = []
+        final_reasoning_parts: list[str] = []
         _fallback = FallbackPolicy(
             max_retries=self.config.max_provider_retries,
             base_backoff_ms=self.config.retry_base_backoff_ms,
@@ -1445,6 +1453,9 @@ class Agent:
                     yield terminal_error
                     break
 
+                if iter_reasoning_content:
+                    final_reasoning_parts.append(iter_reasoning_content)
+
                 window_input_tokens += iter_input_tokens
                 window_output_tokens += iter_output_tokens
 
@@ -1818,6 +1829,9 @@ class Agent:
                 model=done_model,
                 runtime_context_hash=runtime_context_hash,
                 runtime_context_chars=len(runtime_context),
+                reasoning_content=(
+                    "\n".join(final_reasoning_parts) if final_reasoning_parts else None
+                ),
             )
         # Reset for next turn
         self._state = AgentState.IDLE

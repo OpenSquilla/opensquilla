@@ -27,6 +27,7 @@ from .types import (
     DoneEvent,
     ErrorEvent,
     Message,
+    ModelCapabilities,
     ModelInfo,
     StreamEvent,
     TextDeltaEvent,
@@ -418,16 +419,48 @@ def _attach_reasoning_content(
     payload: dict[str, Any],
     *,
     include_reasoning_content: bool = True,
+    require_tool_call_reasoning_content: bool = False,
 ) -> dict[str, Any]:
     if include_reasoning_content and msg.role == "assistant" and msg.reasoning_content:
         payload["reasoning_content"] = msg.reasoning_content
+    elif (
+        include_reasoning_content
+        and require_tool_call_reasoning_content
+        and msg.role == "assistant"
+        and "tool_calls" in payload
+    ):
+        payload["reasoning_content"] = ""
     return payload
+
+
+def _is_direct_deepseek_v4_model_id(model: str) -> bool:
+    return model.strip().lower() in {"deepseek-v4-flash", "deepseek-v4-pro"}
+
+
+def _should_replay_reasoning_content(
+    *,
+    provider_kind: str,
+    model: str,
+    caps: ModelCapabilities | None,
+    thinking: bool,
+) -> bool:
+    if not caps or not caps.supports_reasoning:
+        return False
+    if provider_kind == "openrouter":
+        return caps.reasoning_format == "openrouter"
+    return (
+        provider_kind == "deepseek"
+        and caps.reasoning_format == "deepseek"
+        and _is_direct_deepseek_v4_model_id(model)
+        and thinking
+    )
 
 
 def _build_openai_messages(
     msg: Message,
     *,
     include_reasoning_content: bool = True,
+    require_tool_call_reasoning_content: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert a opensquilla Message into one or more OpenAI-format message dicts.
 
@@ -444,6 +477,7 @@ def _build_openai_messages(
                 msg,
                 {"role": msg.role, "content": msg.content},
                 include_reasoning_content=include_reasoning_content,
+                require_tool_call_reasoning_content=require_tool_call_reasoning_content,
             )
         ]
 
@@ -503,6 +537,7 @@ def _build_openai_messages(
                 msg,
                 result,
                 include_reasoning_content=include_reasoning_content,
+                require_tool_call_reasoning_content=require_tool_call_reasoning_content,
             )
         ]
 
@@ -514,6 +549,7 @@ def _build_openai_messages(
                 msg,
                 {"role": msg.role, "content": parts},
                 include_reasoning_content=include_reasoning_content,
+                require_tool_call_reasoning_content=require_tool_call_reasoning_content,
             )
         ]
     content_text = " ".join(p["text"] for p in parts if p["type"] == "text")
@@ -522,6 +558,7 @@ def _build_openai_messages(
             msg,
             {"role": msg.role, "content": content_text},
             include_reasoning_content=include_reasoning_content,
+            require_tool_call_reasoning_content=require_tool_call_reasoning_content,
         )
     ]
 
@@ -606,13 +643,11 @@ class OpenAIProvider:
     ) -> AsyncIterator[StreamEvent]:
         openai_messages: list[dict[str, Any]] = []
         caps = cfg.model_capabilities
-        include_reasoning_content = bool(
-            caps
-            and caps.supports_reasoning
-            and (
-                (self._provider_kind == "openrouter" and caps.reasoning_format == "openrouter")
-                or caps.reasoning_format == "deepseek"
-            )
+        include_reasoning_content = _should_replay_reasoning_content(
+            provider_kind=self._provider_kind,
+            model=self._model,
+            caps=caps,
+            thinking=cfg.thinking,
         )
         if cfg.system:
             explicit_cache_supported = self._provider_kind == "openrouter" and (
@@ -638,6 +673,13 @@ class OpenAIProvider:
                 _build_openai_messages(
                     m,
                     include_reasoning_content=include_reasoning_content,
+                    require_tool_call_reasoning_content=(
+                        self._provider_kind == "deepseek"
+                        and caps is not None
+                        and caps.reasoning_format == "deepseek"
+                        and _is_direct_deepseek_v4_model_id(self._model)
+                        and cfg.thinking
+                    ),
                 )
             )
 
