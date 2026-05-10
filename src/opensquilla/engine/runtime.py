@@ -576,16 +576,11 @@ def _artifact_delivery_failure_summary(event: ToolResultEvent) -> str | None:
     return summary or "publish_artifact failed"
 
 
-def _artifact_delivery_failure_notice(summary: str | None) -> str:
-    base = (
-        f"{_ARTIFACT_DELIVERY_FAILURE_MARKER} no downloadable file was attached "
-        "to this response."
-    )
-    if not summary:
-        return base + " Retry by publishing an existing file from the active workspace."
+def _artifact_delivery_failure_notice() -> str:
     return (
-        f"{base} Last publish_artifact error: {summary}. "
-        "Retry by publishing an existing file from the active workspace."
+        f"{_ARTIFACT_DELIVERY_FAILURE_MARKER} no downloadable file was attached "
+        "to this response. Ask me to resend the file after I correct the generated "
+        "file path."
     )
 
 
@@ -1957,9 +1952,7 @@ class TurnRunner:
                         final_text=accumulated_text,
                     ):
                         separator = "\n\n" if accumulated_text.strip() else ""
-                        notice_delta = separator + _artifact_delivery_failure_notice(
-                            artifact_delivery_failures[-1]
-                        )
+                        notice_delta = separator + _artifact_delivery_failure_notice()
                         final_text_parts.append(notice_delta)
                         current_text_parts.append(notice_delta)
                         normalized_text = "".join(final_text_parts)

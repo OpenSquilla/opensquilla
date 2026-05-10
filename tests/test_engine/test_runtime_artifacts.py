@@ -257,6 +257,10 @@ async def test_turn_runner_marks_failed_artifact_delivery_in_final_text(tmp_path
         done = next(event for event in events if isinstance(event, DoneEvent))
         assert any("File delivery failed:" in text for text in text_deltas)
         assert "File delivery failed:" in done.text
+        assert "Ask me to resend the file after I correct the generated file path." in done.text
+        assert "publish_artifact" not in done.text
+        assert "active workspace" not in done.text
+        assert "missing-report.pptx" not in done.text
 
         transcript = await manager.get_transcript(session_key)
         assistant = [entry for entry in transcript if entry.role == "assistant"][-1]
