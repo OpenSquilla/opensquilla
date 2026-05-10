@@ -20,6 +20,18 @@
 # agent_stream_idle_timeout_seconds = 180.0
 # webui_stream_idle_grace_seconds = 210.0
 
+# WebSocket per-connection outbound writer queue. When enabled (default),
+# each WS connection gets a bounded asyncio queue + dedicated writer task.
+# Producers enqueue and return immediately; slow clients trigger a fast
+# 1011 close instead of back-pressuring the gateway. Disable to fall back
+# to the legacy direct-`ws.send_text` path under a per-connection lock.
+# Kill switch affects new connections only; existing connections retain
+# their startup-time behavior.
+# Env override: OPENSQUILLA_WS_WRITER_QUEUE_ENABLED=true|false
+# ws_writer_queue_enabled = true
+# Env override: OPENSQUILLA_WS_WRITER_QUEUE_MAXSIZE=512
+# ws_writer_queue_maxsize = 512
+
 # Gateway debug file logging. Raw prompt/tool call capture is separate from
 # debug.log and diagnostics_enabled; it is opt-in through
 # OPENSQUILLA_TURN_CALL_LOG=1.
