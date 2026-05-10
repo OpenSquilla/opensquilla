@@ -1464,6 +1464,19 @@ class GatewayConfig(BaseSettings):
     # Sleeping browsers commonly stop sending pings; without this knob the
     # server retains half-open connections after suspend.
     client_ws_keepalive_timeout_s: float = 120.0
+    # WebSocket per-connection outbound writer queue (Principle 2 in
+    # docs/plans/ws-writer-queue.md). When enabled, every connection gets a
+    # bounded asyncio.Queue + dedicated writer task; producers enqueue and
+    # return immediately. Slow clients trigger a fast 1011 close instead of
+    # back-pressuring the turn pipeline. Kill switch is read at connection
+    # registration time only — affects new connections only; existing
+    # connections retain their startup-time behavior.
+    ws_writer_queue_enabled: bool = True
+    # Per-connection outbox depth. 512 is ~17s of buffered text_delta at
+    # 30 Hz, comfortably within the SessionStreamRegistry replay window
+    # (max_events_per_session=500). Minimum 16 to avoid pathological
+    # configurations that can never enqueue.
+    ws_writer_queue_maxsize: int = Field(default=512, ge=16)
     # Legacy alias for the old runtime timeout setting. Kept so existing
     # configs that set llm_timeout_seconds still affect the agent runtime
     # budget until operators move to agent_runtime_timeout_seconds.
@@ -1538,6 +1551,43 @@ class GatewayConfig(BaseSettings):
                     )
                 else:
                     self.task_runtime.channel_inflight_cap = channel_val
+
+        ws_enabled_env = os.environ.get("OPENSQUILLA_WS_WRITER_QUEUE_ENABLED")
+        if ws_enabled_env is not None:
+            normalized = ws_enabled_env.strip().lower()
+            if normalized in ("true", "1", "yes"):
+                self.ws_writer_queue_enabled = True
+            elif normalized in ("false", "0", "no"):
+                self.ws_writer_queue_enabled = False
+            else:
+                _log.warning(
+                    "OPENSQUILLA_WS_WRITER_QUEUE_ENABLED=%r is not a valid bool; "
+                    "falling back to default ws_writer_queue_enabled=%s",
+                    ws_enabled_env,
+                    self.ws_writer_queue_enabled,
+                )
+
+        ws_maxsize_env = os.environ.get("OPENSQUILLA_WS_WRITER_QUEUE_MAXSIZE")
+        if ws_maxsize_env is not None:
+            try:
+                ws_maxsize_val = int(ws_maxsize_env)
+            except (ValueError, TypeError):
+                _log.warning(
+                    "OPENSQUILLA_WS_WRITER_QUEUE_MAXSIZE=%r is not a valid integer; "
+                    "falling back to default ws_writer_queue_maxsize=%d",
+                    ws_maxsize_env,
+                    self.ws_writer_queue_maxsize,
+                )
+            else:
+                if ws_maxsize_val < 16:
+                    _log.warning(
+                        "OPENSQUILLA_WS_WRITER_QUEUE_MAXSIZE=%r is below minimum 16; "
+                        "falling back to default ws_writer_queue_maxsize=%d",
+                        ws_maxsize_env,
+                        self.ws_writer_queue_maxsize,
+                    )
+                else:
+                    self.ws_writer_queue_maxsize = ws_maxsize_val
 
     def memory_mode_fingerprint(self) -> dict[str, str]:
         """Return the stable memory knobs used for attribution."""
