@@ -331,6 +331,43 @@ def test_deepseek_v4_tool_replay_adds_empty_reasoning_content_when_missing(
     assert captured["payload"]["messages"][0]["reasoning_content"] == ""
 
 
+def test_deepseek_v4_text_replay_adds_empty_reasoning_content_when_missing(
+    monkeypatch: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+    _patch_transport(monkeypatch, captured)
+    provider = OpenAIProvider(
+        api_key="test",
+        model="deepseek-v4-flash",
+        base_url="https://api.deepseek.com",
+        provider_kind="deepseek",
+    )
+    messages = [
+        Message(role="assistant", content="Prior non-thinking assistant turn."),
+        Message(role="user", content="continue in thinking mode"),
+    ]
+    cfg = ChatConfig(
+        thinking=True,
+        model_capabilities=ModelCapabilities(
+            supports_reasoning=True,
+            supports_tools=True,
+            reasoning_format="deepseek",
+        ),
+    )
+
+    async def _run() -> None:
+        async for _ in provider.chat(messages, config=cfg):
+            pass
+
+    asyncio.run(_run())
+
+    assert captured["payload"]["messages"][0] == {
+        "role": "assistant",
+        "content": "Prior non-thinking assistant turn.",
+        "reasoning_content": "",
+    }
+
+
 def test_deepseek_v4_non_thinking_strips_prior_reasoning_content(
     monkeypatch: Any,
 ) -> None:

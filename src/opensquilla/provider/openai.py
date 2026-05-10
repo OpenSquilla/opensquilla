@@ -419,15 +419,14 @@ def _attach_reasoning_content(
     payload: dict[str, Any],
     *,
     include_reasoning_content: bool = True,
-    require_tool_call_reasoning_content: bool = False,
+    require_assistant_reasoning_content: bool = False,
 ) -> dict[str, Any]:
     if include_reasoning_content and msg.role == "assistant" and msg.reasoning_content:
         payload["reasoning_content"] = msg.reasoning_content
     elif (
         include_reasoning_content
-        and require_tool_call_reasoning_content
+        and require_assistant_reasoning_content
         and msg.role == "assistant"
-        and "tool_calls" in payload
     ):
         payload["reasoning_content"] = ""
     return payload
@@ -460,7 +459,7 @@ def _build_openai_messages(
     msg: Message,
     *,
     include_reasoning_content: bool = True,
-    require_tool_call_reasoning_content: bool = False,
+    require_assistant_reasoning_content: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert a opensquilla Message into one or more OpenAI-format message dicts.
 
@@ -477,7 +476,7 @@ def _build_openai_messages(
                 msg,
                 {"role": msg.role, "content": msg.content},
                 include_reasoning_content=include_reasoning_content,
-                require_tool_call_reasoning_content=require_tool_call_reasoning_content,
+                require_assistant_reasoning_content=require_assistant_reasoning_content,
             )
         ]
 
@@ -537,7 +536,7 @@ def _build_openai_messages(
                 msg,
                 result,
                 include_reasoning_content=include_reasoning_content,
-                require_tool_call_reasoning_content=require_tool_call_reasoning_content,
+                require_assistant_reasoning_content=require_assistant_reasoning_content,
             )
         ]
 
@@ -549,7 +548,7 @@ def _build_openai_messages(
                 msg,
                 {"role": msg.role, "content": parts},
                 include_reasoning_content=include_reasoning_content,
-                require_tool_call_reasoning_content=require_tool_call_reasoning_content,
+                require_assistant_reasoning_content=require_assistant_reasoning_content,
             )
         ]
     content_text = " ".join(p["text"] for p in parts if p["type"] == "text")
@@ -558,7 +557,7 @@ def _build_openai_messages(
             msg,
             {"role": msg.role, "content": content_text},
             include_reasoning_content=include_reasoning_content,
-            require_tool_call_reasoning_content=require_tool_call_reasoning_content,
+            require_assistant_reasoning_content=require_assistant_reasoning_content,
         )
     ]
 
@@ -673,7 +672,7 @@ class OpenAIProvider:
                 _build_openai_messages(
                     m,
                     include_reasoning_content=include_reasoning_content,
-                    require_tool_call_reasoning_content=(
+                    require_assistant_reasoning_content=(
                         self._provider_kind == "deepseek"
                         and caps is not None
                         and caps.reasoning_format == "deepseek"
