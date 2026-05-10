@@ -95,6 +95,78 @@ def test_unattended_bootstrap_context_skips_only_bootstrap_md(tmp_path) -> None:
     assert {"AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md", "USER.md"} <= filenames
 
 
+def test_stateless_bootstrap_context_skips_persona_memory_and_bootstrap(tmp_path) -> None:
+    for filename in (
+        "AGENTS.md",
+        "SOUL.md",
+        "IDENTITY.md",
+        "TOOLS.md",
+        "USER.md",
+        "MEMORY.md",
+        "HEARTBEAT.md",
+        "BOOTSTRAP.md",
+    ):
+        (tmp_path / filename).write_text(f"{filename} body\n", encoding="utf-8")
+    runner = TurnRunner(
+        provider_selector=None,
+        config=SimpleNamespace(
+            workspace_dir=str(tmp_path),
+            memory=SimpleNamespace(source="workspace"),
+            tools=SimpleNamespace(profile=None),
+        ),
+    )
+    metadata: dict[str, object] = {}
+
+    runner._assemble_prompt(
+        "main",
+        [],
+        session_key="agent:main:auto",
+        prompt_metadata=metadata,
+        bootstrap_context_mode="stateless",
+    )
+
+    report = metadata["bootstrap_files"]
+    filenames = {item.filename for item in report}  # type: ignore[attr-defined]
+    assert filenames == {"TOOLS.md"}
+    assert metadata["memory_md_present"] is False
+
+
+def test_stateless_keep_project_rules_preserves_only_agents_md(tmp_path) -> None:
+    for filename in (
+        "AGENTS.md",
+        "SOUL.md",
+        "IDENTITY.md",
+        "TOOLS.md",
+        "USER.md",
+        "MEMORY.md",
+        "HEARTBEAT.md",
+        "BOOTSTRAP.md",
+    ):
+        (tmp_path / filename).write_text(f"{filename} body\n", encoding="utf-8")
+    runner = TurnRunner(
+        provider_selector=None,
+        config=SimpleNamespace(
+            workspace_dir=str(tmp_path),
+            memory=SimpleNamespace(source="workspace"),
+            tools=SimpleNamespace(profile=None),
+        ),
+    )
+    metadata: dict[str, object] = {}
+
+    runner._assemble_prompt(
+        "main",
+        [],
+        session_key="agent:main:auto",
+        prompt_metadata=metadata,
+        bootstrap_context_mode="stateless_keep_project_rules",
+    )
+
+    report = metadata["bootstrap_files"]
+    filenames = {item.filename for item in report}  # type: ignore[attr-defined]
+    assert filenames == {"AGENTS.md", "TOOLS.md"}
+    assert metadata["memory_md_present"] is False
+
+
 def test_full_and_unattended_bootstrap_snapshots_use_distinct_keys(tmp_path) -> None:
     (tmp_path / "AGENTS.md").write_text("agents\n", encoding="utf-8")
     (tmp_path / "BOOTSTRAP.md").write_text("bootstrap\n", encoding="utf-8")

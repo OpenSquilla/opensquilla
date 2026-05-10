@@ -16,8 +16,8 @@ from opensquilla.cli.agents_cmd import agents_app  # noqa: E402
 from opensquilla.cli.channels_cmd import channels_app  # noqa: E402
 from opensquilla.cli.config_cmd import app as config_app  # noqa: E402
 from opensquilla.cli.cost_cmd import app as cost_app  # noqa: E402
-from opensquilla.cli.diagnostics_cmd import diagnostics_app  # noqa: E402
 from opensquilla.cli.cron_cmd import cron_app  # noqa: E402
+from opensquilla.cli.diagnostics_cmd import diagnostics_app  # noqa: E402
 from opensquilla.cli.dist_cmd import app as dist_app  # noqa: E402
 from opensquilla.cli.init_cmd import init_command  # noqa: E402
 from opensquilla.cli.memory_flush_cmd import memory_flush_session_cmd  # noqa: E402
@@ -406,6 +406,19 @@ def agent(
         "--workspace-strict/--no-workspace-strict",
         help="Restrict read-side file tools to --workspace",
     ),
+    workspace_lockdown: bool = typer.Option(
+        False,
+        "--workspace-lockdown",
+        help=(
+            "Opt in to automation write containment: writes must stay under "
+            "--workspace or --scratch-dir."
+        ),
+    ),
+    scratch_dir: str = typer.Option(
+        "",
+        "--scratch-dir",
+        help="Directory for temporary scripts, logs, debug output, and candidate patches.",
+    ),
     timeout: float | None = typer.Option(
         None, "--timeout", "-T", help="Total agent timeout in seconds (0=unlimited)"
     ),
@@ -448,6 +461,21 @@ def agent(
             "single-shot automation."
         ),
     ),
+    stateless: bool = typer.Option(
+        False,
+        "--stateless/--no-stateless",
+        help="Use clean-room prompt bootstrap; does not change --unattended semantics.",
+    ),
+    clean_room: bool = typer.Option(
+        False,
+        "--clean-room",
+        help="Alias for --stateless.",
+    ),
+    stateless_keep_project_rules: bool = typer.Option(
+        False,
+        "--stateless-keep-project-rules",
+        help="With clean-room bootstrap, keep AGENTS.md project rules only.",
+    ),
     permissions: str | None = typer.Option(
         None,
         "--permissions",
@@ -466,6 +494,8 @@ def agent(
         model=model,
         workspace=workspace,
         workspace_strict=workspace_strict,
+        workspace_lockdown=workspace_lockdown,
+        scratch_dir=scratch_dir,
         thinking=thinking,
         timeout=timeout,
         max_iterations=max_iterations,
@@ -475,6 +505,9 @@ def agent(
         no_memory_capture=no_memory_capture,
         file_paths=file_paths,
         unattended=unattended,
+        stateless=stateless,
+        clean_room=clean_room,
+        stateless_keep_project_rules=stateless_keep_project_rules,
         permissions=permissions,
         json_output=json_output,
     )

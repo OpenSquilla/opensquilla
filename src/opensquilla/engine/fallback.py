@@ -12,6 +12,7 @@ class ProviderErrorKind(StrEnum):
     AUTH_FAILURE = "auth_failure"
     OVERLOADED = "overloaded"
     CONTEXT_OVERFLOW = "context_overflow"
+    TRANSPORT_TRANSIENT = "transport_transient"
     UNKNOWN = "unknown"
 
 
@@ -34,6 +35,20 @@ class FallbackPolicy:
             return ProviderErrorKind.AUTH_FAILURE
         if "overload" in msg or "503" in msg or "502" in msg or "capacity" in msg:
             return ProviderErrorKind.OVERLOADED
+        transport_match = (
+            "request error" in msg
+            or "readtimeout" in msg
+            or "connecttimeout" in msg
+            or "connection reset" in msg
+            or "connection refused" in msg
+            or "connection attempts failed" in msg
+            or "network is unreachable" in msg
+            or "temporary failure" in msg
+            or "timed out" in msg
+            or "timeout" in msg
+        )
+        if transport_match:
+            return ProviderErrorKind.TRANSPORT_TRANSIENT
         ctx_match = "context" in msg and (
             "exceed" in msg or "length" in msg or "too long" in msg or "overflow" in msg
         )
@@ -51,6 +66,7 @@ class FallbackPolicy:
             ProviderErrorKind.RATE_LIMIT,
             ProviderErrorKind.OVERLOADED,
             ProviderErrorKind.CONTEXT_OVERFLOW,
+            ProviderErrorKind.TRANSPORT_TRANSIENT,
         )
         if kind in retryable:
             return True

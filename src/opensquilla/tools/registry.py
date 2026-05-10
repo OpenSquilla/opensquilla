@@ -225,6 +225,23 @@ class ToolRegistry:
             "required": rt.spec.required,
         }
 
+    @staticmethod
+    def _description_for(rt: RegisteredTool, ctx: ToolContext) -> str:
+        description = rt.spec.description
+        scratch_dir = getattr(ctx, "scratch_dir", None)
+        if scratch_dir and rt.spec.name in {
+            "exec_command",
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "execute_code",
+        }:
+            description = (
+                f"{description} For temporary scripts, logs, debug output, and "
+                f"candidate patches, use the configured scratch directory: {scratch_dir}."
+            )
+        return description
+
     def to_tool_definitions(self, ctx: ToolContext | None = None) -> list[ToolDefinition]:
         """Export tools as MCP-compatible ToolDefinition list.
 
@@ -238,7 +255,7 @@ class ToolRegistry:
         return [
             ToolDefinition(
                 name=rt.spec.name,
-                description=rt.spec.description,
+                description=self._description_for(rt, active_ctx),
                 input_schema=ToolInputSchema(
                     type="object",
                     properties=rt.spec.parameters,
@@ -282,7 +299,7 @@ class ToolRegistry:
         return [
             {
                 "name": rt.spec.name,
-                "description": rt.spec.description,
+                "description": self._description_for(rt, ctx),
                 "schema": self._schema_for(rt),
                 "source": "plugin" if "." in rt.spec.name else "builtin",
                 "enabled": True,
@@ -310,7 +327,7 @@ class ToolRegistry:
         return [
             {
                 "name": rt.spec.name,
-                "description": rt.spec.description,
+                "description": self._description_for(rt, ctx),
                 "schema": self._schema_for(rt),
             }
             for rt in self._iter_visible_tools(ctx, sort=True)

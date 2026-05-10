@@ -7,6 +7,7 @@ import contextlib
 import contextvars
 import json
 import os
+import re
 import signal
 import time
 import uuid
@@ -188,6 +189,72 @@ def _sensitive_shell_block(
     marker = _sensitive_body_marker(checked_text)
     if marker is not None:
         return _sensitive_body_block(tool_name, marker)
+    return None
+
+
+def _workspace_lockdown_roots() -> list[Path]:
+    ctx = current_tool_context.get()
+    if ctx is None or not ctx.workspace_lockdown:
+        return []
+    roots: list[Path] = []
+    if ctx.workspace_dir:
+        roots.append(Path(ctx.workspace_dir).expanduser().resolve(strict=False))
+    if ctx.scratch_dir:
+        roots.append(Path(ctx.scratch_dir).expanduser().resolve(strict=False))
+    return roots
+
+
+def _path_inside_any_root(path: Path, roots: list[Path]) -> bool:
+    candidate = path.expanduser().resolve(strict=False)
+    for root in roots:
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _resolve_shell_write_target(raw_target: str, workdir: str | None) -> Path:
+    cleaned = raw_target.strip().strip("'\"")
+    path = Path(cleaned).expanduser()
+    if not path.is_absolute():
+        base = Path(workdir).expanduser() if workdir else Path.cwd()
+        path = base / path
+    return path.resolve(strict=False)
+
+
+def _workspace_lockdown_shell_block(
+    tool_name: str,
+    command: str,
+    workdir: str | None,
+) -> dict[str, object] | None:
+    roots = _workspace_lockdown_roots()
+    if not roots:
+        return None
+    targets: list[str] = []
+    redirection_pattern = r"(?:^|\s)(?:\d?>{1,2}|&>{1,2})\s*(['\"]?)([^'\"\s|&;]+)\1"
+    targets.extend(match.group(2) for match in re.finditer(redirection_pattern, command))
+    tee_pattern = r"(?:^|\s)tee(?:\s+-[A-Za-z]+)*\s+(['\"]?)([^'\"\s|&;]+)\1"
+    targets.extend(match.group(2) for match in re.finditer(tee_pattern, command))
+    for target in targets:
+        resolved = _resolve_shell_write_target(target, workdir)
+        if _path_inside_any_root(resolved, roots):
+            continue
+        return {
+            "status": "blocked",
+            "reason": "workspace_lockdown",
+            "tool": tool_name,
+            "command": command,
+            "target": target,
+            "resolved_path": str(resolved),
+            "allowed_roots": [str(root) for root in roots],
+            "message": (
+                f"{tool_name} blocked by workspace lockdown: shell write target "
+                f"{resolved} is outside allowed roots."
+            ),
+            "retryable": False,
+        }
     return None
 
 
@@ -397,6 +464,9 @@ async def exec_command(
     sensitive_block = _sensitive_shell_block("exec_command", command, workdir=cwd)
     if sensitive_block is not None:
         return sensitive_block
+    lockdown_block = _workspace_lockdown_shell_block("exec_command", command, cwd)
+    if lockdown_block is not None:
+        return json.dumps(lockdown_block, ensure_ascii=False)
 
     # Warnlist: two-step approval flow
     if result.needs_approval:
@@ -510,6 +580,9 @@ async def background_process(
     sensitive_block = _sensitive_shell_block("background_process", command, workdir=cwd)
     if sensitive_block is not None:
         return sensitive_block
+    lockdown_block = _workspace_lockdown_shell_block("background_process", command, cwd)
+    if lockdown_block is not None:
+        return json.dumps(lockdown_block, ensure_ascii=False)
     if result.needs_approval:
         prior_elevation = _approval_elevation_state()
         try:
@@ -965,6 +1038,16 @@ async def _check_exec_approval(
                 sensitive=sensitive,
             )
             return build_block_envelope(command, sensitive, tool_name=tool_name)
+
+    lockdown_block = _workspace_lockdown_shell_block(tool_name, command, workdir)
+    if lockdown_block is not None:
+        log.warning(
+            "shell_workspace_lockdown_blocked",
+            command=_audit_command(command),
+            tool=tool_name,
+            resolved_path=lockdown_block.get("resolved_path"),
+        )
+        return lockdown_block
 
     # /elevated full — trusted operator has taken explicit responsibility.
     # Approvals are skipped entirely.
