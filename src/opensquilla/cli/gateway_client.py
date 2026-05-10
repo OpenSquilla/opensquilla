@@ -359,6 +359,15 @@ class GatewayClient:
     async def usage_cost(self) -> dict[str, Any]:
         return cast(dict[str, Any], await self._call("usage.cost", {}))
 
+    async def diagnostics_status(self) -> dict[str, Any]:
+        return cast(dict[str, Any], await self._call("diagnostics.status", {}))
+
+    async def diagnostics_set(self, *, enabled: bool, raw: bool = False) -> dict[str, Any]:
+        params: dict[str, Any] = {"enabled": enabled}
+        if enabled:
+            params["raw"] = raw
+        return cast(dict[str, Any], await self._call("diagnostics.set", params))
+
     async def get_config(self, path: str | None = None) -> Any:
         params = {"path": path} if path else None
         return await self._call("config.get", params)
