@@ -880,31 +880,43 @@ def _router_tier_profile_defaults(profile: str | None) -> dict:
         "moonshot": {
             "t0": {
                 "provider": "moonshot",
-                "model": "moonshot-v1-8k",
-                "description": "Moonshot fast tier: Moonshot V1 8K for simple text tasks.",
-                "supports_image": False,
+                "model": "kimi-k2.5",
+                "description": (
+                    "Moonshot fast tier: Kimi K2.5 for cost-efficient agent work "
+                    "with 256K context."
+                ),
+                "supports_image": True,
+                "thinking_level": "low",
             },
             "t1": {
                 "provider": "moonshot",
-                "model": "moonshot-v1-128k",
+                "model": "kimi-k2.5",
                 "description": (
-                    "Moonshot balanced tier: Moonshot V1 128K for normal agent work."
+                    "Moonshot balanced tier: Kimi K2.5 for normal multimodal "
+                    "agent work."
                 ),
-                "supports_image": False,
+                "supports_image": True,
+                "thinking_level": "medium",
             },
             "t2": {
                 "provider": "moonshot",
-                "model": "kimi-k2.5",
-                "description": "Moonshot strong tier: Kimi K2.5 for complex text tasks.",
-                "supports_image": False,
+                "model": "kimi-k2.6",
+                "description": (
+                    "Moonshot strong tier: Kimi K2.6 for complex coding, reasoning, "
+                    "and multimodal tasks."
+                ),
+                "supports_image": True,
+                "thinking_level": "medium",
             },
             "t3": {
                 "provider": "moonshot",
                 "model": "kimi-k2.6",
                 "description": (
-                    "Moonshot highest tier: Kimi K2.6 with fixed sampling constraints."
+                    "Moonshot highest tier: Kimi K2.6 for the hardest long-horizon "
+                    "agent work."
                 ),
-                "supports_image": False,
+                "supports_image": True,
+                "thinking_level": "high",
             },
         },
         "volcengine": {

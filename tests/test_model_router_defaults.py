@@ -212,10 +212,13 @@ def test_moonshot_profile_uses_kimi_for_strong_tiers() -> None:
 
     cfg = squilla_router_config_cls(tier_profile="moonshot")
 
-    assert cfg.tiers["t0"]["model"] == "moonshot-v1-8k"
-    assert cfg.tiers["t1"]["model"] == "moonshot-v1-128k"
-    assert cfg.tiers["t2"]["model"] == "kimi-k2.5"
+    assert cfg.tiers["t0"]["model"] == "kimi-k2.5"
+    assert cfg.tiers["t1"]["model"] == "kimi-k2.5"
+    assert cfg.tiers["t2"]["model"] == "kimi-k2.6"
     assert cfg.tiers["t3"]["model"] == "kimi-k2.6"
+    assert all(
+        cfg.tiers[tier]["supports_image"] is True for tier in ("t0", "t1", "t2", "t3")
+    )
 
 
 def test_volcengine_profile_uses_seed_2_capability_ladder() -> None:
