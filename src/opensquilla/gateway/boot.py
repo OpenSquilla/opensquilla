@@ -63,7 +63,7 @@ _LOG_LEVELS = {
 
 
 # fmt: off
-def _make_channel_rpc_context_factory(svc: ServiceContainer, config: GatewayConfig, *, subscription_manager: Any, channel_manager_ref: Any, turn_runner: Any, heartbeat_service: Any) -> Any:  # noqa: E501
+def _make_channel_rpc_context_factory(svc: ServiceContainer, config: GatewayConfig, *, subscription_manager: Any, channel_manager_ref: Any, turn_runner: Any, heartbeat_service: Any, diagnostics_state: Any | None = None) -> Any:  # noqa: E501
     from opensquilla.channels.command_registry import build_channel_rpc_context
 
     def _factory(envelope: Any) -> Any:
@@ -76,6 +76,7 @@ def _make_channel_rpc_context_factory(svc: ServiceContainer, config: GatewayConf
             channel_manager=channel_manager_ref(),
             turn_runner=turn_runner,
             heartbeat_service=heartbeat_service,
+            diagnostics_state=diagnostics_state,
         )
 
     return _factory
@@ -1424,6 +1425,7 @@ def build_turn_runner_from_services(
     svc: Any,
     *,
     config: GatewayConfig | None = None,
+    diagnostics_state: Any | None = None,
 ) -> Any:
     """Build a TurnRunner with every service-backed memory integration wired.
 
@@ -1458,6 +1460,7 @@ def build_turn_runner_from_services(
         turn_capture_services=getattr(svc, "turn_capture_services", None) or None,
         session_flush_service=getattr(svc, "flush_service", None),
         session_lock_provider=_standalone_lock_provider,
+        diagnostics_state=diagnostics_state,
     )
 
 
@@ -1551,8 +1554,17 @@ async def start_gateway_server(
         auth_mode=config.auth.mode,
     )
 
+    # ── Diagnostics runtime state ───────────────────────────────────
+    from opensquilla.gateway.diagnostics import DiagnosticsState
+
+    diagnostics_state = DiagnosticsState.from_config(config)
+
     # ── TurnRunner (shared agent orchestration layer) ────────────────
-    turn_runner = build_turn_runner_from_services(svc, config=config)
+    turn_runner = build_turn_runner_from_services(
+        svc,
+        config=config,
+        diagnostics_state=diagnostics_state,
+    )
     # Patch deferred callback so memory writes refresh TurnRunner snapshots
     if hasattr(svc, "_turn_runner_ref"):
         svc._turn_runner_ref.append(turn_runner)  # type: ignore[attr-defined]
@@ -1831,6 +1843,7 @@ async def start_gateway_server(
             channel_manager_ref=lambda: _cm_holder[0],
             turn_runner=turn_runner,
             heartbeat_service=heartbeat_service,
+            diagnostics_state=diagnostics_state,
         )
         channel_manager = ChannelManager.from_config(
             config.channels.channels,
@@ -1872,6 +1885,7 @@ async def start_gateway_server(
         heartbeat_service=heartbeat_service,
         heartbeat_loop=heartbeat_loop,
         agent_registry=svc.agent_registry,
+        diagnostics_state=diagnostics_state,
         memory_managers=svc.memory_managers,
         memory_stores=svc.memory_stores,
         memory_retrievers=svc.memory_retrievers,

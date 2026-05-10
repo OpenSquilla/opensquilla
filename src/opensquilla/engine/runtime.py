@@ -1004,6 +1004,7 @@ class TurnRunner:
         turn_capture_services: dict[str, Any] | None = None,
         session_flush_service: SessionFlushService | None = None,
         session_lock_provider: Callable[[str], asyncio.Lock] | None = None,
+        diagnostics_state: Any | None = None,
     ) -> None:
         self._provider_selector = provider_selector
         self._tool_registry = tool_registry
@@ -1016,6 +1017,7 @@ class TurnRunner:
         self._memory_retrievers = memory_retrievers
         self._turn_capture_services = turn_capture_services
         self._session_flush_service = session_flush_service
+        self._diagnostics_state = diagnostics_state
         # Per-session lock provider.
         # Gateway path: task_runtime._get_session_lock_for_turn (wired in boot.py).
         # CLI/standalone path: _standalone_lock_provider from build_turn_runner_from_services.
@@ -1592,7 +1594,7 @@ class TurnRunner:
                 trace_context,
                 session_id=session_id_for_log,
             )
-            if is_turn_call_log_enabled():
+            if is_turn_call_log_enabled(self._diagnostics_state):
                 turn_call_logger = TurnCallLogger(
                     trace_id=trace_context.trace_id,
                     turn_id=turn_id,
