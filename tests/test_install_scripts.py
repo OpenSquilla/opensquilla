@@ -125,9 +125,10 @@ def test_readme_keeps_prerequisite_install_commands_in_optional_details() -> Non
     assert "sudo dnf install -y git git-lfs" in readme
     assert "sudo pacman -S --needed git git-lfs" in readme
     assert "https://brew.sh/" in readme
+    assert "PATH changes from these installers apply to new terminal sessions." in normalized
     assert (
-        "Open a new terminal if `git`, `git lfs`, or `uv` is not found after "
-        "installation."
+        "The LFS pull is idempotent: it fetches missing model assets and "
+        "exits quietly when the checkout is already complete."
         in normalized
     )
     assert (
@@ -198,7 +199,13 @@ def test_readme_explains_setup_details_vs_development_path() -> None:
         in normalized
     )
     assert "`git lfs install` is idempotent and safe to run again." in readme
-    assert "If a new terminal still cannot find it, run `uv tool update-shell`" in normalized
+    assert "If `opensquilla` is not on `PATH`, use the command path check above." in normalized
+    assert "For `uv` installs, refresh the shell with `uv tool update-shell`" in normalized
+    assert (
+        "for the `pip --user` fallback, add the Python user scripts directory "
+        "to `PATH`."
+        in normalized
+    )
     assert "To check which command your shell will run:" in readme
     assert "where.exe opensquilla" in readme
     assert "command -v opensquilla" in readme
@@ -220,7 +227,26 @@ def test_readme_keeps_windows_powershell_commands_restart_safe() -> None:
 def test_readme_marks_python_and_pip_as_fallback_prerequisites() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     normalized = " ".join(readme.split())
+    quickstart_prereqs = readme.split("1. Install prerequisites:", 1)[1]
+    quickstart_prereqs = quickstart_prereqs.split("2. Clone with LFS assets:", 1)[0]
 
-    assert "required only when you skip `uv` and use the `pip --user` fallback" in normalized
+    assert "Git and Git LFS. The recommended installer is `uv`." in readme
+    assert "Install prerequisites: Git, Git LFS, and uv." not in readme
+    assert (
+        "If `uv` is unavailable, the installer falls back to Python 3.12+ "
+        "with `pip >= 23`."
+        in normalized
+    )
+    assert "Python 3.12+" in quickstart_prereqs
+    assert "pip >= 23" in quickstart_prereqs
+    assert (
+        "not required for the normal `uv` install path. Install it only when "
+        "you use the `pip --user` fallback or develop from source."
+        in normalized
+    )
     assert "**`uv`** — recommended for normal source installs." in readme
     assert "**`pip` >= 23** — fallback only when `uv` is unavailable." in readme
+    assert (
+        "Unlike Install from source, this development path requires `uv`."
+        in readme
+    )

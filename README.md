@@ -49,12 +49,15 @@ Use this path when you want to run OpenSquilla as a local app from the current
 source tree. The clone is only the package source the installer reads from; after
 installing, use `opensquilla ...` commands, not `uv run`.
 
-1. Install prerequisites: Git, Git LFS, and uv.
+1. Install prerequisites: Git and Git LFS. The recommended installer is `uv`.
 
    Download links:
    - Git: <https://git-scm.com/downloads>
    - Git LFS: <https://git-lfs.com/>
    - uv: <https://docs.astral.sh/uv/getting-started/installation/>
+
+   If `uv` is unavailable, the installer falls back to Python 3.12+ with
+   `pip >= 23`.
 
    <details>
    <summary>Optional: install prerequisites from a terminal</summary>
@@ -103,8 +106,7 @@ installing, use `opensquilla ...` commands, not `uv run`.
    git lfs install
    ```
 
-   Open a new terminal if `git`, `git lfs`, or `uv` is not found after
-   installation.
+   PATH changes from these installers apply to new terminal sessions.
 
    </details>
 
@@ -116,6 +118,9 @@ installing, use `opensquilla ...` commands, not `uv run`.
    cd opensquilla
    git lfs pull --include="src/opensquilla/squilla_router/models/**"
    ```
+
+   The LFS pull is idempotent: it fetches missing model assets and exits
+   quietly when the checkout is already complete.
 
 3. Install with the recommended profile. This creates a user-local
    `opensquilla` command. The checkout-local `.venv`, if any, is not used.
@@ -211,9 +216,10 @@ everything else is required for a working source install.
 
 ### Prerequisites
 
-- **Python 3.12+** — required only when you skip `uv` and use the `pip --user`
-  fallback, or when you develop from source. **(optional)** for portable-zip
-  users, since the release zip already bundles its own CPython.
+- **Python 3.12+** — not required for the normal `uv` install path. Install it
+  only when you use the `pip --user` fallback or develop from source.
+  **(optional)** for portable-zip users, since the release zip already bundles
+  its own CPython.
 - **Git and Git LFS** — required. The bundled SquillaRouter assets are
   stored as LFS pointers; without `git-lfs` the `recommended` profile
   fails with `version https://git-lfs.github.com/spec/v1` pointer files
@@ -248,6 +254,8 @@ git lfs pull --include="src/opensquilla/squilla_router/models/**"
 Use this path when you want to run OpenSquilla, not edit its source.
 The clone is only the package source for the installer. After install,
 use `opensquilla ...`; do not use `uv run`.
+This section expands step 3 of Quick start; skip it if the installer has
+already completed.
 
 The scripts install `.[recommended]` by default. `recommended` is the
 normal runtime profile: SquillaRouter, memory, and local model dependencies.
@@ -318,8 +326,9 @@ where.exe opensquilla
 command -v opensquilla
 ```
 
-If a new terminal still cannot find it, run `uv tool update-shell`, reopen the
-terminal, and try again.
+If `opensquilla` is not on `PATH`, use the command path check above. For `uv`
+installs, refresh the shell with `uv tool update-shell`; for the `pip --user`
+fallback, add the Python user scripts directory to `PATH`.
 
 After reinstalling from a local checkout, restart the gateway process so it
 loads the updated package.
@@ -327,8 +336,9 @@ loads the updated package.
 ### Develop from source
 
 Use this path only when you want to modify, test, or debug the current
-checkout. `uv sync` creates the checkout-local `.venv`, and `uv run`
-executes against the live source tree.
+checkout. Unlike Install from source, this development path requires `uv`.
+`uv sync` creates the checkout-local `.venv`, and `uv run` executes against the
+live source tree.
 
 ```sh
 uv sync --extra recommended
