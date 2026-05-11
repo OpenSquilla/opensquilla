@@ -1003,6 +1003,7 @@ async def build_services(
     usage_tracker: Any = None,
     session_db_path: str = ":memory:",
     extra_agent_ids: list[str] | None = None,
+    seed_agent_workspaces: bool = True,
 ) -> ServiceContainer:
     """Initialize reusable services without any gateway-specific side effects.
 
@@ -1032,7 +1033,8 @@ async def build_services(
     from opensquilla.memory.embedding_resolver import resolve_memory_embedding
 
     resolve_memory_embedding(config.memory, local_available=lambda *_: False)
-    _ensure_configured_agent_workspaces(config, extra_agent_ids=extra_agent_ids)
+    if seed_agent_workspaces:
+        _ensure_configured_agent_workspaces(config, extra_agent_ids=extra_agent_ids)
 
     # Inject config into admin tool (needed by both gateway and standalone)
     from opensquilla.tools.builtin.admin import set_gateway_config

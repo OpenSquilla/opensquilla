@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -14,6 +15,12 @@ class ProviderErrorKind(StrEnum):
     CONTEXT_OVERFLOW = "context_overflow"
     TRANSPORT_TRANSIENT = "transport_transient"
     UNKNOWN = "unknown"
+
+
+_TRANSIENT_HTTP_STATUS_RE = re.compile(
+    r"\b(?:http(?: status)?|status(?:[_ -]?code)?|error code|code)\s*[:=]?\s*"
+    r"(?:504|520|522|524)\b"
+)
 
 
 @dataclass
@@ -48,6 +55,8 @@ class FallbackPolicy:
             or "timeout" in msg
         )
         if transport_match:
+            return ProviderErrorKind.TRANSPORT_TRANSIENT
+        if _TRANSIENT_HTTP_STATUS_RE.search(msg):
             return ProviderErrorKind.TRANSPORT_TRANSIENT
         ctx_match = "context" in msg and (
             "exceed" in msg or "length" in msg or "too long" in msg or "overflow" in msg

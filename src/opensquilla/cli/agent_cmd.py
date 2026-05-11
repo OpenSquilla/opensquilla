@@ -123,6 +123,8 @@ async def run_agent_once(
     effective_model = model or _agent_model_from_config(cfg, agent_id)
     active_workspace = workspace or getattr(cfg, "workspace_dir", None)
     service_cfg = _with_agent_workspace_config(cfg, active_workspace) if active_workspace else cfg
+    if stateless or stateless_keep_project_rules:
+        service_cfg = _with_memory_source_config(service_cfg, "state")
     if effective_model:
         service_cfg = _with_agent_model_config(service_cfg, effective_model)
     if thinking:
@@ -161,10 +163,12 @@ async def run_agent_once(
     # ids), so non-main CLI invocations would write to the per-agent workspace
     # but the index would never see those writes.
     extra_agents = [agent_id] if agent_id and agent_id != "main" else None
+    seed_agent_workspaces = not (stateless or stateless_keep_project_rules)
     svc = await build_services(
         config=service_cfg,
         session_db_path=session_db_path,
         extra_agent_ids=extra_agents,
+        seed_agent_workspaces=seed_agent_workspaces,
     )
     assert svc.session_manager is not None
     session_key = canonicalize_session_key(session_id or f"agent:{agent_id}:main")
@@ -344,6 +348,23 @@ def _with_agent_workspace_config(config: Any, workspace: str) -> Any:
     setattr(copied, "workspace_dir", workspace)
     if memory is not None:
         setattr(copied, "memory", memory)
+    return copied
+
+
+def _with_memory_source_config(config: Any, source: str) -> Any:
+    memory = getattr(config, "memory", None)
+    if memory is None:
+        return config
+    if hasattr(memory, "model_copy"):
+        memory = memory.model_copy(update={"source": source})
+    else:
+        memory = copy.copy(memory)
+        setattr(memory, "source", source)
+
+    if hasattr(config, "model_copy"):
+        return config.model_copy(update={"memory": memory})
+    copied = copy.copy(config)
+    setattr(copied, "memory", memory)
     return copied
 
 

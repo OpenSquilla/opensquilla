@@ -604,6 +604,82 @@ async def test_run_agent_once_can_keep_project_rules_in_stateless_bootstrap(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stateless", "stateless_keep_project_rules"),
+    [
+        (True, False),
+        (False, True),
+    ],
+)
+async def test_run_agent_once_disables_workspace_template_seeding_for_stateless(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    stateless: bool,
+    stateless_keep_project_rules: bool,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeTurnRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def run(self, message: str, session_key: str, **kwargs: Any):
+            yield DoneEvent(text="ok", model=kwargs.get("model") or "")
+
+    async def fake_build_services(*, config: GatewayConfig, **kwargs: Any) -> _FakeServices:
+        captured.update(kwargs)
+        captured["config"] = config
+        return _FakeServices(config)
+
+    monkeypatch.setattr("opensquilla.engine.runtime.TurnRunner", FakeTurnRunner)
+    monkeypatch.setattr("opensquilla.gateway.build_services", fake_build_services)
+
+    await run_agent_once(
+        message="hello",
+        config=GatewayConfig(),
+        workspace=str(tmp_path),
+        stateless=stateless,
+        stateless_keep_project_rules=stateless_keep_project_rules,
+        no_memory_capture=True,
+    )
+
+    assert captured["seed_agent_workspaces"] is False
+    assert captured["config"].memory.source == "state"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_once_keeps_workspace_template_seeding_for_normal_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeTurnRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def run(self, message: str, session_key: str, **kwargs: Any):
+            yield DoneEvent(text="ok", model=kwargs.get("model") or "")
+
+    async def fake_build_services(*, config: GatewayConfig, **kwargs: Any) -> _FakeServices:
+        captured.update(kwargs)
+        captured["config"] = config
+        return _FakeServices(config)
+
+    monkeypatch.setattr("opensquilla.engine.runtime.TurnRunner", FakeTurnRunner)
+    monkeypatch.setattr("opensquilla.gateway.build_services", fake_build_services)
+
+    await run_agent_once(
+        message="hello",
+        config=GatewayConfig(),
+        workspace=str(tmp_path),
+    )
+
+    assert captured["seed_agent_workspaces"] is True
+    assert captured["config"].memory.source == "workspace"
+
+
+@pytest.mark.asyncio
 async def test_run_agent_once_passes_scratch_and_lockdown_to_tool_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

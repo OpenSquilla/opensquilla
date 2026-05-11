@@ -73,6 +73,24 @@ def test_agent_fallback_retries_transport_transient_errors(message: str) -> None
     assert policy.should_retry(kind, attempt=0) is True
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "HTTP 520: upstream provider returned an unknown error",
+        "HTTP 522",
+        "HTTP 524",
+        "HTTP 504",
+    ],
+)
+def test_agent_fallback_retries_gateway_transient_http_errors(message: str) -> None:
+    policy = FallbackPolicy(max_retries=2)
+
+    kind = policy.classify_error(message)
+
+    assert kind is ProviderErrorKind.TRANSPORT_TRANSIENT
+    assert policy.should_retry(kind, attempt=0) is True
+
+
 def test_agent_fallback_still_does_not_retry_auth_failures() -> None:
     policy = FallbackPolicy(max_retries=2)
 
