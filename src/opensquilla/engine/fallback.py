@@ -17,9 +17,20 @@ class ProviderErrorKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+_GATEWAY_CODES = r"(?:504|520|522|523|524)"
+_GATEWAY_CONTEXT = r"(?:cloudflare|openrouter|upstream|gateway|backend)"
+_GATEWAY_ERROR_TERMS = (
+    r"(?:error|returned|returning|failed|failure|unreachable|timeout|timed out|"
+    r"overload(?:ed)?|bad gateway|origin)"
+)
 _TRANSIENT_HTTP_STATUS_RE = re.compile(
     r"\b(?:http(?: status)?|status(?:[_ -]?code)?|error code|code)\s*[:=]?\s*"
-    r"(?:504|520|522|524)\b"
+    rf"{_GATEWAY_CODES}\b"
+)
+_TRANSIENT_GATEWAY_CONTEXT_RE = re.compile(
+    rf"\b{_GATEWAY_CONTEXT}\b[^\n]{{0,80}}\b{_GATEWAY_ERROR_TERMS}\b[^\n]{{0,80}}\b{_GATEWAY_CODES}\b"
+    rf"|\b{_GATEWAY_CONTEXT}\b[^\n]{{0,80}}\b{_GATEWAY_CODES}\b[^\n]{{0,80}}\b{_GATEWAY_ERROR_TERMS}\b"
+    rf"|\b{_GATEWAY_CODES}\b[^\n]{{0,80}}\b{_GATEWAY_CONTEXT}\b[^\n]{{0,80}}\b{_GATEWAY_ERROR_TERMS}\b"
 )
 
 
@@ -56,7 +67,7 @@ class FallbackPolicy:
         )
         if transport_match:
             return ProviderErrorKind.TRANSPORT_TRANSIENT
-        if _TRANSIENT_HTTP_STATUS_RE.search(msg):
+        if _TRANSIENT_HTTP_STATUS_RE.search(msg) or _TRANSIENT_GATEWAY_CONTEXT_RE.search(msg):
             return ProviderErrorKind.TRANSPORT_TRANSIENT
         ctx_match = "context" in msg and (
             "exceed" in msg or "length" in msg or "too long" in msg or "overflow" in msg
