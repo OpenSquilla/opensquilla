@@ -106,3 +106,86 @@ def test_apply_migrates_user_data_and_skills(
     assert (home / "skills" / "hermes-imports" / "demo" / "SKILL.md").is_file()
     assert (Path(report["output_dir"]) / "report.json").is_file()
     assert (Path(report["output_dir"]) / "summary.md").is_file()
+
+
+def test_apply_maps_config_env_channels_and_mcp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_hermes_home(tmp_path)
+    (source / "config.yaml").write_text(
+        """
+model:
+  provider: anthropic
+  model: claude-3-5-sonnet-latest
+  base_url: https://anthropic.example.test/v1
+mcp:
+  servers:
+    docs:
+      url: http://127.0.0.1:8765/sse
+    filesystem:
+      command: node
+      args: ["server.js"]
+      env:
+        NODE_ENV: test
+telegram:
+  default_chat_id: "123"
+discord:
+  default_channel_id: "456"
+slack:
+  channel_id: "C789"
+""",
+        encoding="utf-8",
+    )
+    (source / ".env").write_text(
+        "\n".join(
+            [
+                "ANTHROPIC_API_KEY=sk-ant-secret",
+                "BRAVE_API_KEY=brave-secret",
+                "TELEGRAM_BOT_TOKEN=tg-secret",
+                "DISCORD_BOT_TOKEN=discord-secret",
+                "SLACK_BOT_TOKEN=slack-secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (source / "skills" / "demo").mkdir(parents=True)
+    (source / "skills" / "demo" / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo\n---\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "opensquilla-home"
+    config_path = tmp_path / "opensquilla.toml"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+
+    report = HermesMigrator(
+        HermesMigrationOptions(
+            source=source,
+            config_path=config_path,
+            apply=True,
+            migrate_secrets=True,
+        )
+    ).migrate()
+
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert config["llm"]["provider"] == "anthropic"
+    assert config["llm"]["model"] == "claude-3-5-sonnet-latest"
+    assert config["llm"]["api_key_env"] == "ANTHROPIC_API_KEY"
+    assert config["llm"]["base_url"] == "https://anthropic.example.test/v1"
+    assert config["search_provider"] == "brave"
+    assert config["search_api_key_env"] == "BRAVE_SEARCH_API_KEY"
+    assert str(home / "skills" / "hermes-imports") in config["skills"]["extra_dirs"]
+    assert config["mcp"]["enabled"] is True
+    assert {entry["name"] for entry in config["mcp"]["servers"]} == {"docs", "filesystem"}
+    channels = {entry["type"]: entry for entry in config["channels"]["channels"]}
+    assert channels["telegram"]["token"] == "tg-secret"
+    assert channels["telegram"]["default_chat_id"] == "123"
+    assert channels["discord"]["token"] == "discord-secret"
+    assert channels["discord"]["default_channel_id"] == "456"
+    assert channels["slack"]["token"] == "slack-secret"
+    assert channels["slack"]["slack_channel_id"] == "C789"
+    assert "sk-ant-secret" not in json.dumps(report)
+    assert "ANTHROPIC_API_KEY=sk-ant-secret" in (home / ".env").read_text(encoding="utf-8")
+    assert "BRAVE_SEARCH_API_KEY=brave-secret" in (home / ".env").read_text(
+        encoding="utf-8"
+    )
