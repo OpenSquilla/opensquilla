@@ -65,7 +65,7 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: uv sync --extra dev --extra recommended --frozen
+        run: uv sync --extra dev --extra recommended --extra mcp --frozen
 
       - name: Lint
         shell: bash
