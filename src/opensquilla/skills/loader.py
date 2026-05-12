@@ -26,7 +26,7 @@ MAX_SKILLS_PER_SOURCE = 200  # per layer cap
 
 # Bump when on-disk snapshot fields change so stale caches are invalidated
 # instead of silently losing new fields.
-_SNAPSHOT_SCHEMA_VERSION = 3
+_SNAPSHOT_SCHEMA_VERSION = 4
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -35,7 +35,7 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     Returns (frontmatter_dict, body_content).
     Handles both simple and nested metadata formats.
     """
-    match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", text, re.DOTALL)
+    match = re.match(r"^\ufeff?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n(.*)$", text, re.DOTALL)
     if not match:
         return {}, text
 
@@ -427,7 +427,7 @@ class SkillLoader:
             return None
 
         try:
-            text = skill_file.read_text(encoding="utf-8")
+            text = skill_file.read_text(encoding="utf-8-sig")
             frontmatter, body = _parse_frontmatter(text)
 
             if not frontmatter or "name" not in frontmatter:

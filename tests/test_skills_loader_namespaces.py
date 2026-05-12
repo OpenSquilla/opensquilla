@@ -92,6 +92,21 @@ metadata:
     assert spec.metadata.requires.bins == ["keep"]
 
 
+def test_bom_and_crlf_skill_frontmatter_parse(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "bom-crlf"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\r\nname: bom-crlf\r\ndescription: Handles Windows-authored skills.\r\n---\r\nBody\r\n",
+        encoding="utf-8-sig",
+    )
+
+    loader = SkillLoader(bundled_dir=tmp_path)
+    spec = loader.get_by_name("bom-crlf")
+
+    assert spec is not None
+    assert spec.description == "Handles Windows-authored skills."
+
+
 def test_existing_bundled_skills_still_parse() -> None:
     """Regression guard: every bundled SKILL.md must still parse after the patch."""
     loader = SkillLoader(bundled_dir=BUNDLED)

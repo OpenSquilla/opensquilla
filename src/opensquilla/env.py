@@ -53,14 +53,14 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
     entries: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         if "=" not in line:
             continue
         key, _, value = line.partition("=")
-        key = key.strip()
+        key = key.strip().lstrip("\ufeff")
         value = value.strip()
         # Strip surrounding quotes
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
