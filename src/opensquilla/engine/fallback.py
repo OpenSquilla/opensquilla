@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -12,7 +13,25 @@ class ProviderErrorKind(StrEnum):
     AUTH_FAILURE = "auth_failure"
     OVERLOADED = "overloaded"
     CONTEXT_OVERFLOW = "context_overflow"
+    TRANSPORT_TRANSIENT = "transport_transient"
     UNKNOWN = "unknown"
+
+
+_GATEWAY_CODES = r"(?:504|520|522|523|524)"
+_GATEWAY_CONTEXT = r"(?:cloudflare|openrouter|upstream|gateway|backend)"
+_GATEWAY_ERROR_TERMS = (
+    r"(?:error|returned|returning|failed|failure|unreachable|timeout|timed out|"
+    r"overload(?:ed)?|bad gateway|origin)"
+)
+_TRANSIENT_HTTP_STATUS_RE = re.compile(
+    r"\b(?:http(?: status)?|status(?:[_ -]?code)?|error code|code)\s*[:=]?\s*"
+    rf"{_GATEWAY_CODES}\b"
+)
+_TRANSIENT_GATEWAY_CONTEXT_RE = re.compile(
+    rf"\b{_GATEWAY_CONTEXT}\b[^\n]{{0,80}}\b{_GATEWAY_ERROR_TERMS}\b[^\n]{{0,80}}\b{_GATEWAY_CODES}\b"
+    rf"|\b{_GATEWAY_CONTEXT}\b[^\n]{{0,80}}\b{_GATEWAY_CODES}\b[^\n]{{0,80}}\b{_GATEWAY_ERROR_TERMS}\b"
+    rf"|\b{_GATEWAY_CODES}\b[^\n]{{0,80}}\b{_GATEWAY_CONTEXT}\b[^\n]{{0,80}}\b{_GATEWAY_ERROR_TERMS}\b"
+)
 
 
 @dataclass
@@ -34,6 +53,22 @@ class FallbackPolicy:
             return ProviderErrorKind.AUTH_FAILURE
         if "overload" in msg or "503" in msg or "502" in msg or "capacity" in msg:
             return ProviderErrorKind.OVERLOADED
+        transport_match = (
+            "request error" in msg
+            or "readtimeout" in msg
+            or "connecttimeout" in msg
+            or "connection reset" in msg
+            or "connection refused" in msg
+            or "connection attempts failed" in msg
+            or "network is unreachable" in msg
+            or "temporary failure" in msg
+            or "timed out" in msg
+            or "timeout" in msg
+        )
+        if transport_match:
+            return ProviderErrorKind.TRANSPORT_TRANSIENT
+        if _TRANSIENT_HTTP_STATUS_RE.search(msg) or _TRANSIENT_GATEWAY_CONTEXT_RE.search(msg):
+            return ProviderErrorKind.TRANSPORT_TRANSIENT
         ctx_match = "context" in msg and (
             "exceed" in msg or "length" in msg or "too long" in msg or "overflow" in msg
         )
@@ -51,6 +86,7 @@ class FallbackPolicy:
             ProviderErrorKind.RATE_LIMIT,
             ProviderErrorKind.OVERLOADED,
             ProviderErrorKind.CONTEXT_OVERFLOW,
+            ProviderErrorKind.TRANSPORT_TRANSIENT,
         )
         if kind in retryable:
             return True

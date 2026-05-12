@@ -2909,6 +2909,14 @@ class TurnRunner:
                 bootstrap_filenames = tuple(
                     name for name in bootstrap_filenames if name != "BOOTSTRAP.md"
                 )
+            elif bootstrap_context_mode == "stateless":
+                bootstrap_filenames = tuple(
+                    name for name in bootstrap_filenames if name == "TOOLS.md"
+                )
+            elif bootstrap_context_mode == "stateless_keep_project_rules":
+                bootstrap_filenames = tuple(
+                    name for name in bootstrap_filenames if name in {"AGENTS.md", "TOOLS.md"}
+                )
             loaded_workspace_files, bootstrap_report = load_workspace_files_budgeted_with_report(
                 str(bootstrap_workspace_dir),
                 per_file_max_chars=self._resolve_bootstrap_max_chars(),
@@ -2940,7 +2948,13 @@ class TurnRunner:
                     report=list(visible_bootstrap_report),
                 )
         memory_source_dir = self._resolve_memory_source_dir(agent_id)
-        private_memory_allowed = allows_private_memory_prompt_injection(session_key)
+        stateless_prompt = bootstrap_context_mode in {
+            "stateless",
+            "stateless_keep_project_rules",
+        }
+        private_memory_allowed = (
+            False if stateless_prompt else allows_private_memory_prompt_injection(session_key)
+        )
 
         # Use frozen snapshot if available, otherwise read from disk
         snap_key = (agent_id, session_key) if session_key else None
@@ -2959,7 +2973,9 @@ class TurnRunner:
             prompt_metadata["injected_workspace_files_count"] = len(workspace_files)
             prompt_metadata["bootstrap_files"] = visible_bootstrap_report
             if not private_memory_allowed:
-                prompt_metadata["memory_prompt_injection_skipped"] = "session-scope"
+                prompt_metadata["memory_prompt_injection_skipped"] = (
+                    "stateless" if stateless_prompt else "session-scope"
+                )
             prompt_metadata["retrieval_mode"] = "fts_only"
 
         soul_doc = parse_soul(workspace_files["SOUL.md"]) if "SOUL.md" in workspace_files else None

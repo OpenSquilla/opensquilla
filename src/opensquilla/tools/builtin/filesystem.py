@@ -331,6 +331,40 @@ def _is_sensitive_access_path(resolved: Path) -> bool:
     return _context_elevated_mode() != "full" and is_sensitive_path(str(resolved)) is not None
 
 
+def _workspace_lockdown_roots() -> list[Path]:
+    ctx = current_tool_context.get()
+    if ctx is None or not ctx.workspace_lockdown:
+        return []
+    roots: list[Path] = []
+    if ctx.workspace_dir:
+        roots.append(Path(ctx.workspace_dir).expanduser().resolve(strict=False))
+    if ctx.scratch_dir:
+        roots.append(Path(ctx.scratch_dir).expanduser().resolve(strict=False))
+    return roots
+
+
+def _inside_any_root(candidate: Path, roots: list[Path]) -> bool:
+    resolved = candidate.expanduser().resolve(strict=False)
+    for root in roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _gate_workspace_lockdown_write(tool_name: str, resolved: Path, original_path: str) -> None:
+    roots = _workspace_lockdown_roots()
+    if not roots or _inside_any_root(resolved, roots):
+        return
+    allowed = ", ".join(str(root) for root in roots)
+    raise ToolError(
+        f"{tool_name} blocked by workspace lockdown: {original_path} resolves to "
+        f"{resolved}, outside allowed roots: {allowed}."
+    )
+
+
 async def _gate_out_of_workspace_write(
     tool_name: str,
     resolved: Path,
@@ -356,6 +390,8 @@ async def _gate_out_of_workspace_write(
             return build_block_envelope(
                 f"{tool_name} {original_path}", sensitive, tool_name=tool_name
             )
+
+    _gate_workspace_lockdown_write(tool_name, resolved, original_path)
 
     if not _is_outside_workspace(resolved):
         return None

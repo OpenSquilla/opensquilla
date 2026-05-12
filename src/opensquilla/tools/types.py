@@ -43,6 +43,8 @@ class ToolContext:
     workspace_dir: str | None = None
     memory_source_dir: str | None = None
     workspace_strict: bool = False
+    scratch_dir: str | None = None
+    workspace_lockdown: bool = False
     session_key: str | None = None
     channel_kind: str | None = None
     channel_id: str | None = None

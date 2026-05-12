@@ -252,6 +252,91 @@ async def test_unattended_bypass_allows_outside_workspace_write(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_workspace_lockdown_blocks_outside_workspace_write_even_with_bypass(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.workspace_lockdown = True  # type: ignore[attr-defined]
+
+    write_file = filesystem.write_file.__wrapped__.__wrapped__  # type: ignore[attr-defined]
+    with pytest.raises(ToolError, match="workspace lockdown"):
+        await write_file(str(outside), "ok")
+
+    assert not outside.exists()
+    assert len(get_approval_queue().list_pending("exec")) == 0
+
+
+@pytest.mark.asyncio
+async def test_workspace_lockdown_allows_configured_scratch_dir(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "scratch"
+    workspace.mkdir()
+    scratch.mkdir()
+    target = scratch / "debug.py"
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.scratch_dir = str(scratch)  # type: ignore[attr-defined]
+    ctx.workspace_lockdown = True  # type: ignore[attr-defined]
+
+    write_file = filesystem.write_file.__wrapped__.__wrapped__  # type: ignore[attr-defined]
+    result = await write_file(str(target), "print('ok')")
+
+    assert result.startswith("Written 11 bytes to ")
+    assert target.read_text(encoding="utf-8") == "print('ok')"
+
+
+def test_tool_definitions_include_scratch_guidance_when_configured(tmp_path: Path) -> None:
+    from opensquilla.tools.registry import get_default_registry
+
+    scratch = tmp_path / "scratch"
+    ctx = ToolContext(is_owner=True, scratch_dir=str(scratch))
+
+    tools = get_default_registry().to_tool_definitions(ctx)
+    descriptions = {tool.name: tool.description for tool in tools}
+
+    assert str(scratch) in descriptions["exec_command"]
+    assert str(scratch) in descriptions["write_file"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_lockdown_blocks_obvious_outside_shell_redirection(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.workspace_lockdown = True  # type: ignore[attr-defined]
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        f"echo ok > {outside}",
+        str(workspace),
+        "command requires approval",
+        None,
+        False,
+    )
+
+    assert result is not None
+    assert result["status"] == "blocked"
+    assert result["reason"] == "workspace_lockdown"
+
+
+@pytest.mark.asyncio
 async def test_bypass_still_blocks_sensitive_shell_targets() -> None:
     ctx = current_tool_context.get()
     assert ctx is not None

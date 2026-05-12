@@ -15,6 +15,7 @@ from typing import Any
 import typer
 from rich.panel import Panel
 from rich.text import Text
+from typer.models import OptionInfo
 
 from opensquilla.cli.attachments import attachments_from_paths
 from opensquilla.cli.ui import console
@@ -30,10 +31,13 @@ class AgentRunResult:
     errors: list[dict[str, str]]
     workspace: str | None = None
     workspace_strict: bool = False
+    workspace_lockdown: bool = False
+    scratch_dir: str | None = None
     thinking: str | None = None
     transcript_path: str | None = None
     usage_path: str | None = None
     artifacts: list[dict[str, Any]] | None = None
+    routing: dict[str, Any] | None = None
 
 
 def _cli_sender_id() -> str:
@@ -64,6 +68,12 @@ def _public_artifacts(artifacts: list[dict[str, Any]] | None) -> list[dict[str, 
     return [artifact_payload(artifact) for artifact in artifacts or []]
 
 
+def _unwrap_typer_default(value: Any) -> Any:
+    if isinstance(value, OptionInfo):
+        return value.default
+    return value
+
+
 async def run_agent_once(
     *,
     message: str,
@@ -83,6 +93,10 @@ async def run_agent_once(
     attachments: list[dict[str, Any]] | None = None,
     attachment_paths: list[str] | tuple[str, ...] | None = None,
     unattended: bool = True,
+    stateless: bool = False,
+    stateless_keep_project_rules: bool = False,
+    scratch_dir: str | None = None,
+    workspace_lockdown: bool = False,
     permissions: str | None = None,
 ) -> AgentRunResult:
     """Run a single agent turn through build_services() and TurnRunner.run()."""
@@ -109,6 +123,8 @@ async def run_agent_once(
     effective_model = model or _agent_model_from_config(cfg, agent_id)
     active_workspace = workspace or getattr(cfg, "workspace_dir", None)
     service_cfg = _with_agent_workspace_config(cfg, active_workspace) if active_workspace else cfg
+    if stateless or stateless_keep_project_rules:
+        service_cfg = _with_memory_source_config(service_cfg, "state")
     if effective_model:
         service_cfg = _with_agent_model_config(service_cfg, effective_model)
     if thinking:
@@ -131,6 +147,15 @@ async def run_agent_once(
         tool_workspace_dir = str(resolved_path)
     else:
         tool_workspace_dir = active_workspace
+    effective_scratch_dir: str | None = None
+    if scratch_dir:
+        scratch_path = Path(scratch_dir).expanduser().resolve(strict=False)
+        scratch_path.mkdir(parents=True, exist_ok=True)
+        effective_scratch_dir = str(scratch_path)
+    if workspace_lockdown and not tool_workspace_dir and not effective_scratch_dir:
+        raise ValueError(
+            "workspace_lockdown requires --workspace, configured workspace_dir, or --scratch-dir"
+        )
 
     # Hand the runtime agent_id to build_services so its memory store /
     # retriever / sync manager / turn capture are pre-built for that agent.
@@ -138,10 +163,12 @@ async def run_agent_once(
     # ids), so non-main CLI invocations would write to the per-agent workspace
     # but the index would never see those writes.
     extra_agents = [agent_id] if agent_id and agent_id != "main" else None
+    seed_agent_workspaces = not (stateless or stateless_keep_project_rules)
     svc = await build_services(
         config=service_cfg,
         session_db_path=session_db_path,
         extra_agent_ids=extra_agents,
+        seed_agent_workspaces=seed_agent_workspaces,
     )
     assert svc.session_manager is not None
     session_key = canonicalize_session_key(session_id or f"agent:{agent_id}:main")
@@ -207,8 +234,15 @@ async def run_agent_once(
             workspace_dir=tool_workspace_dir,
             workspace_strict=effective_workspace_strict,
         )
+        tool_ctx.scratch_dir = effective_scratch_dir
+        tool_ctx.workspace_lockdown = workspace_lockdown
 
         runner = build_turn_runner_from_services(svc)
+        bootstrap_context_mode = _bootstrap_context_mode(
+            unattended=unattended,
+            stateless=stateless,
+            stateless_keep_project_rules=stateless_keep_project_rules,
+        )
 
         async for event in runner.run(
             message,
@@ -221,7 +255,7 @@ async def run_agent_once(
             history_has_persisted_user=True,
             no_memory_capture=no_memory_capture,
             attachments=run_attachments,
-            bootstrap_context_mode="unattended" if unattended else None,
+            bootstrap_context_mode=bootstrap_context_mode,
         ):
             if isinstance(event, TextDeltaEvent):
                 text_parts.append(event.text)
@@ -251,11 +285,50 @@ async def run_agent_once(
         errors=errors,
         workspace=tool_workspace_dir,
         workspace_strict=effective_workspace_strict,
+        workspace_lockdown=workspace_lockdown,
+        scratch_dir=effective_scratch_dir,
         thinking=thinking or getattr(getattr(service_cfg, "llm", None), "thinking", None),
         transcript_path=transcript_path,
         usage_path=usage_path,
         artifacts=artifacts,
+        routing=_routing_from_done(done),
     )
+
+
+def _bootstrap_context_mode(
+    *,
+    unattended: bool,
+    stateless: bool,
+    stateless_keep_project_rules: bool,
+) -> str | None:
+    if stateless_keep_project_rules:
+        return "stateless_keep_project_rules"
+    if stateless:
+        return "stateless"
+    if unattended:
+        return "unattended"
+    return None
+
+
+def _routing_from_done(done: Any | None) -> dict[str, Any] | None:
+    if done is None:
+        return None
+    routing = {
+        "routed_tier": getattr(done, "routed_tier", None),
+        "routing_source": getattr(done, "routing_source", "none"),
+        "routing_confidence": getattr(done, "routing_confidence", 0.0),
+        "baseline_model": getattr(done, "baseline_model", ""),
+        "routed_model": getattr(done, "routed_model", ""),
+    }
+    if (
+        routing["routed_tier"] is None
+        and routing["routing_source"] == "none"
+        and not routing["routing_confidence"]
+        and not routing["baseline_model"]
+        and not routing["routed_model"]
+    ):
+        return None
+    return routing
 
 
 def _with_agent_workspace_config(config: Any, workspace: str) -> Any:
@@ -275,6 +348,23 @@ def _with_agent_workspace_config(config: Any, workspace: str) -> Any:
     setattr(copied, "workspace_dir", workspace)
     if memory is not None:
         setattr(copied, "memory", memory)
+    return copied
+
+
+def _with_memory_source_config(config: Any, source: str) -> Any:
+    memory = getattr(config, "memory", None)
+    if memory is None:
+        return config
+    if hasattr(memory, "model_copy"):
+        memory = memory.model_copy(update={"source": source})
+    else:
+        memory = copy.copy(memory)
+        setattr(memory, "source", source)
+
+    if hasattr(config, "model_copy"):
+        return config.model_copy(update={"memory": memory})
+    copied = copy.copy(config)
+    setattr(copied, "memory", memory)
     return copied
 
 
@@ -528,6 +618,19 @@ def run_agent_command(
         "--workspace-strict/--no-workspace-strict",
         help="Restrict read-side file tools to --workspace",
     ),
+    workspace_lockdown: bool = typer.Option(
+        False,
+        "--workspace-lockdown",
+        help=(
+            "Opt in to automation write containment: writes must stay under "
+            "--workspace or --scratch-dir."
+        ),
+    ),
+    scratch_dir: str = typer.Option(
+        "",
+        "--scratch-dir",
+        help="Directory for temporary scripts, logs, debug output, and candidate patches.",
+    ),
     timeout: float | None = typer.Option(
         None, "--timeout", "-T", help="Total agent timeout in seconds (0=unlimited)"
     ),
@@ -570,6 +673,21 @@ def run_agent_command(
             "single-shot automation."
         ),
     ),
+    stateless: bool = typer.Option(
+        False,
+        "--stateless/--no-stateless",
+        help="Use clean-room prompt bootstrap; does not change --unattended semantics.",
+    ),
+    clean_room: bool = typer.Option(
+        False,
+        "--clean-room",
+        help="Alias for --stateless.",
+    ),
+    stateless_keep_project_rules: bool = typer.Option(
+        False,
+        "--stateless-keep-project-rules",
+        help="With clean-room bootstrap, keep AGENTS.md project rules only.",
+    ),
     permissions: str | None = typer.Option(
         None,
         "--permissions",
@@ -581,6 +699,29 @@ def run_agent_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Run a single agent turn for automation."""
+    message = _unwrap_typer_default(message)
+    agent_id = _unwrap_typer_default(agent_id)
+    session_id = _unwrap_typer_default(session_id)
+    model = _unwrap_typer_default(model)
+    workspace = _unwrap_typer_default(workspace)
+    workspace_strict = _unwrap_typer_default(workspace_strict)
+    workspace_lockdown = _unwrap_typer_default(workspace_lockdown)
+    scratch_dir = _unwrap_typer_default(scratch_dir)
+    timeout = _unwrap_typer_default(timeout)
+    max_iterations = _unwrap_typer_default(max_iterations)
+    thinking = _unwrap_typer_default(thinking)
+    transcript_path = _unwrap_typer_default(transcript_path)
+    usage_path = _unwrap_typer_default(usage_path)
+    session_db_path = _unwrap_typer_default(session_db_path)
+    no_memory_capture = _unwrap_typer_default(no_memory_capture)
+    file_paths = _unwrap_typer_default(file_paths)
+    unattended = _unwrap_typer_default(unattended)
+    stateless = _unwrap_typer_default(stateless)
+    clean_room = _unwrap_typer_default(clean_room)
+    stateless_keep_project_rules = _unwrap_typer_default(stateless_keep_project_rules)
+    permissions = _unwrap_typer_default(permissions)
+    json_output = _unwrap_typer_default(json_output)
+
     result = asyncio.run(
         run_agent_once(
             message=message,
@@ -589,6 +730,8 @@ def run_agent_command(
             model=model or None,
             workspace=workspace or None,
             workspace_strict=workspace_strict,
+            workspace_lockdown=workspace_lockdown,
+            scratch_dir=scratch_dir or None,
             thinking=thinking or None,
             timeout=timeout,
             max_iterations=max_iterations,
@@ -596,8 +739,10 @@ def run_agent_command(
             usage_path=usage_path or None,
             session_db_path=session_db_path,
             no_memory_capture=no_memory_capture,
-            attachment_paths=file_paths,
+            attachment_paths=list(file_paths or []),
             unattended=unattended,
+            stateless=stateless or clean_room,
+            stateless_keep_project_rules=stateless_keep_project_rules,
             permissions=permissions,
         )
     )
@@ -611,6 +756,9 @@ def run_agent_command(
         "errors": result.errors,
         "workspace": result.workspace,
         "workspace_strict": result.workspace_strict,
+        "workspace_lockdown": result.workspace_lockdown,
+        "scratch_dir": result.scratch_dir,
+        "routing": result.routing,
         "thinking": result.thinking,
         "transcript_path": result.transcript_path,
         "usage_path": result.usage_path,
