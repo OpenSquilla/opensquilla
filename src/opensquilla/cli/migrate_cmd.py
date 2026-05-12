@@ -12,8 +12,14 @@ import typer
 from opensquilla.cli.ui import console
 from opensquilla.migration.hermes import (
     MIGRATION_OPTIONS as HERMES_MIGRATION_OPTIONS,
+)
+from opensquilla.migration.hermes import (
     MIGRATION_PRESETS as HERMES_MIGRATION_PRESETS,
+)
+from opensquilla.migration.hermes import (
     SKILL_CONFLICT_MODES as HERMES_SKILL_CONFLICT_MODES,
+)
+from opensquilla.migration.hermes import (
     HermesMigrationOptions,
     HermesMigrator,
 )

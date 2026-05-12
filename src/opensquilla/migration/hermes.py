@@ -349,9 +349,12 @@ class HermesMigrator:
             self.source / ".env",
             self.home / ".env",
             "migrated" if migrated and self.options.apply else "planned" if migrated else "skipped",
-            "pass --migrate-secrets to migrate recognized secrets"
-            if any(key in SECRET_ENV_KEYS for key in env_values) and not self.options.migrate_secrets
-            else "",
+            (
+                "pass --migrate-secrets to migrate recognized secrets"
+                if any(key in SECRET_ENV_KEYS for key in env_values)
+                and not self.options.migrate_secrets
+                else ""
+            ),
             {"migrated_keys": [SECRET_REDACTION] * migrated},
         )
 
@@ -415,7 +418,9 @@ class HermesMigrator:
                 "pass --migrate-secrets to migrate channel tokens",
             )
             return
-        raw_entries = [entry.model_dump(mode="python") for entry in self._config().channels.channels]
+        raw_entries = [
+            entry.model_dump(mode="python") for entry in self._config().channels.channels
+        ]
         changed = False
 
         def upsert(entry: dict[str, Any]) -> None:
