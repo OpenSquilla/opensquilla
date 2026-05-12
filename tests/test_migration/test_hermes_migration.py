@@ -189,3 +189,30 @@ slack:
     assert "BRAVE_SEARCH_API_KEY=brave-secret" in (home / ".env").read_text(
         encoding="utf-8"
     )
+
+
+def test_archive_unsupported_runtime_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_hermes_home(tmp_path)
+    (source / "state.db").write_bytes(b"SQLite format 3\x00")
+    (source / "auth.json").write_text('{"token": "do-not-copy"}', encoding="utf-8")
+    (source / "cron").mkdir()
+    (source / "cron" / "jobs.json").write_text('{"jobs": []}', encoding="utf-8")
+    (source / "logs").mkdir()
+    (source / "logs" / "run.log").write_text("log line\n", encoding="utf-8")
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+
+    report = HermesMigrator(HermesMigrationOptions(source=source, apply=True)).migrate()
+
+    output_dir = Path(report["output_dir"])
+    assert (output_dir / "archive" / "files" / "cron" / "jobs.json").is_file()
+    assert not (output_dir / "archive" / "files" / "state.db").exists()
+    assert not (output_dir / "archive" / "files" / "auth.json").exists()
+    assert not (output_dir / "archive" / "files" / "logs" / "run.log").exists()
+    statuses = {(item["kind"], item["status"]) for item in report["items"]}
+    assert ("state.db", "skipped") in statuses
+    assert ("auth.json", "skipped") in statuses
+    assert ("logs", "skipped") in statuses
+    assert ("cron-jobs", "archived") in statuses

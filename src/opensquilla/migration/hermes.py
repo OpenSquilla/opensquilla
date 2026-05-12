@@ -71,6 +71,19 @@ PROVIDER_ENV_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
 }
 
+ARCHIVE_SOURCE_ARTIFACTS = {"cron": "cron-jobs", "plugins": "plugins-config"}
+SKIP_SOURCE_ARTIFACTS = {
+    "state.db",
+    "state.db-wal",
+    "state.db-shm",
+    "kanban.db",
+    "sessions",
+    "logs",
+    "auth.json",
+    "checkpoints",
+    "cache",
+}
+
 
 @dataclass(frozen=True)
 class HermesMigrationOptions:
@@ -162,6 +175,7 @@ class HermesMigrator:
         self._migrate_config_and_env(selected)
         self._write_config()
         self._write_env()
+        self._archive_unsupported(selected)
         self._write_reports()
         return self._report()
 
@@ -471,6 +485,37 @@ class HermesMigrator:
     def _write_config(self) -> None:
         if self.options.apply and self._config_changed and self._config_obj is not None:
             persist_config(self._config_obj, path=self.config_path, backup=True)
+
+    def _archive_unsupported(self, selected: set[str]) -> None:
+        if "archive" not in selected:
+            return
+        for name, kind in ARCHIVE_SOURCE_ARTIFACTS.items():
+            source = self.source / name
+            if not source.exists():
+                continue
+            destination = self.output_dir / "archive" / "files" / name
+            if self.options.apply:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if source.is_dir():
+                    shutil.copytree(source, destination, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(source, destination)
+            self._record(
+                kind,
+                source,
+                destination,
+                "archived" if self.options.apply else "planned",
+            )
+        for name in sorted(SKIP_SOURCE_ARTIFACTS):
+            source = self.source / name
+            if source.exists():
+                self._record(
+                    name,
+                    source,
+                    None,
+                    "skipped",
+                    "runtime or credential artifact is not imported",
+                )
 
     def _record(
         self,
