@@ -1,0 +1,270 @@
+# Migration Guide
+
+OpenSquilla can import state from OpenClaw and Hermes Agent into OpenSquilla
+native files. The migration commands are designed to be previewed first, then
+applied explicitly.
+
+Supported migration paths:
+
+- OpenClaw -> OpenSquilla: `opensquilla migrate openclaw`
+- Hermes Agent -> OpenSquilla: `opensquilla migrate hermes`
+
+If you are running from a source checkout instead of an installed
+`opensquilla` command, prefix the examples with `uv run`:
+
+```sh
+uv run opensquilla migrate openclaw --json
+uv run opensquilla migrate hermes --json
+```
+
+## Before You Start
+
+1. Stop any running OpenSquilla gateway if it is using the target home.
+2. Make a manual backup of your OpenSquilla home if you need whole-home
+   rollback. The migrators can back up overwritten items, but they do not yet
+   create a complete pre-migration snapshot of `~/.opensquilla`.
+3. Run a dry run first and inspect the report.
+4. Do not pass `--migrate-secrets` until you have reviewed what will be copied.
+
+Default locations:
+
+- OpenSquilla home: `~/.opensquilla`
+- OpenClaw source home: `~/.openclaw`
+- Hermes Agent source home: `~/.hermes`
+
+On Windows, these are under your user profile, for example
+`C:\Users\<you>\.opensquilla`.
+
+## Common Options
+
+Both migration commands support the same main controls:
+
+| Option | Meaning |
+| --- | --- |
+| `--source PATH` | Source OpenClaw or Hermes Agent home. |
+| `--config PATH` | OpenSquilla config path to preview or write. |
+| `--apply` | Apply the migration. Without this, the command is a dry run. |
+| `--migrate-secrets` | Copy recognized secrets such as API keys and channel tokens. Defaults to false. |
+| `--overwrite` | Allow replacing existing targets. Existing overwritten items are backed up where supported. |
+| `--preset user-data` | Migrate only user-facing data such as persona, memory, and skills. |
+| `--preset full` | Migrate user data plus supported config/runtime artifacts. This is the default. |
+| `--include IDS` | Include only selected migration option ids. Comma-separated. |
+| `--exclude IDS` | Exclude selected migration option ids. Comma-separated. |
+| `--skill-conflict MODE` | Handle imported skill name conflicts: `skip`, `overwrite`, or `rename`. |
+| `--json` | Print a machine-readable report. Recommended for dry runs. |
+
+## OpenClaw -> OpenSquilla
+
+Use this path if your existing agent state is in an OpenClaw home.
+
+Preview first:
+
+```sh
+opensquilla migrate openclaw --json
+```
+
+Preview a custom OpenClaw home:
+
+```sh
+opensquilla migrate openclaw --source /path/to/.openclaw --json
+```
+
+Apply without secrets:
+
+```sh
+opensquilla migrate openclaw --apply
+```
+
+Apply and copy recognized secrets:
+
+```sh
+opensquilla migrate openclaw --apply --migrate-secrets
+```
+
+Apply and rename imported skill conflicts instead of skipping them:
+
+```sh
+opensquilla migrate openclaw --apply --skill-conflict rename
+```
+
+### What Is Migrated From OpenClaw
+
+OpenSquilla currently maps OpenClaw data into OpenSquilla-native locations:
+
+- Workspace persona files such as `SOUL.md`, `AGENTS.md`, and `USER.md`.
+- Long-term memory and daily memory where supported.
+- User skills and shared skills, imported under `~/.opensquilla/skills/openclaw-imports/`.
+- TTS assets, while unsupported TTS configuration is archived for review.
+- Command allowlists.
+- Model config, including string, object, and alias/catalog forms.
+- Provider keys from `.env` or provider config when `--migrate-secrets` is set.
+- MCP server definitions where OpenSquilla has native fields.
+- Telegram, Discord, and Slack channel config where OpenSquilla has native channel support.
+- Selected agent and tool settings with OpenSquilla-native equivalents.
+- Unsupported or unsafe OpenClaw artifacts are archived for manual review.
+
+The OpenClaw migrator also rewrites OpenClaw branding in migrated user-facing
+workspace text to OpenSquilla branding and archives the original changed text
+for review.
+
+### OpenClaw Limits
+
+Some OpenClaw runtime behavior is not fully mapped yet:
+
+- WhatsApp and Signal settings are detected, but OpenSquilla does not yet create
+  native migrated channel entries for them.
+- Some advanced MCP fields such as headers/auth/cwd/include/exclude are not
+  native mapped.
+- Some gateway, session, browser, approval, logging, plugin, cron, hook, memory
+  backend, skills registry, and UI settings are archived rather than applied.
+- OpenSquilla does not widen channel privileges: ordinary OpenClaw allowlists
+  are not treated as OpenSquilla admin senders.
+
+Review `MIGRATION_NOTES.md` after an applied migration for partial mappings and
+manual follow-up.
+
+## Hermes Agent -> OpenSquilla
+
+Use this path if your existing agent state is in a Hermes Agent home.
+
+Preview first:
+
+```sh
+opensquilla migrate hermes --json
+```
+
+Preview a custom Hermes Agent home:
+
+```sh
+opensquilla migrate hermes --source /path/to/.hermes --json
+```
+
+Preview a Hermes profile:
+
+```sh
+opensquilla migrate hermes --profile work --json
+```
+
+Apply without secrets:
+
+```sh
+opensquilla migrate hermes --apply
+```
+
+Apply and copy recognized secrets:
+
+```sh
+opensquilla migrate hermes --apply --migrate-secrets
+```
+
+Apply and rename imported skill conflicts instead of skipping them:
+
+```sh
+opensquilla migrate hermes --apply --skill-conflict rename
+```
+
+### What Is Migrated From Hermes Agent
+
+OpenSquilla currently maps the common Hermes Agent home surface:
+
+- Persona and user data files such as `SOUL.md`, `MEMORY.md`, and `USER.md`.
+- Hermes skills, imported under `~/.opensquilla/skills/hermes-imports/`.
+- Hermes model/provider config where there is an OpenSquilla-native equivalent.
+- Hermes custom providers with `base_url`, mapped to OpenAI-compatible provider config.
+- Environment values and recognized provider keys when `--migrate-secrets` is set.
+- Search config where supported.
+- MCP server definitions where supported.
+- Telegram, Discord, and Slack channel tokens when `--migrate-secrets` is set.
+- Selected plugin, cron, and unsupported runtime artifacts are archived for review.
+
+### Hermes Agent Limits
+
+The Hermes Agent migrator is newer than the OpenClaw migrator and has a smaller
+coverage surface. Review the dry-run report carefully before applying.
+
+Current limits:
+
+- Live runtime state, active sessions, process state, and gateway state are not imported.
+- Some Hermes runtime config option ids are accepted but may be archive-only or limited
+  until OpenSquilla has matching native fields.
+- Browser, tool, session, gateway, approval, and logging settings may require manual review.
+- A full pre-apply snapshot of `~/.opensquilla` is not created automatically.
+
+## Reports
+
+Use `--json` for dry-run automation:
+
+```sh
+opensquilla migrate openclaw --json
+opensquilla migrate hermes --json
+```
+
+Applied migrations write report files under:
+
+```text
+~/.opensquilla/migration/openclaw/<timestamp>/
+~/.opensquilla/migration/hermes/<timestamp>/
+```
+
+Typical files:
+
+- `report.json`: structured item-level report.
+- `summary.md`: human-readable count summary.
+- `MIGRATION_NOTES.md`: OpenClaw migration notes when semantic conversions or
+  partial mappings are present.
+- `archive/`: unsupported or review-only artifacts.
+
+Hermes dry runs also write report files. OpenClaw dry runs are best inspected
+with `--json`; apply mode writes the report files.
+
+## Validate After Migration
+
+After applying a migration, start the gateway and run a small chat check:
+
+```sh
+opensquilla gateway start --json
+opensquilla chat
+```
+
+Or use a one-shot prompt:
+
+```sh
+opensquilla agent -m "Briefly summarize your active persona and available memory."
+```
+
+Also check:
+
+- `~/.opensquilla/workspace/` for migrated persona and memory files.
+- `~/.opensquilla/skills/openclaw-imports/` or `~/.opensquilla/skills/hermes-imports/`.
+- `~/.opensquilla/migration/<source>/<timestamp>/summary.md`.
+- `~/.opensquilla/migration/<source>/<timestamp>/MIGRATION_NOTES.md` when present.
+
+If behavior does not look right, stop the gateway, review the migration report,
+and re-run with a narrower `--preset`, `--include`, or `--exclude` selection.
+
+## Examples
+
+Migrate only user data from OpenClaw:
+
+```sh
+opensquilla migrate openclaw --preset user-data --apply
+```
+
+Migrate only Hermes skills and persona files:
+
+```sh
+opensquilla migrate hermes --include soul,skills --apply
+```
+
+Preview OpenClaw migration while excluding channel settings:
+
+```sh
+opensquilla migrate openclaw --exclude telegram-settings,discord-settings,slack-settings --json
+```
+
+Apply Hermes migration to a custom config file:
+
+```sh
+opensquilla migrate hermes --config /path/to/opensquilla.toml --apply
+```
+

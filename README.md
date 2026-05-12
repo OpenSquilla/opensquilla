@@ -32,6 +32,10 @@ Choose the path that matches how you want to use OpenSquilla:
 | Command-line user | [Install from source](#install-from-source) | Available now |
 | Developer | [Develop from source](#develop-from-source) | Available now |
 
+Already use OpenClaw or Hermes Agent? See the [Migration Guide](MIGRATION.md)
+for dry-run and apply commands that import existing agent state into
+OpenSquilla.
+
 SquillaRouter is included by default in every currently available install path.
 Only choose the `core` profile or `--router disabled` if you intentionally want
 to skip the bundled router.
