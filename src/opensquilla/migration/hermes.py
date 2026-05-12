@@ -104,7 +104,62 @@ class HermesMigrator:
     def migrate(self) -> dict[str, Any]:
         if not _is_valid_hermes_home(self.source):
             self._record("source", self.source, None, "error", "not a Hermes home")
+            return self._report()
+        selected = self._selected_options()
+        self._plan_user_data(selected)
         return self._report()
+
+    def _selected_options(self) -> set[str]:
+        selected = set(MIGRATION_PRESETS.get(self.options.preset, MIGRATION_PRESETS["full"]))
+        selected.update(self.options.include)
+        selected.difference_update(self.options.exclude)
+        return selected
+
+    def _workspace_dir(self) -> Path:
+        return self.home / "workspace"
+
+    def _plan_user_data(self, selected: set[str]) -> None:
+        if "soul" in selected:
+            self._plan_file("soul", self.source / "SOUL.md", self._workspace_dir() / "SOUL.md")
+        if "memory" in selected:
+            self._plan_file(
+                "memory",
+                self.source / "memories" / "MEMORY.md",
+                self._workspace_dir() / "MEMORY.md",
+            )
+        if "user-profile" in selected:
+            self._plan_file(
+                "user-profile",
+                self.source / "memories" / "USER.md",
+                self._workspace_dir() / "USER.md",
+            )
+        if "skills" in selected:
+            self._plan_skills()
+
+    def _plan_file(self, kind: str, source: Path, destination: Path) -> None:
+        if not source.exists():
+            self._record(kind, source, destination, "skipped", "source missing")
+            return
+        self._record(
+            kind,
+            source,
+            destination,
+            "migrated" if self.options.apply else "planned",
+        )
+
+    def _plan_skills(self) -> None:
+        skills_dir = self.source / "skills"
+        destination_root = self.home / "skills" / SKILL_IMPORT_DIRNAME
+        if not skills_dir.exists():
+            self._record("skills", skills_dir, destination_root, "skipped", "source missing")
+            return
+        for skill_dir in sorted(path for path in skills_dir.iterdir() if path.is_dir()):
+            self._record(
+                "skills",
+                skill_dir,
+                destination_root / skill_dir.name,
+                "migrated" if self.options.apply else "planned",
+            )
 
     def _record(
         self,
