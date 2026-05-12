@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -107,6 +108,7 @@ class HermesMigrator:
             return self._report()
         selected = self._selected_options()
         self._plan_user_data(selected)
+        self._write_reports()
         return self._report()
 
     def _selected_options(self) -> set[str]:
@@ -140,11 +142,14 @@ class HermesMigrator:
         if not source.exists():
             self._record(kind, source, destination, "skipped", "source missing")
             return
+        status = "migrated" if self.options.apply else "planned"
+        if self.options.apply:
+            self._write_text_merge(source, destination)
         self._record(
             kind,
             source,
             destination,
-            "migrated" if self.options.apply else "planned",
+            status,
         )
 
     def _plan_skills(self) -> None:
@@ -154,12 +159,61 @@ class HermesMigrator:
             self._record("skills", skills_dir, destination_root, "skipped", "source missing")
             return
         for skill_dir in sorted(path for path in skills_dir.iterdir() if path.is_dir()):
-            self._record(
-                "skills",
-                skill_dir,
-                destination_root / skill_dir.name,
-                "migrated" if self.options.apply else "planned",
+            target = destination_root / skill_dir.name
+            status = "migrated" if self.options.apply else "planned"
+            reason = ""
+            if self.options.apply:
+                copied = self._copy_skill_dir(skill_dir, target)
+                if copied is None:
+                    status = "skipped"
+                    reason = "target exists"
+                else:
+                    target = copied
+            self._record("skills", skill_dir, target, status, reason)
+
+    def _write_text_merge(self, source: Path, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source_text = source.read_text(encoding="utf-8-sig")
+        if destination.exists() and not self.options.overwrite:
+            existing = destination.read_text(encoding="utf-8")
+            if source_text.strip() in existing:
+                return
+            destination.write_text(
+                existing.rstrip() + "\n\n" + source_text.lstrip(), encoding="utf-8"
             )
+            return
+        destination.write_text(source_text, encoding="utf-8")
+
+    def _copy_skill_dir(self, source: Path, destination: Path) -> Path | None:
+        target = destination
+        if target.exists():
+            if self.options.skill_conflict == "skip":
+                return None
+            if self.options.skill_conflict == "rename":
+                index = 1
+                while target.exists():
+                    target = destination.with_name(f"{destination.name}-imported-{index}")
+                    index += 1
+            elif self.options.skill_conflict == "overwrite":
+                shutil.rmtree(target)
+        shutil.copytree(source, target)
+        return target
+
+    def _write_reports(self) -> None:
+        if not self.options.apply:
+            return
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        report = self._report()
+        (self.output_dir / "report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        counts: dict[str, int] = {}
+        for item in report["items"]:
+            counts[item["status"]] = counts.get(item["status"], 0) + 1
+        lines = ["# Hermes Migration Summary", ""]
+        lines.extend(f"- {key}: {value}" for key, value in sorted(counts.items()))
+        (self.output_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _record(
         self,
