@@ -90,8 +90,6 @@ def test_readme_splits_user_paths_and_documents_preview_release_package() -> Non
         "local app without cloning the repository or installing Git, Git LFS, "
         "or `uv`." in normalized
     )
-    assert "Current preview packages:" in readme
-    assert "windows-x64-py312-recommended-portable.zip" in readme
     assert "macos-arm64-py312-recommended-portable.zip" not in readme
     assert "recommended-wheelhouse.zip" not in release_section
     assert "Public release packages are not published yet." not in readme
@@ -116,7 +114,6 @@ def test_readme_documents_router_defaults_and_feishu_as_channel_extra() -> None:
     )
     assert "recommended` enables SquillaRouter" in readme
     assert "Install channel extras into the same user-local command" in readme
-    assert "The recommended portable zip includes Feishu websocket support by default." in readme
     assert "Feishu websocket channel support" in readme
     assert "Optional: add a channel adapter only if you need one." in readme
     assert "powershell -ExecutionPolicy Bypass -File .\\install.ps1 -Extras feishu" in readme

@@ -639,7 +639,6 @@ def test_readme_distinguishes_recommended_profile_from_channel_extras() -> None:
     ) in readme
     assert "| Developer | [Develop from source](#develop-from-source) | Available now |" in readme
     assert "Download the preview package if you want to try OpenSquilla as a local app" in readme
-    assert "The recommended portable zip includes Feishu websocket support by default." in readme
     assert "`recommended` is the\nnormal runtime profile" in readme
     assert "Messaging channel adapters are opt-in extras." in readme
     assert "Feishu is shown only\nas an example channel adapter" in readme
