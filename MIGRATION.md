@@ -107,6 +107,33 @@ The OpenClaw migrator also rewrites OpenClaw branding in migrated user-facing
 workspace text to OpenSquilla branding and archives the original changed text
 for review.
 
+### OpenSquilla Bootstrap-Template Handling
+
+`ensure_agent_workspace` seeds placeholder ``SOUL.md`` / ``USER.md`` /
+``AGENTS.md`` / ``MEMORY.md`` files when an OpenSquilla home is first
+initialised. Without special handling those placeholders would block every
+workspace-file migration with a silent ``conflict: target exists`` —
+including the imported daily memory the user is migrating for in the first
+place.
+
+The OpenClaw migrator detects a destination that still holds the pristine
+bootstrap template (byte-identical to the shipped placeholder after a
+trailing-whitespace normalisation) and treats it as overwrite-safe:
+
+- The pristine template is backed up to
+  ``<name>.backup.<timestamp>`` next to the destination so the placeholder
+  guidance can be recovered on demand.
+- The imported content replaces the template.
+- The migration report marks the item with
+  ``details.replaced_bootstrap_template: true`` so the special case is
+  visible rather than silent.
+
+A destination file that the user has truly edited (i.e. no longer matches
+the canonical template byte-for-byte) still gets the normal
+``status: conflict`` treatment — only the pristine placeholder is treated
+as overwrite-safe. To accept user edits being overwritten as well, pass
+``--overwrite``.
+
 ### OpenClaw Limits
 
 Some OpenClaw runtime behavior is not fully mapped yet:

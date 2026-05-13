@@ -300,6 +300,40 @@ def _string_list(value: Any) -> list[str]:
     return []
 
 
+def _opensquilla_bootstrap_template_text(filename: str) -> str | None:
+    # Read the canonical OpenSquilla bootstrap template shipped under
+    # ``opensquilla.identity.templates.bootstrap`` so we can detect when a
+    # destination file is still the pristine placeholder seeded by
+    # ``ensure_agent_workspace`` and treat it as overwrite-safe.
+    try:
+        from importlib.resources import files as _resource_files
+
+        resource = (
+            _resource_files("opensquilla.identity")
+            .joinpath("templates")
+            .joinpath("bootstrap")
+            .joinpath(filename)
+        )
+        return resource.read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+
+
+def _dest_is_pristine_bootstrap_template(destination: Path, filename: str) -> bool:
+    if not destination.is_file():
+        return False
+    template = _opensquilla_bootstrap_template_text(filename)
+    if template is None:
+        return False
+    try:
+        existing = destination.read_text(encoding="utf-8-sig")
+    except OSError:
+        return False
+    # Compare after normalizing trailing whitespace so a stray EOL difference
+    # (e.g. a one-off platform artifact) does not disqualify a pristine file.
+    return existing.rstrip() == template.rstrip()
+
+
 def _rebrand_text(text: str) -> tuple[str, bool]:
     protected: dict[str, str] = {}
 
@@ -582,6 +616,7 @@ class OpenClawMigrator:
         text: str,
         *,
         details: dict[str, Any] | None = None,
+        bootstrap_template_filename: str | None = None,
     ) -> None:
         if not source.is_file():
             self._record(kind, source, destination, "skipped", "source file not found")
@@ -589,14 +624,32 @@ class OpenClawMigrator:
         if not self.options.apply:
             self._record(kind, source, destination, "planned", details=details)
             return
-        if destination.exists() and not self.options.overwrite:
+        is_pristine_template = (
+            destination.exists()
+            and not self.options.overwrite
+            and bootstrap_template_filename is not None
+            and _dest_is_pristine_bootstrap_template(
+                destination, bootstrap_template_filename
+            )
+        )
+        if destination.exists() and not self.options.overwrite and not is_pristine_template:
             self._record(kind, source, destination, "conflict", "target exists")
             return
         if destination.exists():
             self._backup_file(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8")
-        self._record(kind, source, destination, "migrated", details=details)
+        merged_details = dict(details or {})
+        if is_pristine_template:
+            # Make it explicit in the report that we treated a pristine
+            # OpenSquilla bootstrap template as overwrite-safe — otherwise a
+            # fresh ``~/.opensquilla`` (which always seeds the template at
+            # init) would block every workspace-file migration with a silent
+            # ``conflict: target exists``.
+            merged_details["replaced_bootstrap_template"] = True
+        self._record(
+            kind, source, destination, "migrated", details=merged_details or None
+        )
 
     def _migrate_workspace_file(self, filename: str, kind: str) -> None:
         source = self._openclaw_workspace() / filename
@@ -604,7 +657,14 @@ class OpenClawMigrator:
         text = source.read_text(encoding="utf-8-sig", errors="replace") if source.is_file() else ""
         text, changed = _rebrand_text(text)
         details = {"semantic_conversions": ["openclaw-branding"]} if changed else None
-        self._write_text_target(kind, source, destination, text, details=details)
+        self._write_text_target(
+            kind,
+            source,
+            destination,
+            text,
+            details=details,
+            bootstrap_template_filename=filename,
+        )
         if changed:
             self._archive_original_workspace_file(source, filename)
 
@@ -681,7 +741,14 @@ class OpenClawMigrator:
             for original, relative in rebranded_sources:
                 self._archive_original_workspace_file(original, relative)
         record_details = {k: v for k, v in details.items() if k != "overflow"}
-        self._write_text_target("memory", source, destination, text, details=record_details)
+        self._write_text_target(
+            "memory",
+            source,
+            destination,
+            text,
+            details=record_details,
+            bootstrap_template_filename="MEMORY.md",
+        )
         overflow = details.get("overflow")
         if isinstance(overflow, str):
             self._write_memory_overflow(overflow)
