@@ -24,6 +24,9 @@ from opensquilla.migration.hermes import (
     HermesMigrator,
 )
 from opensquilla.migration.openclaw import (
+    PERSONA_CONFLICT_MODES,
+)
+from opensquilla.migration.openclaw import (
     MIGRATION_OPTIONS,
     MIGRATION_PRESETS,
     SKILL_CONFLICT_MODES,
@@ -50,6 +53,7 @@ def _reject_invalid_options(
     include: tuple[str, ...],
     exclude: tuple[str, ...],
     skill_conflict: str,
+    persona_conflict: str | None = None,
 ) -> None:
     if preset not in MIGRATION_PRESETS:
         typer.echo(f"Unknown migration preset: {preset}")
@@ -64,6 +68,9 @@ def _reject_invalid_options(
         raise typer.Exit(2)
     if skill_conflict not in SKILL_CONFLICT_MODES:
         typer.echo(f"Unknown skill conflict behavior: {skill_conflict}")
+        raise typer.Exit(2)
+    if persona_conflict is not None and persona_conflict not in PERSONA_CONFLICT_MODES:
+        typer.echo(f"Unknown persona conflict behavior: {persona_conflict}")
         raise typer.Exit(2)
 
 
@@ -137,6 +144,15 @@ def migrate_openclaw(
         "--skill-conflict",
         help="Skill conflict behavior: skip, overwrite, or rename.",
     ),
+    persona_conflict: str = typer.Option(
+        "prompt",
+        "--persona-conflict",
+        help=(
+            "How to resolve SOUL/USER/AGENTS conflicts when the destination "
+            "already holds real user content: prompt (interactive, default), "
+            "use-opensquilla, use-openclaw, merge, or skip."
+        ),
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Migrate OpenClaw state into OpenSquilla-native files."""
@@ -148,6 +164,7 @@ def migrate_openclaw(
         include=include_options,
         exclude=exclude_options,
         skill_conflict=skill_conflict,
+        persona_conflict=persona_conflict,
     )
     options = MigrationOptions(
         source=source,
@@ -159,6 +176,7 @@ def migrate_openclaw(
         include=include_options,
         exclude=exclude_options,
         skill_conflict=skill_conflict,  # type: ignore[arg-type]
+        persona_conflict=persona_conflict,  # type: ignore[arg-type]
     )
     if json_output:
         with contextlib.redirect_stdout(io.StringIO()):

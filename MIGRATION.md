@@ -107,6 +107,31 @@ The OpenClaw migrator also rewrites OpenClaw branding in migrated user-facing
 workspace text to OpenSquilla branding and archives the original changed text
 for review.
 
+### SOUL.md / USER.md / AGENTS.md Conflict Handling
+
+These persona files are identity definitions (not additive like memory), so
+when the destination already holds real user-curated content the migrator
+asks you which version to keep instead of either silently dropping the
+imported content or clobbering the existing file.
+
+Use ``--persona-conflict`` to control the behavior:
+
+| Mode | Behavior |
+| --- | --- |
+| ``prompt`` (default) | When stdin is a TTY: prompt for each conflicting file with a side-by-side preview and the four choices below. When stdin is not a TTY (CI, pipe, ``--json``): fall back to ``use-opensquilla`` and record a note so the choice is visible in the report. |
+| ``use-opensquilla`` | Keep the destination file untouched. The OpenClaw original is copied to ``<output_dir>/archive/files/openclaw-orphaned/<filename>`` for review so nothing is silently lost. ``status: skipped``, ``details.persona_conflict_resolution: "use-opensquilla"``. |
+| ``use-openclaw`` | Back up the destination to ``<name>.backup.<timestamp>`` and replace it with the OpenClaw content. ``status: migrated``, ``details.persona_conflict_resolution: "use-openclaw"``. |
+| ``merge`` | Back up the destination and append the OpenClaw content below it under a ``## Imported from OpenClaw`` separator. Useful when the two versions are complementary rather than conflicting. ``status: migrated``, ``details.persona_conflict_resolution: "merge"``. |
+| ``skip`` | Leave both files alone. The OpenClaw original is *not* archived — use ``use-opensquilla`` instead if you want a recoverable copy. ``status: skipped``, ``details.persona_conflict_resolution: "skip"``. |
+
+``--overwrite`` short-circuits all of this and replaces the destination
+wholesale (still with an item-level backup).
+
+The pristine bootstrap-template case described below is handled before
+``--persona-conflict`` and never asks for input: a freshly initialised
+OpenSquilla workspace where the template is still untouched is treated as
+overwrite-safe.
+
 ### MEMORY.md Merge Semantics
 
 OpenClaw memory is additive by nature: every imported daily-memory file is

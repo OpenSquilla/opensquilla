@@ -190,6 +190,172 @@ def test_partial_overlap_appends_only_new_blocks(
     assert "brand new fact" in text
 
 
+def test_persona_conflict_default_in_non_tty_keeps_opensquilla_and_archives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # In a non-TTY context (pytest, CI, --json) the default `prompt` mode
+    # cannot actually prompt, so it falls back to the safe choice: keep
+    # the user's opensquilla content and archive the openclaw original
+    # under archive/files/openclaw-orphaned/ so nothing is silently lost.
+    source = _make_openclaw_source(tmp_path)
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    (home / "workspace").mkdir(parents=True)
+    (home / "workspace" / "SOUL.md").write_text(
+        "# My real opensquilla persona\nI am precise and terse.\n",
+        encoding="utf-8",
+    )
+
+    report = OpenClawMigrator(
+        MigrationOptions(source=source, config_path=tmp_path / "cfg.toml", apply=True)
+    ).migrate()
+
+    soul = next(i for i in report["items"] if i["kind"] == "soul")
+    assert soul["status"] == "skipped"
+    assert "kept existing opensquilla content" in soul["reason"]
+    assert soul["details"]["persona_conflict_resolution"] == "use-opensquilla"
+    # Existing opensquilla content untouched.
+    assert (
+        "I am precise and terse."
+        in (home / "workspace" / "SOUL.md").read_text(encoding="utf-8")
+    )
+    # Openclaw original archived, not silently dropped.
+    orphan = Path(report["output_dir"]) / "archive" / "files" / "openclaw-orphaned" / "SOUL.md"
+    assert orphan.is_file()
+    assert "openclaw real soul" in orphan.read_text(encoding="utf-8")
+
+
+def test_persona_conflict_use_openclaw_replaces_with_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_openclaw_source(tmp_path)
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    (home / "workspace").mkdir(parents=True)
+    (home / "workspace" / "SOUL.md").write_text(
+        "OPENSQUILLA ORIGINAL\n", encoding="utf-8"
+    )
+
+    OpenClawMigrator(
+        MigrationOptions(
+            source=source,
+            config_path=tmp_path / "cfg.toml",
+            apply=True,
+            persona_conflict="use-openclaw",
+        )
+    ).migrate()
+
+    text = (home / "workspace" / "SOUL.md").read_text(encoding="utf-8")
+    assert "OPENSQUILLA ORIGINAL" not in text
+    # rebrand turns "openclaw real soul" -> "opensquilla real soul"
+    assert "opensquilla real soul" in text
+    backups = list((home / "workspace").glob("SOUL.md.backup.*"))
+    assert len(backups) == 1
+    assert "OPENSQUILLA ORIGINAL" in backups[0].read_text(encoding="utf-8")
+
+
+def test_persona_conflict_merge_appends_with_separator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_openclaw_source(tmp_path)
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    (home / "workspace").mkdir(parents=True)
+    (home / "workspace" / "USER.md").write_text(
+        "I am Alice, working on RPC layer.\n", encoding="utf-8"
+    )
+
+    report = OpenClawMigrator(
+        MigrationOptions(
+            source=source,
+            config_path=tmp_path / "cfg.toml",
+            apply=True,
+            persona_conflict="merge",
+        )
+    ).migrate()
+
+    user_item = next(i for i in report["items"] if i["kind"] == "user-profile")
+    assert user_item["status"] == "migrated"
+    assert user_item["details"]["persona_conflict_resolution"] == "merge"
+    text = (home / "workspace" / "USER.md").read_text(encoding="utf-8")
+    # Existing opensquilla content preserved at the top.
+    assert text.startswith("I am Alice")
+    # OpenClaw content appended after a clear separator.
+    assert "## Imported from OpenClaw" in text
+    assert "opensquilla real user" in text  # rebrand applied
+    # Pre-existing file was backed up.
+    backups = list((home / "workspace").glob("USER.md.backup.*"))
+    assert len(backups) == 1
+
+
+def test_persona_conflict_skip_drops_both_with_explicit_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_openclaw_source(tmp_path)
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    (home / "workspace").mkdir(parents=True)
+    (home / "workspace" / "AGENTS.md").write_text(
+        "WORKSPACE OPERATING RULES\n", encoding="utf-8"
+    )
+
+    report = OpenClawMigrator(
+        MigrationOptions(
+            source=source,
+            config_path=tmp_path / "cfg.toml",
+            apply=True,
+            persona_conflict="skip",
+        )
+    ).migrate()
+
+    agents_item = next(i for i in report["items"] if i["kind"] == "workspace-agents")
+    assert agents_item["status"] == "skipped"
+    assert agents_item["reason"] == "user chose to skip this file"
+    assert agents_item["details"]["persona_conflict_resolution"] == "skip"
+    # Existing content unchanged.
+    assert (
+        "WORKSPACE OPERATING RULES"
+        in (home / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+    )
+    # When user explicitly says "skip" we do NOT archive openclaw — they
+    # asked to drop it.
+    orphan = Path(report["output_dir"]) / "archive" / "files" / "openclaw-orphaned" / "AGENTS.md"
+    assert not orphan.exists()
+
+
+def test_persona_conflict_use_opensquilla_keeps_dest_and_archives_openclaw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Explicit (non-prompt) use-opensquilla. Same behavior as the non-TTY
+    # default but reached via an explicit CLI flag instead of fallback.
+    source = _make_openclaw_source(tmp_path)
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    (home / "workspace").mkdir(parents=True)
+    (home / "workspace" / "SOUL.md").write_text(
+        "EXISTING CONTENT TO PRESERVE\n", encoding="utf-8"
+    )
+
+    report = OpenClawMigrator(
+        MigrationOptions(
+            source=source,
+            config_path=tmp_path / "cfg.toml",
+            apply=True,
+            persona_conflict="use-opensquilla",
+        )
+    ).migrate()
+
+    soul = next(i for i in report["items"] if i["kind"] == "soul")
+    assert soul["status"] == "skipped"
+    assert soul["details"]["persona_conflict_resolution"] == "use-opensquilla"
+    assert (
+        "EXISTING CONTENT TO PRESERVE"
+        in (home / "workspace" / "SOUL.md").read_text(encoding="utf-8")
+    )
+    orphan = Path(report["output_dir"]) / "archive" / "files" / "openclaw-orphaned" / "SOUL.md"
+    assert orphan.is_file()
+
+
 def test_overwrite_flag_still_replaces_everything(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

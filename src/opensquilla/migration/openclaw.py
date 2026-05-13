@@ -31,6 +31,25 @@ from opensquilla.paths import default_opensquilla_home
 SKILL_IMPORT_DIRNAME = "openclaw-imports"
 SECRET_REDACTION = "[redacted]"
 SKILL_CONFLICT_MODES = {"skip", "overwrite", "rename"}
+# How to resolve a conflict on persona files (SOUL.md / USER.md / AGENTS.md)
+# when the destination already holds real user-curated content (i.e. it is
+# not the pristine OpenSquilla bootstrap template and ``--overwrite`` was
+# not passed). MEMORY.md is handled separately because memory is additive
+# and merges automatically. Persona files are identity definitions, so a
+# silent default would either drop OpenClaw content (the original bug) or
+# clobber the user's curated persona (also bad).
+PERSONA_CONFLICT_MODES = {
+    "prompt",
+    "use-opensquilla",
+    "use-openclaw",
+    "merge",
+    "skip",
+}
+_PERSONA_KIND_BY_FILENAME = {
+    "SOUL.md": "soul",
+    "USER.md": "user-profile",
+    "AGENTS.md": "workspace-agents",
+}
 MAX_SKILL_FILE_BYTES = 256_000
 MAX_MEMORY_CHARS = 80_000
 MEMORY_OVERFLOW_DIR = "memory-overflow"
@@ -183,6 +202,9 @@ class MigrationOptions:
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
     skill_conflict: Literal["skip", "overwrite", "rename"] = "skip"
+    persona_conflict: Literal[
+        "prompt", "use-opensquilla", "use-openclaw", "merge", "skip"
+    ] = "prompt"
 
 
 @dataclass
@@ -656,17 +678,166 @@ class OpenClawMigrator:
         destination = self._workspace_dir() / filename
         text = source.read_text(encoding="utf-8-sig", errors="replace") if source.is_file() else ""
         text, changed = _rebrand_text(text)
-        details = {"semantic_conversions": ["openclaw-branding"]} if changed else None
+        details: dict[str, Any] = {}
+        if changed:
+            details["semantic_conversions"] = ["openclaw-branding"]
+        if not source.is_file():
+            self._record(kind, source, destination, "skipped", "source file not found")
+            return
+
+        # Scenario-C persona conflict: dest is real user content (not the
+        # pristine template, no --overwrite). Per the agreed contract,
+        # never silently drop OpenClaw content and never silently clobber
+        # the user's persona file. Ask the user (or honor an explicit
+        # --persona-conflict mode).
+        if (
+            self.options.apply
+            and destination.is_file()
+            and not self.options.overwrite
+            and not _dest_is_pristine_bootstrap_template(destination, filename)
+        ):
+            choice = self._resolve_persona_conflict(filename, destination, text)
+            details["persona_conflict_resolution"] = choice
+            if choice == "use-openclaw":
+                self._backup_file(destination)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(text, encoding="utf-8")
+                self._record(kind, source, destination, "migrated", details=details)
+                if changed:
+                    self._archive_original_workspace_file(source, filename)
+                return
+            if choice == "merge":
+                existing = destination.read_text(encoding="utf-8-sig")
+                merged = (
+                    existing.rstrip()
+                    + "\n\n## Imported from OpenClaw\n\n"
+                    + text.lstrip()
+                )
+                self._backup_file(destination)
+                destination.write_text(merged, encoding="utf-8")
+                self._record(kind, source, destination, "migrated", details=details)
+                if changed:
+                    self._archive_original_workspace_file(source, filename)
+                return
+            if choice == "use-opensquilla":
+                # Keep dest unchanged. Stash the openclaw original under
+                # archive/files/openclaw-orphaned/ so the user can review
+                # it later instead of it being silently dropped.
+                self._archive_openclaw_orphaned(source, filename)
+                self._record(
+                    kind,
+                    source,
+                    destination,
+                    "skipped",
+                    "kept existing opensquilla content; openclaw archived for review",
+                    details=details or None,
+                )
+                return
+            # "skip" — neither imported nor archived.
+            self._record(
+                kind,
+                source,
+                destination,
+                "skipped",
+                "user chose to skip this file",
+                details=details or None,
+            )
+            return
+
         self._write_text_target(
             kind,
             source,
             destination,
             text,
-            details=details,
+            details=details or None,
             bootstrap_template_filename=filename,
         )
         if changed:
             self._archive_original_workspace_file(source, filename)
+
+    def _resolve_persona_conflict(
+        self, filename: str, destination: Path, incoming_text: str
+    ) -> str:
+        # When the user passed an explicit mode (not "prompt"), honor it.
+        mode = self.options.persona_conflict
+        if mode != "prompt":
+            return mode
+        # Interactive prompting only makes sense when stdin is a TTY. In
+        # non-interactive runs (CI, pipes, --json) we default to the
+        # safest option: keep the user's existing persona AND archive the
+        # OpenClaw version so nothing is silently lost.
+        import sys as _sys
+
+        if not _sys.stdin.isatty():
+            self._note(
+                "persona-conflict",
+                f"{filename}: non-interactive run, defaulted to use-opensquilla; "
+                f"openclaw content archived under archive/files/openclaw-orphaned/",
+            )
+            return "use-opensquilla"
+        return self._prompt_persona_choice(filename, destination, incoming_text)
+
+    def _prompt_persona_choice(
+        self, filename: str, destination: Path, incoming_text: str
+    ) -> str:
+        # Show a small side-by-side preview and offer the four resolutions
+        # we already support programmatically.
+        try:
+            import questionary
+        except ImportError:
+            return "use-opensquilla"
+
+        existing = destination.read_text(encoding="utf-8-sig")
+        import sys as _sys
+
+        def _preview(label: str, body: str, byte_count: int) -> None:
+            _sys.stderr.write(f"\n  ── {label} ({byte_count} bytes) ──\n")
+            lines = body.splitlines() or [""]
+            for line in lines[:10]:
+                _sys.stderr.write(f"    {line}\n")
+            if len(lines) > 10:
+                _sys.stderr.write(f"    ... ({len(lines) - 10} more lines)\n")
+
+        _sys.stderr.write(
+            f"\n⚠ Conflict on {filename}: opensquilla and openclaw both have content.\n"
+        )
+        _preview(f"existing opensquilla {filename}", existing, len(existing))
+        _preview(f"incoming openclaw {filename} (after rebrand)", incoming_text, len(incoming_text))
+        _sys.stderr.write("\n")
+        answer = questionary.select(
+            f"Which {filename} should opensquilla use?",
+            choices=[
+                questionary.Choice(
+                    "Keep opensquilla (openclaw archived for review)",
+                    "use-opensquilla",
+                ),
+                questionary.Choice(
+                    "Replace with openclaw (opensquilla backed up)",
+                    "use-openclaw",
+                ),
+                questionary.Choice(
+                    "Merge: append openclaw below opensquilla",
+                    "merge",
+                ),
+                questionary.Choice(
+                    "Skip this file (neither imported nor archived)",
+                    "skip",
+                ),
+            ],
+        ).ask()
+        return answer or "use-opensquilla"
+
+    def _archive_openclaw_orphaned(self, source: Path, filename: Path | str) -> None:
+        if not source.is_file():
+            return
+        destination = (
+            self.output_dir / "archive" / "files" / "openclaw-orphaned" / filename
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        self._record(
+            f"openclaw-orphaned/{filename}", source, destination, "archived"
+        )
 
     def _archive_original_workspace_file(self, source: Path, filename: Path | str) -> None:
         if not source.is_file():
