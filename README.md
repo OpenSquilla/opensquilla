@@ -41,24 +41,14 @@ disabled` if you intentionally want to skip the bundled router.
 Download the preview package if you want to try OpenSquilla as a local app
 without cloning the repository or installing Git, Git LFS, or `uv`.
 
-Current preview packages:
+1. Download the package from the [GitHub Releases](https://github.com/opensquilla/opensquilla/releases)
+   page and extract it to Downloads, Documents, or another folder you can write to.
 
-- `OpenSquilla-<version>-windows-x64-py312-recommended-portable.zip` for
-  Windows.
-
-The recommended portable zip includes Feishu websocket support by default. If a
-package is not available for your platform, use the source install path below.
-
-1. Open the [GitHub Releases](https://github.com/opensquilla/opensquilla/releases)
-   page and download the package.
-
-2. Extract to Downloads, Documents, or another folder you can write to.
-
-3. Double-click `Start OpenSquilla.cmd` from the extracted folder.
+2. Double-click `Start OpenSquilla.cmd` from the extracted folder.
 
    Keep the terminal window open. Closing it stops the gateway.
 
-4. Complete onboarding and open the Web UI.
+3. Complete onboarding and open the Web UI.
 
    The launcher opens onboarding before the gateway starts. On first run, choose
    a provider and paste the requested keys; later starts let you review or change
