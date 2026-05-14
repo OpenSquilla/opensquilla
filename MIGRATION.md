@@ -299,6 +299,16 @@ behaviors that were previously documented but not implemented:
   missing frontmatter, oversize bodies, or invalid YAML. Skills are still
   copied; the field is informational so you can find ones that may need
   attention before activating.
+- **Unknown providers are no longer written to `llm.provider`.** Hermes
+  uses values like `auto` (runtime auto-detect) and may ship experimental
+  providers (`bedrock`, `ollama`, ...) that have no OpenSquilla equivalent.
+  Writing them verbatim used to crash `persist_config` because OpenSquilla
+  validates `llm.provider` against a known set AND requires
+  `squilla_router.tier_profile` to agree with it. The migrator now leaves
+  `llm.provider` untouched in that case; the model id and base URL are
+  still migrated, and the model-config item carries
+  `details.unrecognized_provider`, `details.llm_provider_left_unchanged`,
+  and a `manual_steps` hint explaining how to set the provider explicitly.
 
 ## Reports
 

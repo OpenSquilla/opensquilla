@@ -639,17 +639,39 @@ class HermesMigrator:
         target_provider = "openai" if provider == "custom" and base_url else provider
         details: dict[str, Any] = {}
         if provider:
-            cfg.llm.provider = target_provider
             env_key = PROVIDER_ENV_KEYS.get(target_provider)
             if env_key is not None:
+                # Recognized OpenSquilla provider — write provider and
+                # the corresponding env-var name.
+                cfg.llm.provider = target_provider
                 cfg.llm.api_key_env = env_key
-            elif target_provider:
-                # Surface the gap so the user sees they need to set
-                # api_key_env manually instead of finding a blank field
-                # after a "migrated" report.
+            else:
+                # Unrecognized provider: do NOT write it into
+                # ``cfg.llm.provider``. Hermes uses values like ``auto``
+                # (runtime auto-detect) that have no opensquilla-native
+                # equivalent, and writing them verbatim used to break
+                # ``persist_config`` because:
+                #   - GatewayConfig validates ``llm.provider`` is one of
+                #     the known providers; and
+                #   - ``squilla_router.tier_profile`` (preserved across
+                #     migrations) must agree with ``llm.provider`` after
+                #     case normalisation.
+                # Leaving the existing provider in place keeps both
+                # invariants satisfied and lets the rest of the migration
+                # apply. The user is told what was skipped and why.
+                preserved = cfg.llm.provider
                 details["unrecognized_provider"] = target_provider
+                details["llm_provider_left_unchanged"] = preserved
                 details["manual_steps"] = [
-                    "set llm.api_key_env to the env var your provider uses"
+                    (
+                        f"hermes config.yaml declared model.provider="
+                        f"{target_provider!r}, which has no opensquilla "
+                        f"equivalent (only known providers can be written "
+                        f"to llm.provider). llm.provider was left as "
+                        f"{preserved!r}. Set it explicitly via "
+                        f"`opensquilla config set llm.provider <name>` "
+                        f"if you want to switch."
+                    )
                 ]
         if model:
             cfg.llm.model = model

@@ -335,12 +335,18 @@ def test_invalid_profile_name_is_rejected_before_path_resolution(
         assert "invalid profile name" in errors[0]["reason"]
 
 
-def test_unknown_provider_records_unrecognized_provider_note(
+def test_unknown_provider_is_not_written_to_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Regression: an unknown provider (e.g. `bedrock`) used to be written
-    # silently with api_key_env=None, leaving the user no clue which env
-    # var to populate.
+    # Regression: an unknown provider (`bedrock`, `ollama`, `auto`, …) used
+    # to be written verbatim into ``cfg.llm.provider``. That broke two
+    # invariants downstream:
+    #   1. GatewayConfig's enum-style validator rejects unknown providers.
+    #   2. ``squilla_router.tier_profile`` must agree with
+    #      ``llm.provider`` after case normalisation; a stale ``openrouter``
+    #      tier-profile vs a fresh ``auto`` provider crashes persist_config.
+    # The migrator now leaves ``llm.provider`` untouched and reports the
+    # gap so the user can configure it manually.
     source = _make_hermes_home_with_user_data(tmp_path)
     (source / "config.yaml").write_text(
         "model:\n  provider: bedrock\n  model: claude-3-opus\n", encoding="utf-8"
@@ -353,7 +359,64 @@ def test_unknown_provider_records_unrecognized_provider_note(
     mc = next(i for i in report["items"] if i["kind"] == "model-config")
     assert mc["status"] == "migrated"
     assert mc["details"]["unrecognized_provider"] == "bedrock"
+    assert "llm_provider_left_unchanged" in mc["details"]
     assert mc["details"]["manual_steps"]
+
+    import tomllib
+    data = tomllib.loads((home / "config.toml").read_text())
+    # Provider was NOT overwritten with the unknown value. The model id
+    # still came through because that's a free-form string.
+    assert data["llm"]["provider"] != "bedrock"
+    assert data["llm"]["model"] == "claude-3-opus"
+
+
+def test_hermes_auto_provider_does_not_crash_when_tier_profile_already_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reported user-facing crash:
+    #   ValidationError: squilla_router.tier_profile requires llm.provider
+    #   to match ('openrouter' != 'auto')
+    # Reproduce it by pre-seeding ~/.opensquilla/config.toml with a valid
+    # (openrouter, openrouter) pair, then run `migrate hermes` against a
+    # config that says model.provider: "auto". The migrator must NOT
+    # rewrite llm.provider to "auto" or persist_config will refuse to
+    # write the file at all.
+    source = _make_hermes_home_with_user_data(tmp_path)
+    (source / "config.yaml").write_text(
+        "model:\n  provider: auto\n  model: anthropic/claude-3-opus\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    # Seed the existing opensquilla config with matching (provider,
+    # tier_profile) — same situation the user reported on their machine.
+    (home).mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text(
+        "[llm]\nprovider = \"openrouter\"\nmodel = \"anthropic/claude-opus-4-7\"\n"
+        "api_key_env = \"OPENROUTER_API_KEY\"\n\n"
+        "[squilla_router]\ntier_profile = \"openrouter\"\n",
+        encoding="utf-8",
+    )
+
+    # Must not raise pydantic.ValidationError.
+    report = HermesMigrator(
+        HermesMigrationOptions(
+            source=source, config_path=home / "config.toml", apply=True
+        )
+    ).migrate()
+
+    mc = next(i for i in report["items"] if i["kind"] == "model-config")
+    assert mc["status"] == "migrated"
+    assert mc["details"]["unrecognized_provider"] == "auto"
+    assert mc["details"]["llm_provider_left_unchanged"] == "openrouter"
+
+    import tomllib
+    data = tomllib.loads((home / "config.toml").read_text())
+    # Pre-existing provider preserved; tier_profile still agrees with it.
+    assert data["llm"]["provider"] == "openrouter"
+    assert data["squilla_router"]["tier_profile"] == "openrouter"
+    # The migrator did pick up the model id, which is a free-form string.
+    assert data["llm"]["model"] == "anthropic/claude-3-opus"
 
 
 def test_model_id_extracted_from_nested_dict_config(
