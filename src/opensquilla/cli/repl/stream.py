@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -9,11 +10,43 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from rich.live import Live
-from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.text import Text
 
 from opensquilla.cli.ui import ACCENT, ACCENT_SOFT, console, error_panel
+
+# ESC-introduced terminal sequences: CSI (cursor / SGR / mode), OSC (title,
+# clipboard via OSC 52, hyperlink), DCS (programmable strings), plus 2-char
+# ESC sequences (e.g. ESC c full reset, ESC 7 save cursor). Stripped before
+# any model text reaches the terminal so the response cannot drive the
+# emulator — clear screen, hide cursor, write to clipboard, change title,
+# emit DA queries that the terminal answers back as input, etc.
+_ANSI_RE = re.compile(
+    r"\x1b(?:"
+    r"\[[0-?]*[ -/]*[@-~]"          # CSI ... final byte
+    r"|\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
+    r"|P[^\x1b]*\x1b\\"            # DCS ... ST
+    r"|[@-Z\\-_]"                  # 2-char ESC (RIS, IND, NEL, ...)
+    r")"
+)
+# C0 control bytes minus tab/newline; line-feed and tab are kept because
+# Markdown content legitimately uses them. Carriage return is dropped
+# (overwrite-line attack), as are backspace, bell, and form feed.
+_C0_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _sanitize_stream_text(delta: str) -> str:
+    """Strip ANSI escapes and dangerous C0 controls from streamed model text.
+
+    The token stream is written straight to ``console.file`` so the terminal
+    can render long CJK content without Live's cursor-up overflow bug. That
+    bypasses Rich's Markdown layer, which previously did the escaping for us,
+    so untrusted model output could otherwise execute terminal control
+    sequences (OSC 52 clipboard writes, title rewrites, ``\\r`` line
+    overwrites, mode toggles, DA queries that the terminal answers back as
+    user input). Keep ``\\n`` and ``\\t`` since Markdown bullets and tables
+    rely on them.
+    """
+    return _C0_RE.sub("", _ANSI_RE.sub("", delta))
 
 
 @dataclass
@@ -150,63 +183,36 @@ class WaitingIndicator:
 
 
 class StreamingRenderer:
-    """One live response renderer for gateway and standalone streams."""
+    """One streaming renderer for gateway and standalone responses.
+
+    Strategy: a transient ``Live`` waiting indicator before the first token,
+    then a plain-text token stream that writes deltas straight to the
+    terminal. There is no post-stream re-render — the streamed text is the
+    final view, matching how Claude Code, codex, aider, and other agent
+    CLIs present model output. This avoids the Rich ``Live`` + ``Markdown``
+    + ``Panel`` update loop, which leaked ghost panel borders on Windows
+    PowerShell and other terminals whenever the rendered height grew past
+    the visible viewport (CJK width-measurement made the overflow common),
+    and it also avoids the doubled output a one-shot re-render produces.
+    """
 
     def __init__(self, *, title: str = "assistant") -> None:
         self.title = title
         self.buffer = ""
         self.started_at = time.monotonic()
-        self._live: Live | None = None
         self._waiting_live: Live | None = None
-        self._live_active = False
+        self._stream_started = False
 
     def __enter__(self) -> StreamingRenderer:
         self.started_at = time.monotonic()
-        self._waiting_live = Live(
-            WaitingIndicator(self.started_at),
-            console=console,
-            refresh_per_second=12,
-            transient=True,
-        )
-        self._waiting_live.start()
+        self._start_waiting()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         self.stop()
         return False
 
-    def _panel(self) -> Panel:
-        content = Markdown(self.buffer) if self.buffer else ""
-        return Panel(content, title=f"[{ACCENT_SOFT}]{self.title}[/]", border_style=ACCENT)
-
-    def _ensure_live(self) -> None:
-        self._stop_waiting()
-        if self._live is None:
-            # Manual refresh keeps the Markdown panel race-free: every paint is
-            # driven by a buffer mutation on the asyncio thread, so the cursor
-            # never moves up by a stale height (PowerShell + CJK exposes that).
-            self._live = Live(self._panel(), console=console, auto_refresh=False)
-            self._live.start()
-            self._live_active = True
-        elif not self._live_active:
-            self._live.start()
-            self._live_active = True
-
-    def append_text(self, delta: str) -> None:
-        if not delta:
-            return
-        self.buffer += delta
-        self._ensure_live()
-        assert self._live is not None
-        self._live.update(self._panel(), refresh=True)
-
-    def pulse(self) -> None:
-        """Refresh visible feedback when the stream is alive but quiet."""
-        if self._live is not None:
-            self._ensure_live()
-            assert self._live is not None
-            self._live.update(self._panel(), refresh=True)
-            return
+    def _start_waiting(self) -> None:
         if self._waiting_live is None:
             self._waiting_live = Live(
                 WaitingIndicator(self.started_at),
@@ -216,20 +222,75 @@ class StreamingRenderer:
             )
             self._waiting_live.start()
 
+    def _stop_waiting(self) -> None:
+        if self._waiting_live is not None:
+            self._waiting_live.stop()
+            self._waiting_live = None
+
+    def _begin_stream(self) -> None:
+        """Drop the waiting indicator and print the assistant section header.
+
+        Called the first time a text delta lands, before any plain-text write,
+        so the header sits flush against the streamed content.
+        """
+        if self._stream_started:
+            return
+        self._stop_waiting()
+        console.print(f"[{ACCENT_SOFT}]{self.title}[/]")
+        self._stream_started = True
+
+    def _end_stream_line(self) -> None:
+        """Ensure subsequent console.print starts on a fresh line."""
+        if self._stream_started and self.buffer and not self.buffer.endswith("\n"):
+            console.file.write("\n")
+            console.file.flush()
+
+    def append_text(self, delta: str) -> None:
+        if not delta:
+            return
+        safe = _sanitize_stream_text(delta)
+        if not safe:
+            return
+        # Sanitized text becomes the source of truth for the live stream
+        # and for ``TurnResult.text`` (used by ``/save`` and transcript
+        # markdown), so raw model bytes that contain ANSI cannot resurface
+        # via downstream consumers.
+        self.buffer += safe
+        self._begin_stream()
+        # Write straight to the underlying stream: no Rich markup parsing
+        # (model output may contain ``[bracket]`` sequences), no auto-wrap
+        # cursor math, no Live repaint loop. The terminal handles wrapping.
+        console.file.write(safe)
+        console.file.flush()
+
+    def pulse(self) -> None:
+        """Refresh visible feedback when the stream is alive but quiet.
+
+        Pre-token: the waiting indicator's own refresh loop keeps the elapsed
+        counter alive; we just make sure it is still mounted. Mid-stream the
+        arriving tokens are the progress signal, so pulse is a no-op.
+        """
+        if not self._stream_started:
+            self._start_waiting()
+
     def error(self, message: str) -> None:
+        self._end_stream_line()
         self.stop()
         console.print(error_panel(message))
 
     def status(self, message: str, *, style: str = "dim") -> None:
-        self.stop()
+        self._end_stream_line()
+        self._stop_waiting()
         console.print(Text(message, style=style))
 
     def tool_call(self, name: str, args: Any | None = None) -> None:
-        self.stop()
+        self._end_stream_line()
+        self._stop_waiting()
         suffix = f" {args}" if args else ""
         console.print(f"[{ACCENT}]tool[/] [dim]{name}{suffix}[/dim]")
 
     def finalize(self, usage: UsageSummary | None = None, *, cancelled: bool = False) -> None:
+        self._end_stream_line()
         self.stop()
         elapsed = time.monotonic() - self.started_at
         if cancelled:
@@ -257,26 +318,24 @@ class StreamingRenderer:
 
     def stop(self) -> None:
         self._stop_waiting()
-        if self._live is not None and self._live_active:
-            self._live.stop()
-            self._live_active = False
-
-    def _stop_waiting(self) -> None:
-        if self._waiting_live is not None:
-            self._waiting_live.stop()
-            self._waiting_live = None
 
     def start(self) -> None:
-        if self._live is not None and not self._live_active:
-            self._live.start()
-            self._live_active = True
+        """Resume visible feedback after an external pause (e.g. approvals).
+
+        If no content has streamed yet, bring back the waiting indicator so
+        the user still sees that work is in progress. Once token streaming
+        has begun the next ``append_text`` resumes naturally, so there is
+        nothing to restart here.
+        """
+        if not self._stream_started:
+            self._start_waiting()
 
     @contextmanager
     def paused(self) -> Iterator[None]:
-        was_live = self._live is not None and self._live_active
+        had_waiting = self._waiting_live is not None
         self.stop()
         try:
             yield
         finally:
-            if was_live:
-                self.start()
+            if had_waiting and not self._stream_started:
+                self._start_waiting()
