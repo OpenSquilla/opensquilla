@@ -273,6 +273,7 @@ class AgentConfig:
     tool_result_compression_summary_max_tokens: int = 1024
     tool_result_compression_summary_timeout_seconds: float = 20.0
     tool_result_compression_summary_input_max_chars: int = 60_000
+    tool_result_store_dir: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def resolve_thinking(self, prompt: str | None = None) -> tuple[bool, int]:

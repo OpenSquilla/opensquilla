@@ -8,14 +8,13 @@ from typing import Any
 import pytest
 
 from opensquilla.engine.runtime import TurnRunner
-from opensquilla.engine.types import ArtifactEvent, DoneEvent, ErrorEvent, TextDeltaEvent
+from opensquilla.engine.types import ArtifactEvent, DoneEvent, TextDeltaEvent
 from opensquilla.gateway.config import AttachmentsConfig, GatewayConfig
 from opensquilla.provider import DoneEvent as ProviderDone
 from opensquilla.provider import Message, ModelInfo
 from opensquilla.provider import TextDeltaEvent as ProviderText
 from opensquilla.provider import ToolUseEndEvent as ProviderToolUseEnd
 from opensquilla.provider import ToolUseStartEvent as ProviderToolUseStart
-from opensquilla.run_contract import ArtifactRequirement, EnforcementMode, RunContract, RunProfile
 from opensquilla.session.manager import SessionManager
 from opensquilla.session.storage import SessionStorage
 from opensquilla.tools.registry import ToolRegistry, ToolSpec
@@ -97,21 +96,6 @@ class _FailedPublishProvider:
             yield ProviderDone(stop_reason="tool_use", input_tokens=1, output_tokens=1)
             return
         yield ProviderText(text="Report file is ready for download.")
-        yield ProviderDone(stop_reason="stop", input_tokens=1, output_tokens=1)
-
-    async def list_models(self) -> list[ModelInfo]:
-        return []
-
-
-class _NoArtifactProvider:
-    provider_name = "test"
-    model = "test/model"
-
-    def chat(self, messages: list[Message], tools=None, config=None) -> AsyncIterator[Any]:
-        return self._stream()
-
-    async def _stream(self) -> AsyncIterator[Any]:
-        yield ProviderText(text="Deck is ready.")
         yield ProviderDone(stop_reason="stop", input_tokens=1, output_tokens=1)
 
     async def list_models(self) -> list[ModelInfo]:
@@ -283,51 +267,5 @@ async def test_turn_runner_marks_failed_artifact_delivery_in_final_text(tmp_path
         assert "Report file is ready for download." in assistant.content
         assert "File delivery failed:" in assistant.content
         assert "artifacts" not in assistant.content
-    finally:
-        await storage.close()
-
-
-@pytest.mark.asyncio
-async def test_turn_runner_hard_fails_missing_required_artifact_on_done(tmp_path) -> None:
-    storage = SessionStorage(":memory:")
-    await storage.connect()
-    manager = SessionManager(storage)
-    session_key = "agent:main:webchat:artifact-required"
-    await manager.create(session_key)
-    runner = TurnRunner(
-        provider_selector=_ProviderSelector(_NoArtifactProvider()),
-        tool_registry=ToolRegistry(),
-        session_manager=manager,
-        config=GatewayConfig(
-            attachments=AttachmentsConfig(media_root=str(tmp_path / "media")),
-        ),
-    )
-    tool_context = ToolContext(
-        is_owner=True,
-        caller_kind=CallerKind.WEB,
-        workspace_dir=str(tmp_path),
-        run_contract=RunContract(
-            run_profile=RunProfile.BENCHMARK,
-            enforcement_mode=EnforcementMode.HARD,
-            required_artifacts=(ArtifactRequirement(extensions=(".pptx",), min_count=1),),
-        ),
-    )
-
-    try:
-        events = [
-            event
-            async for event in runner.run(
-                "make deck",
-                session_key,
-                tool_context=tool_context,
-                history_has_persisted_user=False,
-                no_memory_capture=True,
-            )
-        ]
-
-        assert not any(isinstance(event, DoneEvent) for event in events)
-        error = next(event for event in events if isinstance(event, ErrorEvent))
-        assert error.code == "required_artifact_missing"
-        assert ".pptx" in error.message
     finally:
         await storage.close()

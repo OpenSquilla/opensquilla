@@ -53,92 +53,6 @@ def _trusted_elevated_hint(ctx: RpcContext, source_hint: dict[str, Any]) -> str 
     return None
 
 
-def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in mapping:
-            return mapping[key]
-    return None
-
-
-def _optional_int(mapping: dict[str, Any], *keys: str) -> int | None:
-    value = _first_present(mapping, *keys)
-    if value is None:
-        return None
-    return int(value)
-
-
-def _artifact_requirements_from_payload(payload: Any) -> tuple[Any, ...]:
-    if payload is None:
-        return ()
-    if not isinstance(payload, list):
-        raise ValueError("runContract.requiredArtifacts must be a list")
-
-    from opensquilla.run_contract import ArtifactRequirement
-
-    requirements = []
-    for item in payload:
-        if isinstance(item, str):
-            requirements.append(ArtifactRequirement(extensions=(item,)))
-            continue
-        if not isinstance(item, dict):
-            raise ValueError("runContract.requiredArtifacts items must be strings or objects")
-        extensions = _first_present(item, "extensions", "extension", "ext")
-        normalized_extensions: tuple[str, ...]
-        if isinstance(extensions, str):
-            normalized_extensions = (extensions,)
-        elif isinstance(extensions, list):
-            normalized_extensions = tuple(str(ext) for ext in extensions if str(ext).strip())
-        else:
-            raise ValueError("runContract.requiredArtifacts[].extensions is required")
-        requirements.append(
-            ArtifactRequirement(
-                extensions=normalized_extensions,
-                min_count=int(_first_present(item, "minCount", "min_count") or 1),
-            )
-        )
-    return tuple(requirements)
-
-
-def _run_contract_from_params(params: dict[str, Any], route_envelope: Any) -> Any | None:
-    payload = _first_present(params, "runContract", "run_contract")
-    if payload is None:
-        return None
-    if not isinstance(payload, dict):
-        raise ValueError("params.runContract must be an object")
-
-    from opensquilla.gateway.routing import tool_context_from_envelope
-    from opensquilla.run_contract import (
-        apply_run_contract_overrides,
-        constrain_run_contract,
-        resolve_run_contract,
-    )
-
-    base_ctx = tool_context_from_envelope(route_envelope)
-    if base_ctx.run_contract is None:
-        raise ValueError("route did not resolve a base run contract")
-    requested_contract = resolve_run_contract(
-        caller_kind=base_ctx.caller_kind,
-        interaction_mode=base_ctx.interaction_mode,
-        channel_kind=base_ctx.channel_kind,
-        run_profile=_first_present(payload, "runProfile", "run_profile"),
-        required_artifacts=_artifact_requirements_from_payload(
-            _first_present(payload, "requiredArtifacts", "required_artifacts")
-        ),
-    )
-    requested_contract = apply_run_contract_overrides(
-        requested_contract,
-        network_search_calls=_optional_int(payload, "networkSearchCalls", "network_search_calls"),
-        network_fetch_calls=_optional_int(payload, "networkFetchCalls", "network_fetch_calls"),
-        network_text_chars=_optional_int(payload, "networkTextChars", "network_text_chars"),
-        network_per_fetch_chars=_optional_int(
-            payload,
-            "networkPerFetchChars",
-            "network_per_fetch_chars",
-        ),
-    )
-    return constrain_run_contract(base_ctx.run_contract, requested_contract)
-
-
 _STREAM_IDLE_TIMEOUT_CODE = "stream_idle_timeout"
 _STREAM_IDLE_TIMEOUT_MESSAGE = "Session event stream idle before terminal event"
 _RESET_RUNTIME_SETTLE_SECONDS = 0.25
@@ -875,9 +789,6 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
     elevated_hint = _trusted_elevated_hint(ctx, source_hint)
     if elevated_hint is not None:
         route_envelope.metadata["elevated"] = elevated_hint
-    explicit_run_contract = _run_contract_from_params(params, route_envelope)
-    if explicit_run_contract is not None:
-        route_envelope.metadata["run_contract"] = explicit_run_contract.as_dict()
 
     capture_controls = _normalize_memory_capture_controls(params)
     if capture_controls["input_provenance"] is not None:

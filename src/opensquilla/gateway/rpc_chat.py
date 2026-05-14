@@ -218,8 +218,6 @@ async def _handle_chat_send(params: dict | None, ctx: RpcContext) -> dict:
         ("provenance_kind", "provenance_kind"),
         ("runKind", "runKind"),
         ("run_kind", "run_kind"),
-        ("runContract", "runContract"),
-        ("run_contract", "run_contract"),
     ):
         if source_key in params:
             send_params[target_key] = params[source_key]

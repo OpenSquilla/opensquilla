@@ -884,45 +884,6 @@ class TestSessionsSend:
         assert runner.run_calls[0]["model"] == "agent/default"
         assert runner.run_calls[0]["tool_context"].workspace_dir == str(agent_workspace)
 
-    @pytest.mark.asyncio
-    async def test_send_applies_run_contract_payload_to_tool_context(
-        self, dispatcher, session
-    ):
-        manager = FakeSessionManager([session])
-        runner = _RecordingTurnRunner()
-        ctx = make_ctx(session_manager=manager, turn_runner=runner)
-
-        res = await dispatcher.dispatch(
-            "r1",
-            "sessions.send",
-            {
-                "key": session.session_key,
-                "message": "make a deck",
-                "runContract": {
-                    "runProfile": "benchmark",
-                    "requiredArtifacts": [".pptx"],
-                    "networkSearchCalls": 1,
-                    "networkFetchCalls": 2,
-                    "networkTextChars": 3456,
-                    "networkPerFetchChars": 789,
-                },
-            },
-            ctx,
-        )
-        task = get_agent_task_registry().get(session.session_key)
-        if task is not None:
-            await task
-
-        assert res.ok is True
-        tool_context = runner.run_calls[0]["tool_context"]
-        contract = tool_context.run_contract
-        assert contract.run_profile.value == "benchmark"
-        assert contract.required_artifacts[0].extensions == (".pptx",)
-        assert contract.network_search_calls == 1
-        assert contract.network_fetch_calls == 2
-        assert contract.network_text_chars == 3456
-        assert contract.network_per_fetch_chars == 789
-
 
 class TestSessionsAbort:
     @pytest.mark.asyncio

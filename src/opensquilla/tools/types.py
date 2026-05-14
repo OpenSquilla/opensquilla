@@ -6,10 +6,7 @@ import contextvars
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from opensquilla.run_contract import RunBudgetState, RunContract
+from typing import Any
 
 
 class CallerKind(StrEnum):
@@ -71,11 +68,6 @@ class ToolContext:
     # Additive per-call tool surface overrides (surfaced tools are made visible even
     # when exposed_by_default=False). Does NOT relax allowed_tools strict denylist.
     surfaced_tools: set[str] | None = None
-    # Per-turn runtime contract. ``run_budget_state`` is intentionally mutable
-    # and shared across parent/subagent contexts so budget use cannot reset by
-    # crossing an agent boundary.
-    run_contract: RunContract | None = None
-    run_budget_state: RunBudgetState | None = None
 
 
 # Request-scoped context — set by build_tool_handler before each dispatch.

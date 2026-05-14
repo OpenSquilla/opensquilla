@@ -9,18 +9,10 @@ Covers four gates:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 import pytest
 
-from opensquilla.run_contract import (
-    EnforcementMode,
-    RunBudgetState,
-    RunContract,
-    RunProfile,
-    get_registered_budget_state,
-)
 from opensquilla.tools.builtin import sessions as sessions_tool
 from opensquilla.tools.types import CallerKind, ToolContext, current_tool_context
 
@@ -143,40 +135,6 @@ async def test_allow_agents_unset_permits_cross_agent_spawn() -> None:
         current_tool_context.reset(token)
 
     assert len(rt.enqueued) == 1
-
-
-@pytest.mark.asyncio
-async def test_sessions_spawn_inherits_parent_run_contract_state() -> None:
-    mgr = _StubSessionManager(
-        {
-            "caller": {"id": "caller", "name": "Caller", "enabled": True},
-            "worker": {"id": "worker", "name": "Worker", "enabled": True},
-        }
-    )
-    rt = _StubTaskRuntime()
-    sessions_tool.set_session_manager(mgr)
-    sessions_tool.set_task_runtime(rt)
-    contract = RunContract(
-        run_profile=RunProfile.BENCHMARK,
-        enforcement_mode=EnforcementMode.HARD,
-        network_fetch_calls=1,
-    )
-    budget_state = RunBudgetState()
-    ctx = _ctx()
-    ctx.run_contract = contract
-    ctx.run_budget_state = budget_state
-
-    token = current_tool_context.set(ctx)
-    try:
-        await sessions_tool.sessions_spawn(agent_id="worker", task="hi")
-    finally:
-        current_tool_context.reset(token)
-
-    metadata = rt.enqueued[0]["envelope"].metadata
-    json.dumps(metadata)
-    assert metadata["run_contract"]["run_profile"] == "benchmark"
-    assert "run_budget_state" not in metadata
-    assert get_registered_budget_state(metadata["run_budget_key"]) is budget_state
 
 
 @pytest.mark.asyncio

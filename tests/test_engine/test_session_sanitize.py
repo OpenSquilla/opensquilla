@@ -156,12 +156,14 @@ def test_tool_result_compression_default_behavior_is_unchanged() -> None:
     assert agent._tool_result_compression_mode() == "truncate"
 
 
-def test_agent_aggregate_tool_result_budget_compacts_old_bulky_results() -> None:
+def test_agent_aggregate_tool_result_budget_compacts_old_bulky_results(tmp_path) -> None:
+    raw_old_output = "old bulky output\n" + ("x" * 4000)
     agent = Agent(
         provider=CapturingProvider(),
         config=AgentConfig(
             context_window_tokens=200,
             tool_result_compression_max_share=0.25,
+            tool_result_store_dir=str(tmp_path / "tool-results"),
         ),
     )
     messages = [
@@ -176,7 +178,7 @@ def test_agent_aggregate_tool_result_budget_compacts_old_bulky_results() -> None
             content=[
                 ContentBlockToolResult(
                     tool_use_id="old-1",
-                    content="old bulky output\n" + ("x" * 4000),
+                    content=raw_old_output,
                     is_error=False,
                 )
             ],
@@ -224,6 +226,7 @@ def test_agent_aggregate_tool_result_budget_compacts_old_bulky_results() -> None
     assert isinstance(err_result, ContentBlockToolResult)
     assert isinstance(new_result, ContentBlockToolResult)
     assert "aggregate_tool_result_compacted" in old_result.content
+    assert "tool_result_handle:" in old_result.content
     assert len(old_result.content) < 1000
     assert "Traceback" in err_result.content
     assert len(err_result.content) > 4000
@@ -232,6 +235,16 @@ def test_agent_aggregate_tool_result_budget_compacts_old_bulky_results() -> None
     assert agent.config.metadata["tool_aggregate_compression_applied"] is True
     assert agent.config.metadata["tool_compression_applied"] is True
     assert agent.config.metadata["tool_compression_tokens_saved"] > 0
+    from opensquilla.engine.tool_result_store import ToolResultStore
+
+    handle = next(
+        line.split(":", 1)[1].strip()
+        for line in old_result.content.splitlines()
+        if line.startswith("tool_result_handle:")
+    )
+    record = ToolResultStore(tmp_path / "tool-results").read(handle)
+    assert record.content == raw_old_output
+    assert record.tool_name == "execute_code"
 
 
 def test_agent_aggregate_tool_result_budget_uses_total_not_single_result_size() -> None:

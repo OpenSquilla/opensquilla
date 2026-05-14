@@ -1764,6 +1764,7 @@ class TurnRunner:
                     "tool_result_compression_summary_input_max_chars",
                     60_000,
                 ),
+                tool_result_store_dir=str(media_root_from_config(self._config) / "tool-results"),
                 metadata=turn.metadata,
             )
             tool_result_summarizer_provider = self._resolve_tool_result_summarizer_provider(
@@ -1995,37 +1996,6 @@ class TurnRunner:
                         event = replace(event, text=normalized_text)
                         done_event = event
                         yield TextDeltaEvent(text=notice_delta)
-                    contract = getattr(tool_context, "run_contract", None)
-                    if contract is not None and contract.required_artifacts:
-                        from opensquilla.run_contract import (
-                            EnforcementMode,
-                            artifact_missing_message,
-                            validate_required_artifacts,
-                        )
-
-                        validation = validate_required_artifacts(
-                            contract.required_artifacts,
-                            turn_artifacts,
-                        )
-                        turn.metadata["required_artifacts_result"] = {
-                            "ok": validation.ok,
-                            "missing": validation.missing,
-                        }
-                        if not validation.ok:
-                            message = artifact_missing_message(validation.missing)
-                            if contract.enforcement_mode is EnforcementMode.HARD:
-                                error_event = ErrorEvent(
-                                    message=message,
-                                    code="required_artifact_missing",
-                                )
-                                error_message = message
-                                pending_error_event = error_event
-                                done_event = None
-                                continue
-                            yield WarningEvent(
-                                code="required_artifact_missing",
-                                message=message,
-                            )
                     # Hallucination check: emit Warning BEFORE yielding Done
                     # so CLI/SDK consumers that stop reading on terminal events
                     # still see it.
@@ -2248,6 +2218,18 @@ class TurnRunner:
                         "segment_count": len(turn_segments),
                         "artifact_count": len(turn_artifacts),
                         "error": bool(error_message),
+                        "tool_compression_applied": bool(
+                            turn.metadata.get("tool_compression_applied", False)
+                        ),
+                        "tool_compression_calls": int(
+                            turn.metadata.get("tool_compression_calls", 0) or 0
+                        ),
+                        "tool_compression_tokens_saved": int(
+                            turn.metadata.get("tool_compression_tokens_saved", 0) or 0
+                        ),
+                        "tool_result_store_writes": int(
+                            turn.metadata.get("tool_result_store_writes", 0) or 0
+                        ),
                     },
                 )
 
@@ -3766,6 +3748,10 @@ class TurnRunner:
                 )
                 savings_telemetry.tool_compression_tokens_saved = metadata.get(
                     "tool_compression_tokens_saved",
+                    0,
+                )
+                savings_telemetry.tool_result_store_writes = metadata.get(
+                    "tool_result_store_writes",
                     0,
                 )
 

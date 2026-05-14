@@ -459,8 +459,6 @@ async def sessions_spawn(
             agent_id=resolved_agent_id,
             parent_task_id=parent_task_id,
             spawn_depth=spawn_depth,
-            run_contract=ctx.run_contract if ctx is not None else None,
-            run_budget_state=ctx.run_budget_state if ctx is not None else None,
         )
         handle = await runtime.enqueue(
             envelope,

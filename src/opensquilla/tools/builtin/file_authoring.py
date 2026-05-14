@@ -109,6 +109,29 @@ def _published_response(
         )
 
     store = ArtifactStore(ctx.artifact_media_root)
+    existing = store.find_existing_ref(
+        session_id=ctx.artifact_session_id,
+        session_key=ctx.session_key,
+        sha256=target_sha256,
+        name=name,
+        mime=mime,
+    )
+    if existing is not None:
+        artifact = artifact_payload(existing)
+        if not any(item.get("id") == artifact.get("id") for item in ctx.published_artifacts):
+            ctx.published_artifacts.append(artifact)
+        llm_artifact = {k: v for k, v in artifact.items() if k != "download_url"}
+        return json.dumps(
+            {
+                "status": "already_published",
+                "artifact": llm_artifact,
+                "note": (
+                    "This session already has the same generated file registered. "
+                    "Do not recreate or republish it; just confirm it is ready."
+                ),
+            },
+            ensure_ascii=False,
+        )
     try:
         ref = store.publish_bytes(
             payload,

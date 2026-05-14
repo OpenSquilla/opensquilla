@@ -242,6 +242,48 @@ class ArtifactStore:
             raise ArtifactIntegrityError("artifact material size mismatch")
         return ref, path
 
+    def find_existing_ref(
+        self,
+        *,
+        session_id: str,
+        session_key: str,
+        sha256: str,
+        name: str,
+        mime: str | None = None,
+    ) -> ArtifactRef | None:
+        """Find a previously published logical deliverable in the same session."""
+
+        session_id = _validate_non_empty("session_id", session_id)
+        session_key = _validate_non_empty("session_key", session_key)
+        sha256 = _validate_sha256(sha256)
+        safe_name = _safe_filename(name)
+        safe_mime = _safe_mime(mime) if mime else None
+        root = (
+            self.media_root
+            / ARTIFACT_STORE
+            / ARTIFACT_SESSION_BUCKET
+            / _session_store_token(session_id)
+        )
+        if not root.exists():
+            return None
+        for meta_path in sorted(root.glob("*/meta.json")):
+            try:
+                ref = ArtifactRef.from_dict(json.loads(meta_path.read_text(encoding="utf-8")))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if ref.session_id != session_id or ref.session_key != session_key:
+                continue
+            if ref.sha256 != sha256 or ref.name != safe_name:
+                continue
+            if safe_mime is not None and ref.mime != safe_mime:
+                continue
+            try:
+                self.resolve_for_download(ref.id, session_id=session_id)
+            except (ArtifactNotFoundError, ArtifactIntegrityError):
+                continue
+            return ref
+        return None
+
     def path_for(self, ref: ArtifactRef) -> Path:
         _validate_sha256(ref.sha256)
         material_path = self._artifact_dir(ref.session_id, ref.id) / ARTIFACT_MATERIAL_NAME

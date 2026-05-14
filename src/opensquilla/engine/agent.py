@@ -31,6 +31,7 @@ from opensquilla.engine.session_sanitize import (
     session_payload_chars,
 )
 from opensquilla.engine.thinking import drop_reasoning
+from opensquilla.engine.tool_result_store import ToolResultRecord, ToolResultStore
 from opensquilla.engine.tool_text_compat import strip_synthetic_tool_call_suffix
 from opensquilla.engine.tool_truncation import estimate_tokens as get_approx_tokens
 from opensquilla.engine.tool_truncation import truncate_result
@@ -568,12 +569,15 @@ class Agent:
         if self._tool_result_compression_mode() == "off":
             return messages
 
+        tool_name_by_use_id: dict[str, str] = {}
         tool_result_refs: list[tuple[int, int, ContentBlockToolResult]] = []
         for message_index, message in enumerate(messages):
             if not isinstance(message.content, list):
                 continue
             for block_index, block in enumerate(message.content):
-                if isinstance(block, ContentBlockToolResult):
+                if isinstance(block, ContentBlockToolUse):
+                    tool_name_by_use_id[block.id] = block.name
+                elif isinstance(block, ContentBlockToolResult):
                     tool_result_refs.append((message_index, block_index, block))
 
         if len(tool_result_refs) <= 2:
@@ -604,20 +608,32 @@ class Agent:
             return messages
 
         replacements: dict[tuple[int, int], ContentBlockToolResult] = {}
+        stored_handles: list[str] = []
 
         for message_index, block_index, block, content, original_tokens in eligible_refs:
             if total_tool_result_tokens <= budget_tokens:
                 break
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            stored = self._store_tool_result_snapshot(
+                content,
+                tool_use_id=block.tool_use_id,
+                tool_name=tool_name_by_use_id.get(block.tool_use_id, "tool"),
+            )
+            if stored is not None:
+                stored_handles.append(stored.handle)
             head = content[:240]
             tail = content[-240:] if len(content) > 240 else ""
             omitted = max(0, len(content) - len(head) - len(tail))
+            handle_line = (
+                f"tool_result_handle: {stored.handle}\n" if stored is not None else ""
+            )
             compacted = (
                 "[aggregate_tool_result_compacted]\n"
                 f"tool_use_id: {block.tool_use_id}\n"
                 f"original_chars: {len(content)}\n"
                 f"original_tokens_estimate: {get_approx_tokens(content)}\n"
                 f"sha256: {digest}\n"
+                f"{handle_line}"
                 f"omitted_chars: {omitted}\n"
                 "reason: older non-error tool result compacted for provider context budget.\n"
                 f"head:\n{head}"
@@ -704,10 +720,39 @@ class Agent:
             "tool_aggregate_compression",
             original_tool_results=len(tool_result_refs),
             compacted_tool_results=len(replacements),
+            tool_result_handles=stored_handles,
             tokens_before=before_tokens,
             tokens_after=after_tokens,
         )
         return compacted_messages
+
+    def _store_tool_result_snapshot(
+        self,
+        content: str,
+        *,
+        tool_use_id: str,
+        tool_name: str,
+    ) -> ToolResultRecord | None:
+        if not self.config.tool_result_store_dir:
+            return None
+        try:
+            record = ToolResultStore(self.config.tool_result_store_dir).write(
+                content,
+                tool_use_id=tool_use_id,
+                tool_name=tool_name,
+            )
+        except Exception as exc:  # pragma: no cover - storage must not break turns
+            logger.warning(
+                "tool_result_store.write_failed",
+                tool_use_id=tool_use_id,
+                tool_name=tool_name,
+                error=str(exc),
+            )
+            return None
+        self.config.metadata["tool_result_store_writes"] = (
+            self.config.metadata.get("tool_result_store_writes", 0) + 1
+        )
+        return record
 
     @staticmethod
     def _trim_summary_input(text: str, max_chars: int) -> str:
@@ -820,6 +865,20 @@ class Agent:
                 self.config.context_window_tokens,
                 max_share=self.config.tool_result_compression_max_share,
             )
+        stored = self._store_tool_result_snapshot(
+            result.content,
+            tool_use_id=result.tool_use_id,
+            tool_name=result.tool_name,
+        )
+        stored_handle = stored.handle if stored is not None else None
+        if stored is not None:
+            compressed_content = (
+                "[tool_result_projection]\n"
+                f"tool_result_handle: {stored.handle}\n"
+                f"sha256: {stored.sha256}\n"
+                f"original_chars: {stored.chars}\n"
+                f"{compressed_content}"
+            )
 
         tokens_before = get_approx_tokens(result.content)
         tokens_after = get_approx_tokens(compressed_content)
@@ -843,6 +902,7 @@ class Agent:
             tool_use_id=result.tool_use_id,
             name=result.tool_name,
             mode=applied_mode,
+            tool_result_handle=stored_handle,
             original_chars=len(result.content),
             compressed_chars=len(compressed_content),
         )
@@ -2739,7 +2799,6 @@ class Agent:
         )
 
         parent_session_key = self._session_key or "unknown"
-        parent_ctx = current_tool_context.get()
 
         # Schema-time filtering: subagents cannot see dangerous tools
         filtered_defs = [td for td in self.tool_definitions if td.name not in SUBAGENT_TOOL_DENY]
@@ -2755,8 +2814,6 @@ class Agent:
             channel_id=f"subagent:{parent_session_key}",
             sender_id=parent_session_key,
             denied_tools=set(SUBAGENT_TOOL_DENY),
-            run_contract=parent_ctx.run_contract if parent_ctx is not None else None,
-            run_budget_state=parent_ctx.run_budget_state if parent_ctx is not None else None,
         )
 
         async def _subagent_tool_handler(tc: ToolCall) -> ToolResult:
@@ -2794,6 +2851,7 @@ class Agent:
             tool_result_compression_summary_input_max_chars=(
                 self.config.tool_result_compression_summary_input_max_chars
             ),
+            tool_result_store_dir=self.config.tool_result_store_dir,
         )
         return Agent(
             provider=self.provider,

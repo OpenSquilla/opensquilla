@@ -507,36 +507,6 @@ def agent(
             "Defaults to OPENSQUILLA_AGENT_PERMISSIONS or restricted."
         ),
     ),
-    run_profile: str | None = typer.Option(
-        None,
-        "--run-profile",
-        help="Runtime contract profile: interactive, automation, benchmark, or channel.",
-    ),
-    required_artifacts: list[str] = typer.Option(
-        [],
-        "--require-artifact",
-        help="Require a generated artifact extension such as .pptx; repeat if needed.",
-    ),
-    network_search_calls: int | None = typer.Option(
-        None,
-        "--network-search-calls",
-        help="Override the run contract web_search call budget.",
-    ),
-    network_fetch_calls: int | None = typer.Option(
-        None,
-        "--network-fetch-calls",
-        help="Override the run contract web_fetch/http_request call budget.",
-    ),
-    network_text_chars: int | None = typer.Option(
-        None,
-        "--network-text-chars",
-        help="Override the run contract total network text character budget.",
-    ),
-    network_per_fetch_chars: int | None = typer.Option(
-        None,
-        "--network-per-fetch-chars",
-        help="Override the run contract per-fetch character budget.",
-    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Run a single agent turn for automation."""
@@ -566,12 +536,6 @@ def agent(
         clean_room=clean_room,
         stateless_keep_project_rules=stateless_keep_project_rules,
         permissions=permissions,
-        run_profile=run_profile,
-        required_artifacts=required_artifacts,
-        network_search_calls=network_search_calls,
-        network_fetch_calls=network_fetch_calls,
-        network_text_chars=network_text_chars,
-        network_per_fetch_chars=network_per_fetch_chars,
         json_output=json_output,
     )
 

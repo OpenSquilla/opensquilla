@@ -156,6 +156,30 @@ async def publish_artifact(
         artifact_mime = "application/octet-stream"
 
     store = ArtifactStore(ctx.artifact_media_root)
+    existing = store.find_existing_ref(
+        session_id=ctx.artifact_session_id,
+        session_key=ctx.session_key,
+        sha256=target_sha256,
+        name=name or target.name,
+        mime=artifact_mime,
+    )
+    if existing is not None:
+        payload = artifact_payload(existing)
+        if not any(item.get("id") == payload.get("id") for item in ctx.published_artifacts):
+            ctx.published_artifacts.append(payload)
+        llm_artifact = {k: v for k, v in payload.items() if k != "download_url"}
+        return json.dumps(
+            {
+                "status": "already_published",
+                "artifact": llm_artifact,
+                "note": (
+                    "This session already has the same file registered for the active "
+                    "surface. Do not call publish_artifact again for this deliverable; "
+                    "just confirm it is ready."
+                ),
+            },
+            ensure_ascii=False,
+        )
     try:
         ref = store.publish_file(
             target,

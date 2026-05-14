@@ -7,7 +7,6 @@ from typing import Any
 
 import structlog
 
-from opensquilla.run_contract import BudgetExceeded, ToolBudgetReservation
 from opensquilla.safety.injection_guard import (
     REFUSAL_REASON_TOOL_CALL_IN_UNTRUSTED,
     extract_tool_call_refusal_reason,
@@ -267,56 +266,13 @@ def build_tool_handler(
                     ),
                 )
 
-        reservation: ToolBudgetReservation | None = None
-        dispatch_arguments = dict(tool_call.arguments)
-        if effective_ctx and effective_ctx.run_contract is not None:
-            if effective_ctx.run_budget_state is None:
-                from opensquilla.run_contract import RunBudgetState
-
-                effective_ctx.run_budget_state = RunBudgetState()
-            try:
-                reservation = await effective_ctx.run_budget_state.reserve_tool_call(
-                    effective_ctx.run_contract,
-                    tool_call.tool_name,
-                    dispatch_arguments,
-                )
-                dispatch_arguments = reservation.arguments
-            except BudgetExceeded as exc:
-                log.warning(
-                    "dispatch.run_budget_exceeded",
-                    tool=tool_call.tool_name,
-                    tool_use_id=tool_call.tool_use_id,
-                    agent_id=effective_ctx.agent_id,
-                    session_key=effective_ctx.session_key,
-                )
-                return _build_envelope_result(
-                    tool_call,
-                    exc=exc,
-                    policy_denial=True,
-                    error_class_override="BudgetExceeded",
-                    user_message_override=exc.user_message,
-                )
-
         # Dispatch to handler — set request-scoped context for tools that need agent_id
         token = current_tool_context.set(effective_ctx)
-        committed_budget = False
         try:
             artifact_start = (
                 len(effective_ctx.published_artifacts) if effective_ctx is not None else 0
             )
-            result = await registered.handler(**dispatch_arguments)
-            if (
-                effective_ctx
-                and effective_ctx.run_contract is not None
-                and effective_ctx.run_budget_state is not None
-                and reservation is not None
-            ):
-                await effective_ctx.run_budget_state.commit_tool_result(
-                    effective_ctx.run_contract,
-                    reservation,
-                    result,
-                )
-                committed_budget = True
+            result = await registered.handler(**tool_call.arguments)
             if not _has_live_approval_surface(effective_ctx):
                 pending = _extract_pending_approval(result)
                 if pending is not None:
@@ -362,22 +318,7 @@ def build_tool_handler(
                 is_error=denial,
                 artifacts=artifacts,
             )
-        except BudgetExceeded as exc:
-            return _build_envelope_result(
-                tool_call,
-                exc=exc,
-                policy_denial=True,
-                error_class_override="BudgetExceeded",
-                user_message_override=exc.user_message,
-            )
         except Exception as exc:
-            if (
-                effective_ctx
-                and effective_ctx.run_budget_state is not None
-                and reservation is not None
-                and not committed_budget
-            ):
-                await effective_ctx.run_budget_state.abort_tool_result(reservation)
             # Stable failure envelope, no raw exception leakage.
             envelope = build_tool_failure_envelope(exc, tool_call.tool_name)
             log.warning(

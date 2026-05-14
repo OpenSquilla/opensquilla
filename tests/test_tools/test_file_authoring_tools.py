@@ -20,7 +20,7 @@ from opensquilla.tools.types import CallerKind, ToolContext, current_tool_contex
 
 def _channel_artifact_context(tmp_path: Path) -> ToolContext:
     workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    workspace.mkdir(exist_ok=True)
     return ToolContext(
         is_owner=False,
         caller_kind=CallerKind.CHANNEL,
@@ -124,6 +124,53 @@ async def test_create_pptx_publishes_channel_artifact(tmp_path: Path) -> None:
     slide = presentation.slides[0]
     assert slide.shapes.title.text == "Launch Readiness"
     assert "Group reply works" in slide.placeholders[1].text
+
+
+@pytest.mark.asyncio
+async def test_create_pptx_reuses_existing_session_deliverable_across_contexts(
+    tmp_path: Path,
+) -> None:
+    ctx1 = _channel_artifact_context(tmp_path)
+    token = current_tool_context.set(ctx1)
+    try:
+        first = json.loads(
+            await create_pptx(
+                name="brief.pptx",
+                slides=[
+                    {
+                        "title": "Launch Readiness",
+                        "bullets": ["Group reply works", "File artifacts are safe"],
+                    }
+                ],
+            )
+        )
+    finally:
+        current_tool_context.reset(token)
+
+    ctx2 = _channel_artifact_context(tmp_path)
+    ctx2.artifact_session_id = ctx1.artifact_session_id
+    ctx2.session_key = ctx1.session_key
+    token = current_tool_context.set(ctx2)
+    try:
+        second = json.loads(
+            await create_pptx(
+                name="brief.pptx",
+                slides=[
+                    {
+                        "title": "Launch Readiness",
+                        "bullets": ["Group reply works", "File artifacts are safe"],
+                    }
+                ],
+            )
+        )
+    finally:
+        current_tool_context.reset(token)
+
+    assert first["status"] == "published"
+    assert second["status"] == "already_published"
+    assert second["artifact"]["id"] == first["artifact"]["id"]
+    assert len(ctx2.published_artifacts) == 1
+    assert ctx2.published_artifacts[0]["id"] == first["artifact"]["id"]
 
 
 @pytest.mark.asyncio

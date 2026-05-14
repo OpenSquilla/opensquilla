@@ -42,6 +42,66 @@ def test_artifact_store_round_trips_metadata_and_bytes(tmp_path: Path) -> None:
     assert resolved_path == path
 
 
+def test_artifact_store_finds_existing_session_deliverable_by_name_and_sha(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path)
+    ref = store.publish_bytes(
+        b"pptx bytes",
+        session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+        name="brief.pptx",
+        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        source="create_pptx",
+    )
+
+    found = store.find_existing_ref(
+        session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+        sha256=ref.sha256,
+        name="brief.pptx",
+        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+
+    assert found == ref
+    assert (
+        store.find_existing_ref(
+            session_id="session-2",
+            session_key="agent:main:webchat:session-2",
+            sha256=ref.sha256,
+            name="brief.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        is None
+    )
+
+
+def test_artifact_store_skips_existing_deliverable_with_bad_material(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(tmp_path)
+    ref = store.publish_bytes(
+        b"pptx bytes",
+        session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+        name="brief.pptx",
+        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        source="create_pptx",
+    )
+    store.path_for(ref).write_bytes(b"corrupt")
+
+    assert (
+        store.find_existing_ref(
+            session_id="session-1",
+            session_key="agent:main:webchat:session-1",
+            sha256=ref.sha256,
+            name="brief.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        is None
+    )
+
+
 def test_artifact_store_uses_short_material_paths_for_uuid_sessions(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path)
     long_root = tmp_path / ("deep-root-" + ("x" * 80))
@@ -240,6 +300,60 @@ async def test_publish_artifact_tool_is_idempotent_for_existing_turn_artifact(
     assert second["artifact"]["name"] == "generated-image.png"
     assert "already registered" in second["note"]
     assert len(ctx.published_artifacts) == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_artifact_tool_reuses_existing_session_deliverable_across_contexts(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = workspace / "brief.pptx"
+    output.write_bytes(b"pptx bytes")
+    media_root = tmp_path / "media"
+
+    ctx1 = ToolContext(
+        workspace_dir=str(workspace),
+        artifact_media_root=str(media_root),
+        artifact_session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+    )
+    token = current_tool_context.set(ctx1)
+    try:
+        first = json.loads(
+            await publish_artifact(
+                path="brief.pptx",
+                name="brief.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+        )
+    finally:
+        current_tool_context.reset(token)
+
+    ctx2 = ToolContext(
+        workspace_dir=str(workspace),
+        artifact_media_root=str(media_root),
+        artifact_session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+    )
+    token = current_tool_context.set(ctx2)
+    try:
+        second = json.loads(
+            await publish_artifact(
+                path="brief.pptx",
+                name="brief.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+        )
+    finally:
+        current_tool_context.reset(token)
+
+    assert first["status"] == "published"
+    assert second["status"] == "already_published"
+    assert second["artifact"]["id"] == first["artifact"]["id"]
+    assert len(ctx1.published_artifacts) == 1
+    assert len(ctx2.published_artifacts) == 1
+    assert ctx2.published_artifacts[0]["id"] == first["artifact"]["id"]
 
 
 @pytest.mark.asyncio

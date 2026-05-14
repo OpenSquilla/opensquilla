@@ -38,8 +38,6 @@ class AgentRunResult:
     usage_path: str | None = None
     artifacts: list[dict[str, Any]] | None = None
     routing: dict[str, Any] | None = None
-    run_contract: dict[str, Any] | None = None
-    budget_usage: dict[str, Any] | None = None
 
 
 def _cli_sender_id() -> str:
@@ -104,12 +102,6 @@ async def run_agent_once(
     scratch_dir: str | None = None,
     workspace_lockdown: bool = False,
     permissions: str | None = None,
-    run_profile: str | None = None,
-    required_artifacts: list[str] | tuple[str, ...] | None = None,
-    network_search_calls: int | None = None,
-    network_fetch_calls: int | None = None,
-    network_text_chars: int | None = None,
-    network_per_fetch_chars: int | None = None,
 ) -> AgentRunResult:
     """Run a single agent turn through build_services() and TurnRunner.run()."""
     from opensquilla.agents.scope import resolve_agent_workspace_dir
@@ -120,11 +112,6 @@ async def run_agent_once(
     from opensquilla.gateway.config import GatewayConfig
     from opensquilla.gateway.routing import build_cli_route_envelope, tool_context_from_envelope
     from opensquilla.paths import media_root_from_config
-    from opensquilla.run_contract import (
-        ArtifactRequirement,
-        apply_run_contract_overrides,
-        resolve_run_contract,
-    )
     from opensquilla.session.keys import canonicalize_session_key, normalize_agent_id
     from opensquilla.tools.types import InteractionMode
 
@@ -253,35 +240,6 @@ async def run_agent_once(
         )
         tool_ctx.scratch_dir = effective_scratch_dir
         tool_ctx.workspace_lockdown = workspace_lockdown
-        artifact_requirements = tuple(
-            ArtifactRequirement(extensions=(item,))
-            for item in (required_artifacts or [])
-            if str(item).strip()
-        )
-        tool_ctx.run_contract = resolve_run_contract(
-            caller_kind=tool_ctx.caller_kind,
-            interaction_mode=tool_ctx.interaction_mode,
-            channel_kind=tool_ctx.channel_kind,
-            run_profile=run_profile,
-            required_artifacts=artifact_requirements,
-        )
-        tool_ctx.run_contract = apply_run_contract_overrides(
-            tool_ctx.run_contract,
-            network_search_calls=network_search_calls,
-            network_fetch_calls=network_fetch_calls,
-            network_text_chars=network_text_chars,
-            network_per_fetch_chars=network_per_fetch_chars,
-        )
-        if tool_ctx.run_budget_state is None:
-            from opensquilla.run_contract import RunBudgetState
-
-            tool_ctx.run_budget_state = RunBudgetState()
-        effective_max_iterations = max_iterations
-        cap = tool_ctx.run_contract.max_iterations_cap
-        if cap is not None:
-            effective_max_iterations = (
-                cap if effective_max_iterations is None else min(effective_max_iterations, cap)
-            )
 
         runner = build_turn_runner_from_services(svc)
         bootstrap_context_mode = _bootstrap_context_mode(
@@ -297,7 +255,7 @@ async def run_agent_once(
             agent_id=agent_id,
             model=effective_model,
             timeout=timeout,
-            max_iterations=effective_max_iterations,
+            max_iterations=max_iterations,
             iteration_timeout=iteration_timeout,
             tool_timeout=tool_timeout,
             request_timeout=request_timeout,
@@ -342,12 +300,6 @@ async def run_agent_once(
         usage_path=usage_path,
         artifacts=artifacts,
         routing=_routing_from_done(done),
-        run_contract=tool_ctx.run_contract.as_dict() if tool_ctx.run_contract else None,
-        budget_usage=(
-            tool_ctx.run_budget_state.usage_dict()
-            if tool_ctx.run_budget_state is not None
-            else None
-        ),
     )
 
 
@@ -773,36 +725,6 @@ def run_agent_command(
             "Defaults to OPENSQUILLA_AGENT_PERMISSIONS or restricted."
         ),
     ),
-    run_profile: str | None = typer.Option(
-        None,
-        "--run-profile",
-        help="Runtime contract profile: interactive, automation, benchmark, or channel.",
-    ),
-    required_artifacts: list[str] = typer.Option(
-        [],
-        "--require-artifact",
-        help="Require a generated artifact extension such as .pptx; repeat if needed.",
-    ),
-    network_search_calls: int | None = typer.Option(
-        None,
-        "--network-search-calls",
-        help="Override the run contract web_search call budget.",
-    ),
-    network_fetch_calls: int | None = typer.Option(
-        None,
-        "--network-fetch-calls",
-        help="Override the run contract web_fetch/http_request call budget.",
-    ),
-    network_text_chars: int | None = typer.Option(
-        None,
-        "--network-text-chars",
-        help="Override the run contract total network text character budget.",
-    ),
-    network_per_fetch_chars: int | None = typer.Option(
-        None,
-        "--network-per-fetch-chars",
-        help="Override the run contract per-fetch character budget.",
-    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Run a single agent turn for automation."""
@@ -831,12 +753,6 @@ def run_agent_command(
     clean_room = _unwrap_typer_default(clean_room)
     stateless_keep_project_rules = _unwrap_typer_default(stateless_keep_project_rules)
     permissions = _unwrap_typer_default(permissions)
-    run_profile = _unwrap_typer_default(run_profile)
-    required_artifacts = _unwrap_typer_default(required_artifacts)
-    network_search_calls = _unwrap_typer_default(network_search_calls)
-    network_fetch_calls = _unwrap_typer_default(network_fetch_calls)
-    network_text_chars = _unwrap_typer_default(network_text_chars)
-    network_per_fetch_chars = _unwrap_typer_default(network_per_fetch_chars)
     json_output = _unwrap_typer_default(json_output)
 
     result = asyncio.run(
@@ -865,12 +781,6 @@ def run_agent_command(
             stateless=stateless or clean_room,
             stateless_keep_project_rules=stateless_keep_project_rules,
             permissions=permissions,
-            run_profile=run_profile,
-            required_artifacts=list(required_artifacts or []),
-            network_search_calls=network_search_calls,
-            network_fetch_calls=network_fetch_calls,
-            network_text_chars=network_text_chars,
-            network_per_fetch_chars=network_per_fetch_chars,
         )
     )
     artifacts = _public_artifacts(result.artifacts)
@@ -890,8 +800,6 @@ def run_agent_command(
         "transcript_path": result.transcript_path,
         "usage_path": result.usage_path,
         "artifacts": artifacts,
-        "run_contract": result.run_contract,
-        "budget_usage": result.budget_usage,
     }
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False))

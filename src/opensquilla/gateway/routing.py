@@ -289,8 +289,6 @@ def build_subagent_route_envelope(
     parent_task_id: str | None = None,
     spawn_depth: int = 0,
     origin: str = "sessions_spawn",
-    run_contract: Any | None = None,
-    run_budget_state: Any | None = None,
 ) -> RouteEnvelope:
     """Build a route for a child subagent run."""
     metadata = {
@@ -300,14 +298,6 @@ def build_subagent_route_envelope(
         "spawn_depth": spawn_depth,
         "origin": origin,
     }
-    if run_contract is not None:
-        metadata["run_contract"] = (
-            run_contract.as_dict() if hasattr(run_contract, "as_dict") else run_contract
-        )
-    if run_budget_state is not None:
-        from opensquilla.run_contract import register_budget_state
-
-        metadata["run_budget_key"] = register_budget_state(run_budget_state)
     return RouteEnvelope(
         source_kind=SourceKind.SUBAGENT,
         source_name="subagent",
@@ -381,31 +371,6 @@ def tool_context_from_envelope(
         denied_tools=denied_tools,
         elevated=elevated,
     )
-    from opensquilla.run_contract import (
-        RunBudgetState,
-        get_registered_budget_state,
-        resolve_run_contract,
-        run_contract_from_dict,
-    )
-
-    inherited_contract = envelope.metadata.get("run_contract")
-    if isinstance(inherited_contract, dict):
-        ctx.run_contract = run_contract_from_dict(inherited_contract)
-    else:
-        ctx.run_contract = (
-            inherited_contract
-            if inherited_contract is not None
-            else resolve_run_contract(
-                caller_kind=caller_kind,
-                interaction_mode=interaction_mode,
-                channel_kind=ctx.channel_kind,
-            )
-        )
-    inherited_budget_state = get_registered_budget_state(envelope.metadata.get("run_budget_key"))
-    if inherited_budget_state is not None:
-        ctx.run_budget_state = inherited_budget_state
-    elif ctx.run_contract is not None:
-        ctx.run_budget_state = RunBudgetState()
     if caller_kind is CallerKind.CRON:
         ctx = apply_tool_policy_layer(
             ctx,
