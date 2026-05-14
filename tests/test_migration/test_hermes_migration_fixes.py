@@ -419,6 +419,56 @@ def test_hermes_auto_provider_does_not_crash_when_tier_profile_already_set(
     assert data["llm"]["model"] == "anthropic/claude-3-opus"
 
 
+def test_known_provider_differing_from_tier_profile_does_not_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same crash class as the "auto" case, but with a provider that IS in
+    # PROVIDER_ENV_KEYS (so the old fix's "unknown branch" doesn't catch it).
+    # Hermes config: provider=anthropic. Existing opensquilla home: tier_profile
+    # already pinned to openrouter. Writing llm.provider=anthropic would
+    # violate GatewayConfig._validate_squilla_router_tier_profile_provider and
+    # abort the whole migration with pydantic ValidationError.
+    source = _make_hermes_home_with_user_data(tmp_path)
+    (source / "config.yaml").write_text(
+        "model:\n  provider: anthropic\n  model: claude-3-5-sonnet\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    (home).mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text(
+        "[llm]\nprovider = \"openrouter\"\nmodel = \"anthropic/claude-opus-4-7\"\n"
+        "api_key_env = \"OPENROUTER_API_KEY\"\n\n"
+        "[squilla_router]\ntier_profile = \"openrouter\"\n",
+        encoding="utf-8",
+    )
+
+    # Must not raise pydantic.ValidationError.
+    report = HermesMigrator(
+        HermesMigrationOptions(
+            source=source, config_path=home / "config.toml", apply=True
+        )
+    ).migrate()
+
+    mc = next(i for i in report["items"] if i["kind"] == "model-config")
+    assert mc["status"] == "migrated"
+    # Report surfaces the conflict explicitly so the user can act on it.
+    assert mc["details"]["tier_profile_conflict"] == "openrouter"
+    assert mc["details"]["llm_provider_left_unchanged"] == "openrouter"
+    assert "manual_steps" in mc["details"]
+    # Crucially we did NOT mislabel this as "unrecognized" — anthropic IS a
+    # known provider, it just clashes with the pinned tier_profile.
+    assert "unrecognized_provider" not in mc["details"]
+
+    import tomllib
+    data = tomllib.loads((home / "config.toml").read_text())
+    # Pre-existing provider preserved; tier_profile still agrees with it.
+    assert data["llm"]["provider"] == "openrouter"
+    assert data["squilla_router"]["tier_profile"] == "openrouter"
+    # The model id was still picked up.
+    assert data["llm"]["model"] == "claude-3-5-sonnet"
+
+
 def test_model_id_extracted_from_nested_dict_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -539,6 +589,63 @@ def test_mcp_servers_malformed_entries_are_reported_as_dropped(
     assert mcp_item["status"] == "migrated"
     assert mcp_item["details"]["server_count"] == 1
     assert mcp_item["details"]["dropped_entries"] == ["broken"]
+
+
+def test_mcp_migration_preserves_existing_opensquilla_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: the migrator used to assign cfg.mcp.servers = imported,
+    # silently destroying any MCP servers the user already had configured.
+    # New behavior is upsert-by-name: same-name entries are replaced (with
+    # the hermes definition winning), unrelated entries are preserved.
+    source = _make_hermes_home_with_user_data(tmp_path)
+    (source / "config.yaml").write_text(
+        """model:
+  provider: openrouter
+mcp:
+  servers:
+    fresh-from-hermes:
+      command: /usr/bin/new-tool
+    shared-name:
+      command: /override/from/hermes
+""",
+        encoding="utf-8",
+    )
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text(
+        "[mcp]\nenabled = true\n\n"
+        "[[mcp.servers]]\n"
+        "name = \"shared-name\"\ncommand = \"/usr/local/bin/old\"\ntransport = \"stdio\"\n\n"
+        "[[mcp.servers]]\n"
+        "name = \"opensquilla-only\"\ncommand = \"/usr/local/bin/keep-me\"\n"
+        "transport = \"stdio\"\n",
+        encoding="utf-8",
+    )
+
+    report = HermesMigrator(
+        HermesMigrationOptions(
+            source=source, config_path=home / "config.toml", apply=True
+        )
+    ).migrate()
+
+    mcp_item = next(i for i in report["items"] if i["kind"] == "mcp-servers")
+    assert mcp_item["status"] == "migrated"
+    assert mcp_item["details"]["added"] == ["fresh-from-hermes"]
+    assert mcp_item["details"]["replaced"] == ["shared-name"]
+    assert mcp_item["details"]["preserved_existing"] == ["opensquilla-only"]
+
+    import tomllib
+    data = tomllib.loads((home / "config.toml").read_text())
+    by_name = {s["name"]: s for s in data["mcp"]["servers"]}
+    # Pre-existing unrelated server still here.
+    assert by_name["opensquilla-only"]["command"] == "/usr/local/bin/keep-me"
+    # Same-name conflict: hermes version wins (the user invoked migrate;
+    # they asked for the import).
+    assert by_name["shared-name"]["command"] == "/override/from/hermes"
+    # New hermes server added.
+    assert by_name["fresh-from-hermes"]["command"] == "/usr/bin/new-tool"
 
 
 def test_repeated_migrate_secrets_does_not_duplicate_env_entries(
@@ -712,3 +819,49 @@ def test_skill_with_missing_frontmatter_is_reported_not_loadable(
     )
     assert item["details"]["compatibility"] == "not_loadable"
     assert "missing YAML frontmatter" in item["details"]["compatibility_issues"]
+
+
+def test_skill_with_empty_frontmatter_does_not_crash_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: an empty YAML frontmatter block (``---\n\n---\n``) parses
+    # to None, and the migrator used to call ``.get(...)`` on it,
+    # crashing the entire migration with AttributeError. The skill should
+    # be reported as not_loadable, not propagate as an unhandled exception.
+    source = _make_hermes_home_with_user_data(tmp_path)
+    skill = source / "skills" / "empty-fm"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\n\n---\nbody\n", encoding="utf-8")
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+
+    report = HermesMigrator(HermesMigrationOptions(source=source, apply=True)).migrate()
+
+    item = next(
+        i for i in report["items"]
+        if i["kind"] == "skills" and "empty-fm" in (i["source"] or "")
+    )
+    assert item["details"]["opensquilla_loadable"] is False
+    assert item["details"]["compatibility"] == "not_loadable"
+    assert "missing frontmatter name" in item["details"]["compatibility_issues"]
+
+
+def test_skill_with_list_frontmatter_does_not_crash_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Non-dict frontmatter (e.g. a YAML list) used to crash with
+    # AttributeError on .get; report it as not_loadable instead.
+    source = _make_hermes_home_with_user_data(tmp_path)
+    skill = source / "skills" / "list-fm"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\n- one\n- two\n---\nbody\n", encoding="utf-8")
+    home = tmp_path / "opensquilla-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+
+    report = HermesMigrator(HermesMigrationOptions(source=source, apply=True)).migrate()
+
+    item = next(
+        i for i in report["items"]
+        if i["kind"] == "skills" and "list-fm" in (i["source"] or "")
+    )
+    assert item["details"]["compatibility"] == "not_loadable"

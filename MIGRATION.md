@@ -309,6 +309,29 @@ behaviors that were previously documented but not implemented:
   still migrated, and the model-config item carries
   `details.unrecognized_provider`, `details.llm_provider_left_unchanged`,
   and a `manual_steps` hint explaining how to set the provider explicitly.
+- **Known providers that clash with an existing
+  `squilla_router.tier_profile` are also not written.** Even when the
+  Hermes provider is recognized (e.g. `anthropic`), persisting it would
+  fail if the destination home already pins `squilla_router.tier_profile`
+  to a different provider (e.g. `openrouter`) — OpenSquilla requires the
+  two to match. The migrator now detects the clash, leaves `llm.provider`
+  unchanged, and records `details.tier_profile_conflict`,
+  `details.llm_provider_left_unchanged`, and a `manual_steps` hint so you
+  can switch providers explicitly via `opensquilla config set` or by
+  clearing `squilla_router.tier_profile` first.
+- **MCP server entries upsert instead of replacing.** Both migrators
+  used to assign `cfg.mcp.servers = imported`, silently destroying any
+  pre-existing OpenSquilla MCP servers the user already had configured.
+  Now the imported servers are upserted by name: same-name entries are
+  replaced (the imported version wins), unrelated entries are preserved.
+  The `mcp-servers` report record carries `details.added`,
+  `details.replaced`, and `details.preserved_existing`.
+- **Resilient SKILL.md compatibility check.** A SKILL.md with empty or
+  non-dict YAML frontmatter (e.g. `---\n\n---`) used to crash the whole
+  migration with `AttributeError`. The check now records the skill as
+  `compatibility: "not_loadable"` and continues. The reported
+  `compatibility` string is also kept consistent with the
+  `opensquilla_loadable` boolean.
 
 ## Reports
 

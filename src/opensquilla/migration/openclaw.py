@@ -1192,10 +1192,16 @@ class OpenClawMigrator:
                 "compatibility": "not_loadable",
                 "compatibility_issues": ["invalid YAML frontmatter"],
             }
-        if not isinstance(frontmatter, dict) or not frontmatter.get("name"):
+        # YAML frontmatter may parse to None (empty), a list, or a scalar.
+        # ``None.get(...)`` previously crashed the entire migration.
+        if not isinstance(frontmatter, dict):
             issues.append("missing frontmatter name")
-        if not frontmatter.get("description"):
             issues.append("missing frontmatter description")
+        else:
+            if not frontmatter.get("name"):
+                issues.append("missing frontmatter name")
+            if not frontmatter.get("description"):
+                issues.append("missing frontmatter description")
         loadable = not any(
             issue
             for issue in issues
@@ -1205,9 +1211,15 @@ class OpenClawMigrator:
                 "missing frontmatter name",
             }
         )
+        if loadable and not issues:
+            compatibility = "loadable"
+        elif loadable:
+            compatibility = "needs_review"
+        else:
+            compatibility = "not_loadable"
         return {
             "opensquilla_loadable": loadable,
-            "compatibility": "loadable" if loadable and not issues else "needs_review",
+            "compatibility": compatibility,
             "compatibility_issues": issues,
         }
 
@@ -1355,8 +1367,22 @@ class OpenClawMigrator:
         if not entries:
             self._record("mcp-servers", self.source / "openclaw.json", self.config_path, "skipped")
             return
+        # Upsert by name into the existing list rather than replacing it
+        # wholesale, so pre-existing opensquilla MCP servers survive the
+        # migration. The previous assignment was a silent destructive write.
+        existing_servers = list(cfg.mcp.servers)
+        existing_by_name = {s.name: idx for idx, s in enumerate(existing_servers)}
+        added: list[str] = []
+        replaced: list[str] = []
+        for entry in entries:
+            if entry.name in existing_by_name:
+                existing_servers[existing_by_name[entry.name]] = entry
+                replaced.append(entry.name)
+            else:
+                existing_servers.append(entry)
+                added.append(entry.name)
         cfg.mcp.enabled = True
-        cfg.mcp.servers = entries
+        cfg.mcp.servers = existing_servers
         self._config_changed = True
         self._record(
             "mcp-servers",
@@ -1365,6 +1391,12 @@ class OpenClawMigrator:
             "migrated" if self.options.apply else "planned",
             details={
                 "count": len(entries),
+                "added": added,
+                "replaced": replaced,
+                "preserved_existing": [
+                    s.name for s in existing_servers
+                    if s.name not in {e.name for e in entries}
+                ],
                 "unsupported_fields": unsupported_fields,
             },
         )

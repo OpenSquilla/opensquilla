@@ -531,18 +531,35 @@ class HermesMigrator:
                 "compatibility": "not_loadable",
                 "compatibility_issues": ["invalid YAML frontmatter"],
             }
-        if not isinstance(frontmatter, dict) or not frontmatter.get("name"):
+        # YAML frontmatter may parse to None (empty), a list, or a scalar.
+        # In any non-dict case we can't pluck name/description out of it.
+        # Treat it as missing both fields rather than crashing the whole
+        # migration with AttributeError on ``None.get("description")``.
+        if not isinstance(frontmatter, dict):
             issues.append("missing frontmatter name")
-        if not frontmatter.get("description"):
             issues.append("missing frontmatter description")
+        else:
+            if not frontmatter.get("name"):
+                issues.append("missing frontmatter name")
+            if not frontmatter.get("description"):
+                issues.append("missing frontmatter description")
         blocking = {
             "SKILL.md exceeds OpenSquilla skill file size limit",
             "missing frontmatter name",
         }
         loadable = not any(issue in blocking for issue in issues)
+        # Keep the string and the bool in agreement. The previous variant
+        # returned ``needs_review`` even when ``opensquilla_loadable`` was
+        # ``False``, contradicting itself in the report.
+        if loadable and not issues:
+            compatibility = "loadable"
+        elif loadable:
+            compatibility = "needs_review"
+        else:
+            compatibility = "not_loadable"
         return {
             "opensquilla_loadable": loadable,
-            "compatibility": "loadable" if loadable and not issues else "needs_review",
+            "compatibility": compatibility,
             "compatibility_issues": issues,
         }
 
@@ -640,11 +657,47 @@ class HermesMigrator:
         details: dict[str, Any] = {}
         if provider:
             env_key = PROVIDER_ENV_KEYS.get(target_provider)
-            if env_key is not None:
-                # Recognized OpenSquilla provider — write provider and
-                # the corresponding env-var name.
+            # ``squilla_router.tier_profile`` (if set) must agree with
+            # ``llm.provider`` after case normalisation, per
+            # GatewayConfig._validate_squilla_router_tier_profile_provider.
+            # When the new provider would violate that invariant we skip
+            # the write — silently overwriting llm.provider here used to
+            # make persist_config raise pydantic ValidationError and abort
+            # the entire migration.
+            existing_profile = getattr(
+                getattr(cfg, "squilla_router", None), "tier_profile", None
+            )
+            normalized_profile = (existing_profile or "").strip().lower()
+            normalized_new_provider = (target_provider or "").strip().lower()
+            tier_profile_conflicts = bool(
+                existing_profile
+                and normalized_profile != normalized_new_provider
+            )
+            if env_key is not None and not tier_profile_conflicts:
+                # Recognized OpenSquilla provider, no router-profile clash —
+                # write provider and the corresponding env-var name.
                 cfg.llm.provider = target_provider
                 cfg.llm.api_key_env = env_key
+            elif env_key is not None and tier_profile_conflicts:
+                # Provider is known to OpenSquilla but the existing
+                # squilla_router.tier_profile pins the home to a
+                # different provider. Don't break that invariant; tell
+                # the user what we skipped and why.
+                preserved = cfg.llm.provider
+                details["llm_provider_left_unchanged"] = preserved
+                details["tier_profile_conflict"] = existing_profile
+                details["manual_steps"] = [
+                    (
+                        f"hermes config.yaml asks for "
+                        f"model.provider={target_provider!r}, but "
+                        f"squilla_router.tier_profile is currently "
+                        f"{existing_profile!r}. OpenSquilla requires these "
+                        f"two to match. llm.provider was left as "
+                        f"{preserved!r}. To switch providers, either clear "
+                        f"squilla_router.tier_profile or set both fields "
+                        f"explicitly with `opensquilla config set`."
+                    )
+                ]
             else:
                 # Unrecognized provider: do NOT write it into
                 # ``cfg.llm.provider``. Hermes uses values like ``auto``
@@ -772,7 +825,11 @@ class HermesMigrator:
                 details={"dropped_entries": dropped} if dropped else None,
             )
             return
-        entries: list[MCPServerEntry] = []
+        # Build the imported entries first, then upsert by name into the
+        # existing list. The previous implementation replaced
+        # ``cfg.mcp.servers`` wholesale, silently destroying any
+        # pre-existing opensquilla MCP servers the user had configured.
+        imported: list[MCPServerEntry] = []
         for name, raw in servers.items():
             entry: dict[str, Any] = {"name": name}
             for key in ("command", "args", "env", "url"):
@@ -782,12 +839,30 @@ class HermesMigrator:
                 entry["transport"] = "sse"
             elif entry.get("command"):
                 entry["transport"] = "stdio"
-            entries.append(MCPServerEntry.model_validate(entry))
+            imported.append(MCPServerEntry.model_validate(entry))
         cfg = self._config()
+        existing_servers = list(cfg.mcp.servers)
+        existing_by_name = {s.name: idx for idx, s in enumerate(existing_servers)}
+        replaced: list[str] = []
+        added: list[str] = []
+        for entry in imported:
+            if entry.name in existing_by_name:
+                existing_servers[existing_by_name[entry.name]] = entry
+                replaced.append(entry.name)
+            else:
+                existing_servers.append(entry)
+                added.append(entry.name)
         cfg.mcp.enabled = True
-        cfg.mcp.servers = entries
+        cfg.mcp.servers = existing_servers
         self._config_changed = True
-        details: dict[str, Any] = {"server_count": len(entries)}
+        details: dict[str, Any] = {
+            "server_count": len(imported),
+            "added": added,
+            "replaced": replaced,
+            "preserved_existing": [
+                s.name for s in existing_servers if s.name not in {e.name for e in imported}
+            ],
+        }
         if dropped:
             details["dropped_entries"] = dropped
         self._record(
