@@ -273,6 +273,8 @@ class AgentConfig:
     tool_result_compression_summary_max_tokens: int = 1024
     tool_result_compression_summary_timeout_seconds: float = 20.0
     tool_result_compression_summary_input_max_chars: int = 60_000
+    tool_result_provider_request_max_chars: int = 96_000
+    tool_result_external_keep_recent: int = 2
     tool_result_store_dir: str | None = None
     tool_result_store_session_id: str | None = None
     tool_result_store_session_key: str | None = None

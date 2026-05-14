@@ -48,7 +48,6 @@ _PASSWD_ENTRY_RE = re.compile(r"(?m)^(?:\d+\t)?[a-z_][a-z0-9_-]*:x?:\d+:\d+:")
 _SENSITIVE_HTTP_METHODS = {"POST", "PUT", "PATCH"}
 _TEXT_BODY_LIMIT = 10_000
 _BINARY_BODY_LIMIT = 1_000_000
-_LARGE_RESPONSE_SAVE_THRESHOLD = 50_000
 _FETCH_DIR_NAME = ".fetch"
 
 
@@ -170,8 +169,8 @@ def _save_http_response_body(raw_body: bytes, output_path: str | None) -> tuple[
 @tool(
     name="http_request",
     description=(
-        "Make an HTTP request. Large responses are saved under the workspace .fetch "
-        "directory and returned as metadata."
+        "Make an HTTP request. Use output_path to save a response under the workspace "
+        ".fetch directory; otherwise responses are returned as bounded metadata."
     ),
     params={
         "url": {"type": "string", "description": "HTTP or HTTPS URL."},
@@ -190,6 +189,7 @@ def _save_http_response_body(raw_body: bytes, output_path: str | None) -> tuple[
     },
     required=["url"],
     owner_only=True,
+    result_budget_class="external",
 )
 @sandboxed(
     kind="network.http",
@@ -240,7 +240,7 @@ async def http_request(
     content_type = response.headers.get("content-type", "")
     is_text = _is_text_response_content_type(content_type)
     raw_body = response.content
-    should_save = output_path is not None or len(raw_body) > _LARGE_RESPONSE_SAVE_THRESHOLD
+    should_save = output_path is not None
     if should_save:
         saved_path, digest = _save_http_response_body(raw_body, output_path)
         preview = response.text[:_TEXT_BODY_LIMIT] if is_text else None
@@ -614,6 +614,7 @@ def _search_error_payload(
         },
     },
     required=["query"],
+    result_budget_class="external",
 )
 @sandboxed(
     kind="web.fetch",

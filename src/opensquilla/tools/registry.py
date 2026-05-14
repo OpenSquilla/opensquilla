@@ -410,6 +410,7 @@ def tool(
     execution_timeout_seconds: float | None = None,
     execution_timeout_argument: str | None = None,
     execution_timeout_padding: float = 0.0,
+    result_budget_class: str | None = None,
     registry: ToolRegistry | None = None,
 ) -> Any:
     """Decorator to register an async function as a tool.
@@ -431,6 +432,7 @@ def tool(
             execution_timeout_seconds=execution_timeout_seconds,
             execution_timeout_argument=execution_timeout_argument,
             execution_timeout_padding=execution_timeout_padding,
+            result_budget_class=result_budget_class,
         )
         target = registry if registry is not None else _default_registry
         target.register(spec, fn)

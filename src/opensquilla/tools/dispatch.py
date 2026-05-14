@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import weakref
 from typing import Any
 
 import structlog
@@ -16,6 +17,13 @@ from opensquilla.tool_boundary import AgentToolHandler, ToolCall, ToolResult
 from opensquilla.tools.envelope import build_tool_failure_envelope, is_denial_payload
 from opensquilla.tools.policy import private_memory_read_tool_denied
 from opensquilla.tools.registry import ToolRegistry, profile_allows_tool, resolve_profile
+from opensquilla.tools.result_budget import (
+    DEFAULT_TOOL_RESULT_BUDGET_POLICY,
+    ToolResultBudgetPolicy,
+    ToolResultBudgetTracker,
+    clamp_tool_arguments,
+    resolve_budget_class,
+)
 from opensquilla.tools.types import (
     CallerKind,
     InteractionMode,
@@ -73,6 +81,22 @@ def _build_envelope_result(
     )
 
 
+def _resolve_budget_policy(ctx: ToolContext | None) -> ToolResultBudgetPolicy:
+    policy = getattr(ctx, "tool_result_budget_policy", None) if ctx is not None else None
+    if isinstance(policy, ToolResultBudgetPolicy):
+        return policy
+    return DEFAULT_TOOL_RESULT_BUDGET_POLICY
+
+
+def _build_budget_tracker(ctx: ToolContext | None) -> ToolResultBudgetTracker:
+    factory = getattr(ctx, "tool_result_budget_tracker_factory", None) if ctx else None
+    if callable(factory):
+        tracker = factory()
+        if isinstance(tracker, ToolResultBudgetTracker):
+            return tracker
+    return ToolResultBudgetTracker(_resolve_budget_policy(ctx))
+
+
 def build_tool_handler(
     registry: ToolRegistry,
     ctx: ToolContext | None = None,
@@ -89,8 +113,28 @@ def build_tool_handler(
     5. Wraps results and errors into ToolResult
     """
 
+    fallback_budget_tracker = _build_budget_tracker(ctx)
+    scoped_budget_trackers: dict[
+        int,
+        tuple[weakref.ReferenceType[ToolContext], ToolResultBudgetTracker],
+    ] = {}
+
+    def _budget_tracker_for(effective_ctx: ToolContext | None) -> ToolResultBudgetTracker:
+        if effective_ctx is None or effective_ctx is ctx:
+            return fallback_budget_tracker
+        key = id(effective_ctx)
+        entry = scoped_budget_trackers.get(key)
+        if entry is not None:
+            context_ref, tracker = entry
+            if context_ref() is effective_ctx:
+                return tracker
+        tracker = _build_budget_tracker(effective_ctx)
+        scoped_budget_trackers[key] = (weakref.ref(effective_ctx), tracker)
+        return tracker
+
     async def _handler(tool_call: ToolCall) -> ToolResult:
         effective_ctx = current_tool_context.get() or ctx
+        budget_policy = _resolve_budget_policy(effective_ctx)
 
         # Ingress-path injection guard:
         # if the tool-call origin trace lies inside an <untrusted> block,
@@ -272,7 +316,12 @@ def build_tool_handler(
             artifact_start = (
                 len(effective_ctx.published_artifacts) if effective_ctx is not None else 0
             )
-            result = await registered.handler(**tool_call.arguments)
+            arguments = clamp_tool_arguments(
+                tool_call.tool_name,
+                dict(tool_call.arguments),
+                budget_policy,
+            )
+            result = await registered.handler(**arguments)
             if not _has_live_approval_surface(effective_ctx):
                 pending = _extract_pending_approval(result)
                 if pending is not None:
@@ -311,10 +360,24 @@ def build_tool_handler(
                 if effective_ctx is not None
                 else []
             )
+            if artifacts:
+                content = result
+            else:
+                budget_class = resolve_budget_class(
+                    tool_call.tool_name,
+                    registered.spec.result_budget_class,
+                )
+                budgeted = await _budget_tracker_for(effective_ctx).normalize(
+                    tool_name=tool_call.tool_name,
+                    content=result,
+                    budget_class=budget_class,
+                    is_error=denial,
+                )
+                content = budgeted.content
             return ToolResult(
                 tool_use_id=tool_call.tool_use_id,
                 tool_name=tool_call.tool_name,
-                content=result,
+                content=content,
                 is_error=denial,
                 artifacts=artifacts,
             )

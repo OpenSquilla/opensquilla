@@ -125,7 +125,7 @@ async def test_http_request_uses_body_base64_when_content_type_missing(
 
 
 @pytest.mark.asyncio
-async def test_http_request_saves_large_binary_response_without_returning_base64(
+async def test_http_request_does_not_implicitly_save_large_binary_response(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -145,18 +145,18 @@ async def test_http_request_saves_large_binary_response_without_returning_base64
 
     digest = hashlib.sha256(raw).hexdigest()
     saved_path = tmp_path / ".fetch" / f"{digest}.bin"
-    assert Path(payload["path"]) == saved_path
-    assert saved_path.read_bytes() == raw
     assert payload["size"] == len(raw)
     assert payload["sha256"] == digest
-    assert payload["body_saved"] is True
+    assert payload["body_saved"] is False
     assert payload["body"] is None
-    assert payload["body_base64"] is None
-    assert payload["body_base64_truncated"] is False
+    assert payload["body_base64"] is not None
+    assert payload["body_base64_truncated"] is True
+    assert payload["path"] is None
+    assert not saved_path.exists()
 
 
 @pytest.mark.asyncio
-async def test_http_request_saves_large_text_response_without_returning_full_body(
+async def test_http_request_does_not_implicitly_save_large_text_response(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -176,18 +176,16 @@ async def test_http_request_saves_large_text_response_without_returning_full_bod
 
     digest = hashlib.sha256(raw).hexdigest()
     saved_path = tmp_path / ".fetch" / f"{digest}.bin"
-    assert Path(payload["path"]) == saved_path
-    assert saved_path.read_bytes() == raw
     assert payload["size"] == len(raw)
     assert payload["sha256"] == digest
-    assert payload["body_saved"] is True
-    assert payload["body"] is None
-    assert payload["body_base64"] is None
-    assert payload["body_truncated"] is False
+    assert payload["body_saved"] is False
+    assert payload["body"].startswith("<feed>")
+    assert len(payload["body"]) == 10_000
+    assert payload["body_base64"] is not None
+    assert payload["body_truncated"] is True
     assert payload["body_base64_truncated"] is False
-    assert payload["body_preview"].startswith("<feed>")
-    assert len(payload["body_preview"]) == 10_000
-    assert payload["body_omitted_reason"] == "saved_to_file"
+    assert payload["path"] is None
+    assert not saved_path.exists()
 
 
 @pytest.mark.asyncio
@@ -304,7 +302,7 @@ async def test_http_request_output_path_rejects_foreign_posix_path_on_windows(
 
 
 @pytest.mark.asyncio
-async def test_http_request_reuses_content_hash_path_for_repeated_large_fetches(
+async def test_http_request_without_output_path_does_not_create_fetch_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -323,5 +321,6 @@ async def test_http_request_reuses_content_hash_path_for_repeated_large_fetches(
     first = json.loads(await _original_http_request()(url="https://example.test/blob"))
     second = json.loads(await _original_http_request()(url="https://example.test/blob"))
 
-    assert first["path"] == second["path"]
-    assert Path(first["path"]).read_bytes() == raw
+    assert first["path"] is None
+    assert second["path"] is None
+    assert not (tmp_path / ".fetch").exists()

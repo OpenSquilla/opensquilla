@@ -68,6 +68,8 @@ class ToolContext:
     # Additive per-call tool surface overrides (surfaced tools are made visible even
     # when exposed_by_default=False). Does NOT relax allowed_tools strict denylist.
     surfaced_tools: set[str] | None = None
+    tool_result_budget_policy: Any | None = None
+    tool_result_budget_tracker_factory: Callable[[], Any] | None = None
 
 
 # Request-scoped context — set by build_tool_handler before each dispatch.
@@ -138,6 +140,7 @@ class ToolSpec:
     execution_timeout_seconds: float | None = None
     execution_timeout_argument: str | None = None
     execution_timeout_padding: float = 0.0
+    result_budget_class: str | None = None
 
 
 # Registered tool implementation: async fn that accepts keyword args and returns str.

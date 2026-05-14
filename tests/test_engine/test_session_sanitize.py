@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
@@ -362,6 +363,120 @@ def test_agent_aggregate_tool_result_budget_uses_total_not_single_result_size() 
     ]
     assert any("aggregate_tool_result_compacted" in content for content in compacted_contents)
     assert "recent output" not in "\n".join(compacted_contents)
+
+
+def test_agent_provider_backstop_classifies_external_results_from_tool_use_names() -> None:
+    agent = Agent(
+        provider=CapturingProvider(),
+        config=AgentConfig(
+            context_window_tokens=1_000_000,
+            tool_result_compression_max_share=1.0,
+            tool_result_provider_request_max_chars=1300,
+            tool_result_external_keep_recent=2,
+        ),
+    )
+    messages: list[Message] = []
+    for index in range(4):
+        tool_id = f"fetch-{index}"
+        messages.extend(
+            [
+                Message(
+                    role="assistant",
+                    content=[
+                        ContentBlockToolUse(
+                            id=tool_id,
+                            name="web_fetch",
+                            input={"url": f"https://example.com/{index}"},
+                        ),
+                    ],
+                ),
+                Message(
+                    role="user",
+                    content=[
+                        ContentBlockToolResult(
+                            tool_use_id=tool_id,
+                            content=f"fetch {index}\n" + ("x" * 500),
+                            is_error=False,
+                        )
+                    ],
+                ),
+            ]
+        )
+
+    compacted = agent._compact_aggregate_tool_results_for_provider(messages)
+
+    external_contents = [
+        message.content[0].content
+        for message in compacted
+        if isinstance(message.content, list)
+        and message.content
+        and isinstance(message.content[0], ContentBlockToolResult)
+    ]
+    assert "fetch 3" in external_contents[-1]
+    assert "fetch 2" in external_contents[-2]
+    assert any("external_tool_result_compacted" in content for content in external_contents[:2])
+    assert sum(len(content) for content in external_contents) <= 1300
+
+
+def test_agent_provider_backstop_preserves_sessions_yield_control_json() -> None:
+    agent = Agent(
+        provider=CapturingProvider(),
+        config=AgentConfig(
+            context_window_tokens=1_000_000,
+            tool_result_compression_max_share=1.0,
+            tool_result_provider_request_max_chars=300,
+        ),
+    )
+    control_payload = json.dumps(
+        {
+            "status": "yielded",
+            "waited": False,
+            "message": "Current turn yielded; wait for pushed session events.",
+            "yield_message": "y" * 1000,
+        }
+    )
+    messages = [
+        Message(
+            role="assistant",
+            content=[ContentBlockToolUse(id="yield-1", name="sessions_yield", input={})],
+        ),
+        Message(
+            role="user",
+            content=[
+                ContentBlockToolResult(
+                    tool_use_id="yield-1",
+                    content=control_payload,
+                    is_error=False,
+                )
+            ],
+        ),
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockToolUse(
+                    id="fetch-1", name="web_fetch", input={"url": "https://example.com"}
+                )
+            ],
+        ),
+        Message(
+            role="user",
+            content=[
+                ContentBlockToolResult(
+                    tool_use_id="fetch-1",
+                    content="fetch\n" + ("x" * 1000),
+                    is_error=False,
+                )
+            ],
+        ),
+    ]
+
+    compacted = agent._compact_aggregate_tool_results_for_provider(messages)
+    control_result = compacted[1].content[0]
+
+    assert isinstance(control_result, ContentBlockToolResult)
+    payload = json.loads(control_result.content)
+    assert payload["status"] == "yielded"
+    assert payload["waited"] is False
 
 
 @pytest.mark.asyncio

@@ -73,6 +73,11 @@ from opensquilla.session.compaction import (
     compact_context,
 )
 from opensquilla.tool_boundary import AgentToolHandler as ToolHandler
+from opensquilla.tools.result_budget import (
+    ToolResultBudgetClass,
+    compact_tool_result_content,
+    resolve_budget_class,
+)
 
 from .context import ContextAssembly
 from .subagent import SubagentManager, SubagentSpec
@@ -584,6 +589,19 @@ class Agent:
                 elif isinstance(block, ContentBlockToolResult):
                     tool_result_refs.append((message_index, block_index, block))
 
+        messages = self._compact_absolute_tool_results_for_provider(
+            messages,
+            tool_result_refs,
+            tool_name_by_use_id,
+        )
+        tool_result_refs = []
+        for message_index, message in enumerate(messages):
+            if not isinstance(message.content, list):
+                continue
+            for block_index, block in enumerate(message.content):
+                if isinstance(block, ContentBlockToolResult):
+                    tool_result_refs.append((message_index, block_index, block))
+
         if len(tool_result_refs) <= 2:
             return messages
 
@@ -727,6 +745,139 @@ class Agent:
             tool_result_handles=stored_handles,
             tokens_before=before_tokens,
             tokens_after=after_tokens,
+        )
+        return compacted_messages
+
+    def _compact_absolute_tool_results_for_provider(
+        self,
+        messages: list[Message],
+        tool_result_refs: list[tuple[int, int, ContentBlockToolResult]],
+        tool_name_by_use_id: dict[str, str],
+    ) -> list[Message]:
+        cap = int(getattr(self.config, "tool_result_provider_request_max_chars", 0) or 0)
+        if cap <= 0 or not tool_result_refs:
+            return messages
+
+        def _content(block: ContentBlockToolResult) -> str:
+            return block.content if isinstance(block.content, str) else str(block.content)
+
+        total_chars = sum(len(_content(block)) for _m, _b, block in tool_result_refs)
+        if total_chars <= cap:
+            return messages
+
+        keep_recent = max(0, int(getattr(self.config, "tool_result_external_keep_recent", 2)))
+        external_refs = [
+            (message_index, block_index, block)
+            for message_index, block_index, block in tool_result_refs
+            if resolve_budget_class(tool_name_by_use_id.get(block.tool_use_id, ""))
+            is ToolResultBudgetClass.EXTERNAL
+        ]
+        recent_external_ids = {id(block) for _m, _b, block in external_refs[-keep_recent:]}
+        replacements: dict[tuple[int, int], ContentBlockToolResult] = {}
+
+        for message_index, block_index, block in tool_result_refs:
+            if total_chars <= cap:
+                break
+            content = _content(block)
+            tool_name = tool_name_by_use_id.get(block.tool_use_id, "")
+            budget_class = resolve_budget_class(tool_name)
+            replacement_content: str | None = None
+            if budget_class is ToolResultBudgetClass.CONTROL:
+                replacement_content = compact_tool_result_content(
+                    tool_name=tool_name,
+                    content=content,
+                    max_preview_chars=160,
+                    budget_class=budget_class,
+                    is_error=block.is_error,
+                )
+            elif (
+                budget_class is ToolResultBudgetClass.EXTERNAL
+                and id(block) not in recent_external_ids
+            ):
+                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                replacement_content = (
+                    "[external_tool_result_compacted]\n"
+                    f"tool: {tool_name or 'unknown'}\n"
+                    f"tool_use_id: {block.tool_use_id}\n"
+                    f"original_chars: {len(content)}\n"
+                    f"sha256: {digest}\n"
+                    "reason: older external tool result compacted for provider request budget."
+                )
+            elif block.is_error and len(content) > 800:
+                replacement_content = compact_tool_result_content(
+                    tool_name=tool_name,
+                    content=content,
+                    max_preview_chars=240,
+                    budget_class=ToolResultBudgetClass.ERROR,
+                    is_error=True,
+                )
+
+            if replacement_content is None or len(replacement_content) >= len(content):
+                continue
+            replacements[(message_index, block_index)] = ContentBlockToolResult(
+                tool_use_id=block.tool_use_id,
+                content=replacement_content,
+                is_error=block.is_error,
+            )
+            total_chars -= len(content) - len(replacement_content)
+
+        if total_chars > cap:
+            for message_index, block_index, block in tool_result_refs:
+                if total_chars <= cap:
+                    break
+                if (message_index, block_index) in replacements:
+                    continue
+                tool_name = tool_name_by_use_id.get(block.tool_use_id, "")
+                if resolve_budget_class(tool_name) is ToolResultBudgetClass.CONTROL:
+                    continue
+                content = _content(block)
+                replacement_content = compact_tool_result_content(
+                    tool_name=tool_name or "unknown",
+                    content=content,
+                    max_preview_chars=80,
+                    budget_class=resolve_budget_class(tool_name),
+                    is_error=block.is_error,
+                )
+                if len(replacement_content) >= len(content):
+                    continue
+                replacements[(message_index, block_index)] = ContentBlockToolResult(
+                    tool_use_id=block.tool_use_id,
+                    content=replacement_content,
+                    is_error=block.is_error,
+                )
+                total_chars -= len(content) - len(replacement_content)
+
+        if not replacements:
+            return messages
+
+        compacted_messages: list[Message] = []
+        for message_index, message in enumerate(messages):
+            if not isinstance(message.content, list):
+                compacted_messages.append(message)
+                continue
+            next_content: list[Any] = []
+            message_changed = False
+            for block_index, content_block in enumerate(message.content):
+                replacement = replacements.get((message_index, block_index))
+                if replacement is None:
+                    next_content.append(content_block)
+                    continue
+                next_content.append(replacement)
+                message_changed = True
+            if not message_changed:
+                compacted_messages.append(message)
+                continue
+            compacted_messages.append(
+                Message(
+                    role=message.role,
+                    content=next_content,
+                    reasoning_content=getattr(message, "reasoning_content", None),
+                )
+            )
+
+        self.config.metadata["tool_absolute_compression_applied"] = True
+        self.config.metadata["tool_absolute_compression_calls"] = (
+            self.config.metadata.get("tool_absolute_compression_calls", 0) + 1
         )
         return compacted_messages
 
@@ -887,7 +1038,17 @@ class Agent:
 
         compressed_content: str | None = None
         applied_mode = mode
-        if mode == "summarize":
+        budget_class = resolve_budget_class(result.tool_name)
+        if budget_class is ToolResultBudgetClass.CONTROL:
+            compressed_content = compact_tool_result_content(
+                tool_name=result.tool_name,
+                content=result.content,
+                max_preview_chars=self.config.tool_result_compression_summary_input_max_chars,
+                budget_class=budget_class,
+                is_error=result.is_error,
+            )
+            applied_mode = "control_truncate"
+        if mode == "summarize" and compressed_content is None:
             compressed_content = await self._summarize_tool_result(result)
             if compressed_content is None:
                 applied_mode = "truncate"
@@ -2884,6 +3045,10 @@ class Agent:
             tool_result_compression_summary_input_max_chars=(
                 self.config.tool_result_compression_summary_input_max_chars
             ),
+            tool_result_provider_request_max_chars=(
+                self.config.tool_result_provider_request_max_chars
+            ),
+            tool_result_external_keep_recent=self.config.tool_result_external_keep_recent,
             tool_result_store_dir=self.config.tool_result_store_dir,
             tool_result_store_session_id=self.config.tool_result_store_session_id,
             tool_result_store_session_key=self.config.tool_result_store_session_key,

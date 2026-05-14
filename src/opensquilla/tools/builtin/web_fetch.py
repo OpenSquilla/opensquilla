@@ -15,8 +15,12 @@ from cachetools import TTLCache
 from opensquilla.env import trust_env as _trust_env
 from opensquilla.sandbox.integration import sandboxed
 from opensquilla.tools.registry import tool
+from opensquilla.tools.result_budget import (
+    DEFAULT_TOOL_RESULT_BUDGET_POLICY,
+    ToolResultBudgetPolicy,
+)
 from opensquilla.tools.ssrf import validate_http_url_for_fetch
-from opensquilla.tools.types import SSRFBlockedError
+from opensquilla.tools.types import SSRFBlockedError, current_tool_context
 
 log = structlog.get_logger(__name__)
 
@@ -132,9 +136,18 @@ def _resolve_default_max_chars() -> int:
 
 def _resolve_effective_max_chars(max_chars: int | None) -> int | None:
     """Resolve explicit max_chars or the default cap for omitted values."""
+    max_allowed = _active_budget_policy().max_web_fetch_chars
     if max_chars is not None:
-        return max_chars if max_chars >= 100 else None
-    return _resolve_default_max_chars()
+        return min(max_chars, max_allowed) if max_chars >= 100 else None
+    return min(_resolve_default_max_chars(), max_allowed)
+
+
+def _active_budget_policy() -> ToolResultBudgetPolicy:
+    ctx = current_tool_context.get()
+    policy = getattr(ctx, "tool_result_budget_policy", None) if ctx is not None else None
+    if isinstance(policy, ToolResultBudgetPolicy):
+        return policy
+    return DEFAULT_TOOL_RESULT_BUDGET_POLICY
 
 
 @tool(
@@ -165,6 +178,7 @@ def _resolve_effective_max_chars(max_chars: int | None) -> int | None:
         },
     },
     required=["url"],
+    result_budget_class="external",
 )
 @sandboxed(
     kind="web.fetch",
@@ -390,10 +404,14 @@ def _apply_max_chars(result: dict[str, Any], max_chars: int | None) -> dict[str,
     output = dict(result)
     inner = _extract_inner(str(output.get("text", "")))
     if len(inner) <= max_chars:
+        output["original_length"] = len(inner)
+        output["returned_length"] = len(inner)
         return output
 
     source = str(output.get("final_url") or output.get("url") or "")
     output["text"] = _wrap_content(source, inner[:max_chars])
     output["truncated"] = True
-    output["length"] = max_chars
+    output["original_length"] = len(inner)
+    output["returned_length"] = max_chars
+    output["length"] = len(inner)
     return output
