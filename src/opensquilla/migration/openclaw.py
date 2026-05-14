@@ -190,6 +190,29 @@ SKIP_SOURCE_ARTIFACTS = (
 )
 RAW_CONFIG_FILENAMES = ("openclaw.json", "clawdbot.json", "moltbot.json")
 
+_OPENCLAW_WORKSPACE_MARKERS = ("SOUL.md", "MEMORY.md", "USER.md", "AGENTS.md", "IDENTITY.md")
+
+
+def _is_valid_openclaw_home(path: Path) -> bool:
+    """Return True if `path` plausibly holds an OpenClaw home.
+
+    Mirrors hermes._is_valid_hermes_home: we accept anything that has at
+    least one OpenClaw config file at the root or a workspace directory
+    with persona markers inside. Used by the auto-detect entry point to
+    decide whether a default ``~/.openclaw`` is worth offering.
+    """
+    if not path.is_dir():
+        return False
+    for name in RAW_CONFIG_FILENAMES:
+        if (path / name).is_file():
+            return True
+    for candidate in (path / "workspace", *path.glob("workspace-*")):
+        if candidate.is_dir() and any(
+            (candidate / marker).is_file() for marker in _OPENCLAW_WORKSPACE_MARKERS
+        ):
+            return True
+    return False
+
 
 @dataclass(frozen=True)
 class MigrationOptions:

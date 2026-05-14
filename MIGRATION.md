@@ -6,8 +6,26 @@ applied explicitly.
 
 Supported migration paths:
 
+- Auto-detect everything found under your home: `opensquilla migrate`
 - OpenClaw -> OpenSquilla: `opensquilla migrate openclaw`
 - Hermes Agent -> OpenSquilla: `opensquilla migrate hermes`
+
+`opensquilla migrate` (with no subcommand) scans `~/.openclaw` and
+`~/.hermes` and decides what to do based on what it finds:
+
+- **Nothing detected**: prints the default paths it checked and exits 0.
+- **Exactly one detected**: runs that migrator. No prompt, no flag needed.
+- **Both detected, interactive (TTY) shell**: opens a multi-select prompt
+  so you can pick one, both, or neither.
+- **Both detected, non-interactive context (CI, piped, `--json`)**: prints
+  the detected sources and exits 0 without migrating. Re-run with
+  `--source openclaw,hermes` (or a subset) to opt in explicitly.
+
+When both sources are selected, OpenSquilla runs OpenClaw first and Hermes
+second. The second migrator sees whatever the first one wrote, so its
+existing per-file dedupe / persona-conflict rules kick in normally. Use
+`--source openclaw` or `--source hermes` (comma-separated) to narrow the
+selection.
 
 If you are running from a source checkout instead of an installed
 `opensquilla` command, prefix the examples with `uv run`:
