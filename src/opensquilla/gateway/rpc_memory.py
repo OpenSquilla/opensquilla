@@ -7,12 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from opensquilla.gateway.rpc import RpcContext, RpcUnavailableError, get_dispatcher
-from opensquilla.memory.types import MemorySearchOpts, SearchIntent
-from opensquilla.session.keys import normalize_agent_id
-from opensquilla.tools.builtin.memory_tools import (
-    _is_memory_archive_path,
-    _is_memory_source_path,
+from opensquilla.memory.types import (
+    DEFAULT_MEMORY_SEARCH_MIN_SCORE,
+    DEFAULT_MEMORY_SEARCH_RESULTS,
+    MemorySearchOpts,
+    SearchIntent,
+    normalize_memory_search_min_score,
 )
+from opensquilla.session.keys import normalize_agent_id
+from opensquilla.tools.builtin.memory_tools import _is_memory_source_path
 
 _d = get_dispatcher()
 
@@ -88,7 +91,7 @@ def _memory_source_rows(root: Path) -> list[dict[str, Any]]:
             rel = resolved_file.relative_to(resolved_root).as_posix()
         except ValueError:
             continue
-        if rel in seen or not _is_memory_source_path(rel, allow_archive=False):
+        if rel in seen or not _is_memory_source_path(rel):
             continue
         stat = resolved_file.stat()
         with resolved_file.open("r", encoding="utf-8", errors="replace") as handle:
@@ -122,9 +125,12 @@ async def _handle_memory_search(params: dict | None, ctx: RpcContext) -> dict[st
     query = str(params.get("query") or "").strip()
     if not query:
         raise ValueError("params.query is required")
-    limit = _int_param(params, "limit", 10, minimum=1, maximum=20)
+    limit = _int_param(params, "limit", DEFAULT_MEMORY_SEARCH_RESULTS, minimum=1, maximum=20)
     try:
-        min_score = float(params.get("minScore", 0.0) or 0.0)
+        min_score = normalize_memory_search_min_score(
+            params.get("minScore", DEFAULT_MEMORY_SEARCH_MIN_SCORE),
+            strict=True,
+        )
     except (TypeError, ValueError) as exc:
         raise ValueError("params.minScore must be a number") from exc
 
@@ -142,13 +148,11 @@ def _memory_root(manager: Any) -> Path:
     return Path(root)
 
 
-def _validate_memory_path(path: str, *, allow_archive: bool) -> None:
+def _validate_memory_path(path: str) -> None:
     if not path.strip():
         raise ValueError("params.path is required")
-    if _is_memory_archive_path(path) and not allow_archive:
-        raise ValueError("memory archive is private turn-capture storage")
-    if not _is_memory_source_path(path, allow_archive=allow_archive):
-        raise ValueError("params.path must be MEMORY.md or memory/*.md")
+    if not _is_memory_source_path(path):
+        raise ValueError("params.path must be MEMORY.md or memory/**/*.md")
 
 
 def _read_memory_content(
@@ -206,9 +210,7 @@ async def _handle_memory_show(params: dict | None, ctx: RpcContext) -> dict[str,
     raw_path = str(params.get("path") or "")
     agent_id, manager = _require_memory_manager(ctx, params.get("agentId"))
 
-    memory_config = getattr(manager, "memory_config", None)
-    allow_archive = bool(memory_config and getattr(memory_config, "index_captured_turns", False))
-    _validate_memory_path(raw_path, allow_archive=allow_archive)
+    _validate_memory_path(raw_path)
 
     from_line = params.get("fromLine")
     if from_line is not None:

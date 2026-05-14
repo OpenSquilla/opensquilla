@@ -14,7 +14,8 @@ from opensquilla.safety.injection_guard import (
 from opensquilla.safety.permission_matrix import Principal, is_tool_allowed
 from opensquilla.tool_boundary import AgentToolHandler, ToolCall, ToolResult
 from opensquilla.tools.envelope import build_tool_failure_envelope, is_denial_payload
-from opensquilla.tools.registry import ToolRegistry
+from opensquilla.tools.policy import private_memory_read_tool_denied
+from opensquilla.tools.registry import ToolRegistry, profile_allows_tool, resolve_profile
 from opensquilla.tools.types import (
     CallerKind,
     InteractionMode,
@@ -176,6 +177,25 @@ def build_tool_handler(
                 ),
             )
 
+        if private_memory_read_tool_denied(effective_ctx, tool_call.tool_name):
+            log.warning(
+                "dispatch.defense_in_depth_block",
+                tool=tool_call.tool_name,
+                reason="private_memory_scope",
+                tool_use_id=tool_call.tool_use_id,
+                agent_id=effective_ctx.agent_id if effective_ctx else None,
+                session_key=effective_ctx.session_key if effective_ctx else None,
+            )
+            return _build_envelope_result(
+                tool_call,
+                exc=PermissionError("private memory blocked"),
+                policy_denial=True,
+                error_class_override="PolicyDenied",
+                user_message_override=(
+                    f"Tool '{tool_call.tool_name}' not available in this context."
+                ),
+            )
+
         if (
             effective_ctx
             and effective_ctx.allowed_tools is not None
@@ -192,6 +212,28 @@ def build_tool_handler(
             return _build_envelope_result(
                 tool_call,
                 exc=PermissionError("tool blocked"),
+                policy_denial=True,
+                error_class_override="PolicyDenied",
+                user_message_override=(
+                    f"Tool '{tool_call.tool_name}' not available in this context."
+                ),
+            )
+
+        if effective_ctx and not profile_allows_tool(
+            tool_call.tool_name,
+            resolve_profile(effective_ctx),
+            explicitly_allowed=effective_ctx.allowed_tools,
+        ):
+            log.warning(
+                "dispatch.profile_block",
+                tool=tool_call.tool_name,
+                tool_use_id=tool_call.tool_use_id,
+                agent_id=effective_ctx.agent_id,
+                session_key=effective_ctx.session_key,
+            )
+            return _build_envelope_result(
+                tool_call,
+                exc=PermissionError("tool blocked by profile"),
                 policy_denial=True,
                 error_class_override="PolicyDenied",
                 user_message_override=(

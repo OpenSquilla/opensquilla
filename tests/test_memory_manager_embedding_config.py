@@ -86,6 +86,89 @@ async def _build_one(config: GatewayConfig, monkeypatch, tmp_path):
         raise
 
 
+@pytest.mark.asyncio
+async def test_memory_manager_reports_effective_local_hybrid_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(_LOCAL_AVAILABLE_PATH, lambda *_: True)
+    provider, managers = await _build_one(GatewayConfig(), monkeypatch, tmp_path)
+    try:
+        assert isinstance(provider, LocalEmbeddingProvider)
+        metadata = managers["main"].effective_retrieval_metadata()
+        assert metadata["configured_retrieval_mode"] == "hybrid"
+        assert metadata["retrieval_mode"] == "hybrid"
+        assert metadata["embedding_requested_provider"] == "auto"
+        assert metadata["embedding_effective_provider"] == "local"
+        assert metadata["embedding_model"] == "BAAI/bge-small-zh-v1.5"
+        assert metadata["vector_weight"] == "0.7"
+        assert metadata["text_weight"] == "0.3"
+    finally:
+        for manager in managers.values():
+            await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_reports_effective_fts_only_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(_LOCAL_AVAILABLE_PATH, lambda *_: True)
+    provider, managers = await _build_one(
+        GatewayConfig(memory={"retrieval_mode": "fts_only"}),
+        monkeypatch,
+        tmp_path,
+    )
+    try:
+        assert isinstance(provider, NullEmbeddingProvider)
+        metadata = managers["main"].effective_retrieval_metadata()
+        assert metadata["configured_retrieval_mode"] == "fts_only"
+        assert metadata["retrieval_mode"] == "fts_only"
+        assert metadata["embedding_requested_provider"] == "auto"
+        assert metadata["embedding_effective_provider"] == "none"
+        assert metadata["embedding_model"] == "fts-only"
+        assert metadata["vector_weight"] == "0.0"
+        assert metadata["text_weight"] == "1.0"
+    finally:
+        for manager in managers.values():
+            await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_reports_explicit_remote_embedding_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(_LOCAL_AVAILABLE_PATH, lambda *_: True)
+    provider, managers = await _build_one(
+        GatewayConfig(
+            memory={
+                "embedding": {
+                    "provider": "openai-compatible",
+                    "remote": {
+                        "api_key": "mem-key",
+                        "base_url": "https://embeddings.example/v1",
+                        "model": "embed-model",
+                    },
+                }
+            }
+        ),
+        monkeypatch,
+        tmp_path,
+    )
+    try:
+        assert isinstance(provider, OpenAIEmbeddingProvider)
+        metadata = managers["main"].effective_retrieval_metadata()
+        assert metadata["configured_retrieval_mode"] == "hybrid"
+        assert metadata["retrieval_mode"] == "hybrid"
+        assert metadata["embedding_requested_provider"] == "openai"
+        assert metadata["embedding_effective_provider"] == "openai"
+        assert metadata["embedding_model"] == "embed-model"
+    finally:
+        for manager in managers.values():
+            await manager.close()
+
+
 def test_memory_embedding_provider_wins_over_legacy_mode() -> None:
     cfg = GatewayConfig(memory={"embedding": {"provider": "local", "mode": "openai"}})
     assert cfg.memory.embedding.requested_provider == "local"

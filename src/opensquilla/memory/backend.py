@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from opensquilla.memory.types import MemorySearchResult, MemorySource, SearchMode
+from opensquilla.memory.types import (
+    DEFAULT_MEMORY_SEARCH_MIN_SCORE,
+    DEFAULT_MEMORY_SEARCH_RESULTS,
+    MemorySearchResult,
+    MemorySource,
+    SearchMode,
+)
 
 
 @runtime_checkable
@@ -29,8 +35,8 @@ class MemoryBackend(Protocol):
     async def search(
         self,
         query: str,
-        max_results: int = 10,
-        min_score: float = 0.0,
+        max_results: int = DEFAULT_MEMORY_SEARCH_RESULTS,
+        min_score: float = DEFAULT_MEMORY_SEARCH_MIN_SCORE,
         vector_weight: float = 0.7,
         text_weight: float = 0.3,
     ) -> tuple[list[MemorySearchResult], SearchMode]: ...

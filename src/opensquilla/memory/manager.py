@@ -64,6 +64,11 @@ _LEGACY_RAW_FALLBACK_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(reset|compact)-\
 _RAW_FALLBACK_HEADER_PREFIX = "# Raw flush ("
 _RAW_FALLBACK_SIDECAR = ".raw_fallbacks"
 _RAW_FALLBACK_MIGRATION_MARKER = ".migrated"
+_LEGACY_TURN_CAPTURE_REQUIRED_MARKERS = (
+    "# Turn Capture",
+    "- source_kind: turn_capture",
+    "- schema: turn-capture-v1",
+)
 
 
 def _migrate_legacy_raw_fallbacks(memory_dir: str | Path) -> int:
@@ -138,6 +143,86 @@ def _migrate_legacy_raw_fallbacks(memory_dir: str | Path) -> int:
     return moved
 
 
+def _is_legacy_turn_capture_file(path: Path) -> bool:
+    try:
+        sample = path.read_text(encoding="utf-8", errors="replace")[:1000]
+    except OSError as exc:
+        log.warning(
+            "memory_manager.turn_archive_migration_read_failed",
+            path=str(path),
+            error=str(exc),
+        )
+        return False
+    return all(marker in sample for marker in _LEGACY_TURN_CAPTURE_REQUIRED_MARKERS)
+
+
+def _unique_destination(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for index in range(1, 1000):
+        candidate = path.with_name(f"{path.stem}-legacy{index:03d}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"unable to find unique migration target for {path}")
+
+
+def _migrate_legacy_turn_archives(
+    memory_dir: str | Path,
+    turns_dir: str | Path,
+) -> tuple[str, ...]:
+    """Move old system-generated ``memory/archive/**`` turn captures to state.
+
+    User-authored files under ``memory/archive`` remain curated memory. Only
+    files carrying the old turn-capture header markers are moved.
+    """
+    root = Path(memory_dir)
+    archive_root = root / "archive"
+    if not archive_root.is_dir():
+        return ()
+
+    target_root = Path(turns_dir)
+    moved_rel_paths: list[str] = []
+    for path in sorted(archive_root.rglob("*.md")):
+        if not path.is_file() or not _is_legacy_turn_capture_file(path):
+            continue
+        try:
+            rel_to_archive = path.relative_to(archive_root)
+            target = _unique_destination(target_root / rel_to_archive)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(target))
+            moved_rel_paths.append(path.relative_to(root.parent).as_posix())
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "memory_manager.turn_archive_migration_move_failed",
+                path=str(path),
+                turns_dir=str(target_root),
+                error=str(exc),
+            )
+
+    for directory in sorted(
+        (p for p in archive_root.rglob("*") if p.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        archive_root.rmdir()
+    except OSError:
+        pass
+
+    if moved_rel_paths:
+        log.info(
+            "memory_manager.turn_archives_migrated",
+            memory_dir=str(root),
+            turns_dir=str(target_root),
+            moved=len(moved_rel_paths),
+        )
+    return tuple(moved_rel_paths)
+
+
 def _nested_value(obj: Any, name: str, default: Any = "") -> Any:
     return getattr(obj, name, default) if obj is not None else default
 
@@ -160,6 +245,37 @@ def memory_config_diagnostics(
     }
 
 
+def _metadata_value(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def effective_retrieval_metadata(
+    memory_config: Any | None,
+    embedding_decision: Any | None,
+    *,
+    vector_weight: float,
+    text_weight: float,
+) -> dict[str, str]:
+    configured_mode = _metadata_value(
+        _nested_value(memory_config, "retrieval_mode", "hybrid")
+    )
+    effective_provider = _metadata_value(
+        getattr(embedding_decision, "effective_provider", "none")
+    )
+    effective_mode = "fts_only" if effective_provider == "none" else configured_mode
+    return {
+        "configured_retrieval_mode": configured_mode,
+        "retrieval_mode": effective_mode,
+        "embedding_requested_provider": _metadata_value(
+            getattr(embedding_decision, "requested_provider", "")
+        ),
+        "embedding_effective_provider": effective_provider,
+        "embedding_model": _metadata_value(getattr(embedding_decision, "model", "")),
+        "vector_weight": str(vector_weight),
+        "text_weight": str(text_weight),
+    }
+
+
 @dataclass
 class MemoryManager:
     """Per-agent memory tier facade."""
@@ -173,6 +289,9 @@ class MemoryManager:
     memory_config: Any | None = None
     workspace_dir: Path | None = None
     memory_dir: Path | None = None
+    embedding_decision: Any | None = None
+    vector_weight: float = 0.7
+    text_weight: float = 0.3
     degraded: list[MemoryDegradation] = field(default_factory=list, init=False)
 
     def _record_degradation(
@@ -254,8 +373,17 @@ class MemoryManager:
             "fts_available": bool(getattr(self.store, "fts_available", False)),
         }
         status.update(memory_config_diagnostics(self.memory_config))
+        status.update(self.effective_retrieval_metadata())
         status["degraded"] = [d.as_dict() for d in self.degraded]
         return status
+
+    def effective_retrieval_metadata(self) -> dict[str, str]:
+        return effective_retrieval_metadata(
+            self.memory_config,
+            self.embedding_decision,
+            vector_weight=self.vector_weight,
+            text_weight=self.text_weight,
+        )
 
     async def _best_effort_call(self, component: str, operation: str, obj: Any) -> None:
         call = getattr(obj, operation, None)
@@ -389,6 +517,19 @@ async def build_memory_managers(
             # ``.raw_fallbacks/`` sidecar BEFORE sync_manager starts so the
             # next scan drops their indexed rows naturally.
             _migrate_legacy_raw_fallbacks(mem_dir)
+            migrated_turn_archives = _migrate_legacy_turn_archives(
+                mem_dir,
+                db_path.parent / "turns",
+            )
+            for rel_path in migrated_turn_archives:
+                try:
+                    await in_flight_store.remove_file(rel_path)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "memory_manager.turn_archive_index_remove_failed",
+                        path=rel_path,
+                        error=str(exc),
+                    )
 
             # Build + start sync_manager
             in_flight_sync = MemorySyncManager(
@@ -400,24 +541,36 @@ async def build_memory_managers(
                 ttl_sweep_interval_minutes=getattr(
                     cfg, "ttl_sweep_interval_minutes", 0.0
                 ),
-                index_archive=bool(getattr(cfg, "index_captured_turns", False)),
             )
             await in_flight_sync.start()
 
+            effective_vector_weight = (
+                0.0 if _force_fts_only else getattr(cfg, "vector_weight", 0.7)
+            )
+            effective_text_weight = (
+                1.0 if _force_fts_only else getattr(cfg, "text_weight", 0.3)
+            )
+            retrieval_metadata = effective_retrieval_metadata(
+                cfg,
+                embedding_decision,
+                vector_weight=effective_vector_weight,
+                text_weight=effective_text_weight,
+            )
             retriever = MemoryRetriever(
                 in_flight_store,
                 temporal_decay_enabled=getattr(cfg, "temporal_decay_enabled", False),
                 temporal_decay_half_life_days=getattr(cfg, "temporal_decay_half_life_days", 30.0),
                 mmr_enabled=getattr(cfg, "mmr_enabled", False),
                 mmr_lambda=getattr(cfg, "mmr_lambda", 0.7),
-                vector_weight=0.0 if _force_fts_only else getattr(cfg, "vector_weight", 0.7),
-                text_weight=1.0 if _force_fts_only else getattr(cfg, "text_weight", 0.3),
+                vector_weight=effective_vector_weight,
+                text_weight=effective_text_weight,
                 sync_manager=in_flight_sync,
+                effective_metadata=retrieval_metadata,
             )
 
             turn_capture = TurnCaptureService(
-                store=in_flight_store,
                 workspace_dir=agent_workspace,
+                turns_dir=db_path.parent / "turns",
                 memory_config=config.memory,
             )
 
@@ -431,6 +584,9 @@ async def build_memory_managers(
                 memory_config=cfg,
                 workspace_dir=agent_workspace,
                 memory_dir=Path(mem_dir),
+                embedding_decision=embedding_decision,
+                vector_weight=effective_vector_weight,
+                text_weight=effective_text_weight,
             )
             # Resources have been transferred to a MemoryManager that is now
             # tracked by `managers`; clear in-flight handles so a later

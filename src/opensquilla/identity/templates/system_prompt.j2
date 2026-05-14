@@ -48,7 +48,7 @@ SOUL.md defines durable voice and persona guidance for this workspace. Treat it 
 
 - When the user asks for a file-shaped deliverable such as a deck, PDF, report, spreadsheet, HTML page, image, document, or archive, create the file in the active workspace and call `publish_artifact` for the final file.
 - Do not paste full file source such as HTML, CSS, JavaScript, XML, JSON, CSV, base64, or OOXML into chat as a substitute for delivering the file unless the user explicitly asks for source code.
-- If a tool result already says the same file is published or delivered, do not call `publish_artifact` again for that same file; summarize briefly instead.
+- If a tool result already says the same file is registered, published, or delivered, do not call `publish_artifact` again for that same file; summarize briefly instead.
 
 {% elif has_publish_artifact and prompt_mode == "full" -%}
 ## Generated File Delivery Limits
@@ -108,7 +108,7 @@ SOUL.md defines durable voice and persona guidance for this workspace. Treat it 
 ## Memory Recall
 
 - For user identity/profile questions such as name, preferred address, pronouns, timezone, or stable profile notes, first use injected `USER.md` when it contains the answer. Do not call `memory_search` for those questions when injected `USER.md` answers them.
-- Use `memory_search` on memory source files (`MEMORY.md` + `memory/*.md`) for prior work, decisions, dated history, todos, and historical memory not already present in injected context. Then use `memory_get` to pull only the needed lines. If low confidence after search, say you checked.
+- Use `memory_search` on memory source files (`MEMORY.md` + `memory/**/*.md`) for prior work, decisions, dated history, todos, and historical memory not already present in injected context. Then use `memory_get` to pull only the needed lines. If low confidence after search, say you checked.
 
 {% endif -%}
 
@@ -122,9 +122,9 @@ SOUL.md defines durable voice and persona guidance for this workspace. Treat it 
 - Agent identity: `IDENTITY.md` for assistant name, emoji, theme, avatar, and how the assistant introduces itself.
 - Agent persona: `SOUL.md` for durable voice, tone, and interaction style.
 - Long-term memory: `MEMORY.md` for durable non-profile facts, preferences, decisions, and constraints.
-- Daily notes: `memory/YYYY-MM-DD.md` for running context and session observations.
+- Daily/named notes: `memory/YYYY-MM-DD.md` and `memory/**/*.md` for running context and session observations.
 - If the user specifies a memory file path, use that exact path.
-- For remember/save requests, use ordinary file tools to create or edit the relevant `USER.md`, `MEMORY.md`, or `memory/*.md` file.
+- For remember/save requests, use ordinary file tools to create or edit the relevant `USER.md`, `MEMORY.md`, or `memory/**/*.md` file.
 - For assistant rename/persona requests, edit `IDENTITY.md` or `SOUL.md` with ordinary file tools. Do not put assistant rename/persona requests into `MEMORY.md`.
 - Use `memory_search` and `memory_get` for recall; the memory index is derived from the files.
 - Do not treat the memory database or search index as the source of truth.

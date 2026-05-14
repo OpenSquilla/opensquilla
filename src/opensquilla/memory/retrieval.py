@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from .store import LongTermMemoryStore
-from .types import MemorySearchOpts, MemorySearchResult, SearchIntent
+from .types import (
+    MemorySearchOpts,
+    MemorySearchResult,
+    SearchIntent,
+    is_lexical_guaranteed_match,
+    is_relaxed_keyword_match,
+)
 
 # Matches YYYY-MM-DD.md or YYYY-MM-DD-<slug>.md at the basename.
 # The date must prefix the basename so release-2026-04-21.md does NOT match.
@@ -134,6 +140,7 @@ class MemoryRetriever:
         vector_weight: float = 0.7,
         text_weight: float = 0.3,
         sync_manager: Any | None = None,
+        effective_metadata: dict[str, str] | None = None,
     ) -> None:
         self._store = store
         self._temporal_decay_enabled = temporal_decay_enabled
@@ -143,6 +150,7 @@ class MemoryRetriever:
         self._vector_weight = vector_weight
         self._text_weight = text_weight
         self._sync_manager = sync_manager
+        self._effective_metadata = dict(effective_metadata or {})
 
     async def search(
         self,
@@ -158,7 +166,7 @@ class MemoryRetriever:
         raw_results, _mode = await self._store.search(
             query=query,
             max_results=min(200, opts.max_results * 10),
-            min_score=0.0,  # filter after decay
+            min_score=opts.min_score,
             vector_weight=self._vector_weight,
             text_weight=self._text_weight,
         )
@@ -191,8 +199,15 @@ class MemoryRetriever:
             ]
             raw_results.sort(key=lambda r: r.score, reverse=True)
 
-        # Filter by min_score before optional diversity selection.
-        filtered = [r for r in raw_results if r.score >= opts.min_score]
+        # Filter by min_score before optional diversity selection. Store-level
+        # recall guarantees deliberately survive this second pass.
+        filtered = [
+            r
+            for r in raw_results
+            if r.score >= opts.min_score
+            or is_relaxed_keyword_match(r)
+            or is_lexical_guaranteed_match(r)
+        ]
 
         if self._mmr_enabled:
             k_selected = _mmr_rerank(filtered, lam=self._mmr_lambda, k=opts.max_results)
@@ -202,3 +217,13 @@ class MemoryRetriever:
 
     async def close(self) -> None:
         return None
+
+    def effective_retrieval_metadata(self) -> dict[str, str]:
+        effective_mode = "fts_only" if self._vector_weight == 0.0 else "hybrid"
+        metadata = {
+            "retrieval_mode": effective_mode,
+            "vector_weight": str(self._vector_weight),
+            "text_weight": str(self._text_weight),
+        }
+        metadata.update(self._effective_metadata)
+        return metadata

@@ -123,6 +123,142 @@ def test_channel_runtime_profile_exposes_publish_artifact() -> None:
     assert "publish_artifact" in names
 
 
+def test_channel_runtime_profile_exposes_safe_file_authoring_tools() -> None:
+    import opensquilla.tools.builtin  # noqa: F401
+    from opensquilla.tools.registry import filter_by_profile, get_default_registry, resolve_profile
+
+    registry = get_default_registry()
+    channel_ctx = ToolContext(is_owner=False, caller_kind=CallerKind.CHANNEL)
+
+    names = {
+        tool.name
+        for tool in filter_by_profile(
+            registry.to_tool_definitions(channel_ctx),
+            resolve_profile(channel_ctx),
+            channel_ctx,
+        )
+    }
+
+    assert {"create_csv", "create_xlsx", "create_pptx", "create_pdf_report"} <= names
+    assert "write_file" not in names
+    assert "execute_code" not in names
+
+
+def test_channel_runtime_profile_exposes_explicit_category_tools_not_host_mutation() -> None:
+    from opensquilla.tools.registry import filter_by_profile, resolve_profile
+
+    ctx = ToolContext(
+        is_owner=False,
+        caller_kind=CallerKind.CHANNEL,
+        allowed_tools={"feishu_drive_upload_artifact", "write_file"},
+    )
+    tools = [
+        _spec("feishu_drive_upload_artifact"),
+        _spec("write_file"),
+        _spec("create_pptx"),
+    ]
+
+    names = {tool.name for tool in filter_by_profile(tools, resolve_profile(ctx), ctx)}
+
+    assert "feishu_drive_upload_artifact" in names
+    assert "create_pptx" in names
+    assert "write_file" not in names
+
+
+def test_shared_channel_context_hides_private_memory_read_tools_even_when_allowed() -> None:
+    from opensquilla.tools.policy import resolve_runtime_tool_surface
+    from opensquilla.tools.registry import filter_by_profile, resolve_profile
+
+    registry = ToolRegistry()
+    registry.register(_spec("memory_get"), _handler)
+    registry.register(_spec("memory_search"), _handler)
+    registry.register(_spec("read_file"), _handler)
+    channel_ctx = resolve_runtime_tool_surface(
+        ToolContext(
+            is_owner=False,
+            caller_kind=CallerKind.CHANNEL,
+            session_key="agent:main:slack:group:g1",
+            allowed_tools={"memory_get", "memory_search", "read_file"},
+        ),
+        capabilities=ToolSurfaceCapabilities(session_manager=True),
+    )
+
+    names = {
+        tool.name
+        for tool in filter_by_profile(
+            registry.to_tool_definitions(channel_ctx),
+            resolve_profile(channel_ctx),
+            channel_ctx,
+        )
+    }
+
+    assert "memory_get" not in names
+    assert "memory_search" not in names
+    assert "read_file" in names
+
+
+def test_direct_channel_context_keeps_private_memory_read_tools() -> None:
+    from opensquilla.tools.policy import resolve_runtime_tool_surface
+    from opensquilla.tools.registry import filter_by_profile, resolve_profile
+
+    registry = ToolRegistry()
+    registry.register(_spec("memory_get"), _handler)
+    registry.register(_spec("memory_search"), _handler)
+    channel_ctx = resolve_runtime_tool_surface(
+        ToolContext(
+            is_owner=False,
+            caller_kind=CallerKind.CHANNEL,
+            session_key="agent:main:slack:dm:u1",
+        ),
+        capabilities=ToolSurfaceCapabilities(session_manager=True),
+    )
+
+    names = {
+        tool.name
+        for tool in filter_by_profile(
+            registry.to_tool_definitions(channel_ctx),
+            resolve_profile(channel_ctx),
+            channel_ctx,
+        )
+    }
+
+    assert "memory_get" in names
+    assert "memory_search" in names
+
+
+@pytest.mark.asyncio
+async def test_effective_tools_hide_private_memory_reads_for_cron_and_subagents() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("memory_get"), _handler)
+    registry.register(_spec("memory_search"), _handler)
+    registry.register(_spec("read_file"), _handler)
+
+    cron_names = {
+        tool["name"]
+        for tool in await registry.effective_tools(
+            session_key="cron:dream:run:1",
+            agent_id="main",
+            caller_kind=CallerKind.CRON,
+            interaction_mode=InteractionMode.UNATTENDED,
+            tool_surface_capabilities=ToolSurfaceCapabilities(session_manager=True),
+            is_owner=False,
+        )
+    }
+    subagent_names = {
+        tool["name"]
+        for tool in await registry.effective_tools(
+            session_key="agent:main:subagent:run-1",
+            agent_id="main",
+            caller_kind=CallerKind.SUBAGENT,
+            interaction_mode=InteractionMode.UNATTENDED,
+            tool_surface_capabilities=ToolSurfaceCapabilities(session_manager=True),
+        )
+    }
+
+    assert cron_names == {"read_file"}
+    assert subagent_names == {"read_file"}
+
+
 def test_subagent_schema_hides_publish_artifact_without_artifact_context() -> None:
     import opensquilla.tools.builtin  # noqa: F401
     from opensquilla.tools.registry import get_default_registry
@@ -221,6 +357,93 @@ async def test_schema_visibility_and_dispatch_denial_use_same_context() -> None:
     )
 
     assert schema_names == {"allowed"}
+    assert forced_result.is_error is True
+    payload = json.loads(forced_result.content)
+    assert payload["error_class"] == "PolicyDenied"
+
+
+@pytest.mark.asyncio
+async def test_channel_profile_blocks_forced_tool_calls_outside_safe_allowlist() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("create_csv"), _handler)
+    registry.register(_spec("execute_code"), _handler)
+    ctx = ToolContext(is_owner=False, caller_kind=CallerKind.CHANNEL)
+    handler = build_tool_handler(registry, ctx)
+
+    allowed = await handler(
+        ToolCall(
+            tool_use_id="tc-safe",
+            tool_name="create_csv",
+            arguments={},
+        )
+    )
+    forced = await handler(
+        ToolCall(
+            tool_use_id="tc-forced",
+            tool_name="execute_code",
+            arguments={},
+        )
+    )
+
+    assert allowed.is_error is False
+    assert forced.is_error is True
+    payload = json.loads(forced.content)
+    assert payload["error_class"] == "PolicyDenied"
+
+
+@pytest.mark.asyncio
+async def test_channel_profile_allows_explicit_category_tools_not_host_mutation() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("create_pptx"), _handler)
+    registry.register(_spec("feishu_drive_upload_artifact"), _handler)
+    registry.register(_spec("write_file"), _handler)
+    ctx = ToolContext(
+        is_owner=False,
+        caller_kind=CallerKind.CHANNEL,
+        allowed_tools={"create_pptx", "feishu_drive_upload_artifact", "write_file"},
+    )
+    handler = build_tool_handler(registry, ctx)
+
+    category_tool = await handler(
+        ToolCall(
+            tool_use_id="tc-drive",
+            tool_name="feishu_drive_upload_artifact",
+            arguments={},
+        )
+    )
+    host_mutation = await handler(
+        ToolCall(
+            tool_use_id="tc-write",
+            tool_name="write_file",
+            arguments={},
+        )
+    )
+
+    assert category_tool.is_error is False
+    assert host_mutation.is_error is True
+    payload = json.loads(host_mutation.content)
+    assert payload["error_class"] == "PolicyDenied"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_denies_private_memory_reads_for_shared_sessions() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("memory_search"), _handler)
+    ctx = ToolContext(
+        is_owner=False,
+        caller_kind=CallerKind.CHANNEL,
+        session_key="agent:main:slack:group:g1",
+    )
+
+    handler = build_tool_handler(registry, ctx)
+    forced_result = await handler(
+        ToolCall(
+            tool_use_id="tc-memory-search",
+            tool_name="memory_search",
+            arguments={},
+        )
+    )
+
     assert forced_result.is_error is True
     payload = json.loads(forced_result.content)
     assert payload["error_class"] == "PolicyDenied"

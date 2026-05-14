@@ -84,8 +84,7 @@ async def prune_expired_memory_files(
             ``now - ttl_days * 86400 - debounce_seconds`` are pruned.
         workspace_dir: Per-agent workspace root. Store keys are computed
             as ``path.relative_to(workspace_dir)`` to match the
-            ``MemorySyncManager._scan_files`` convention (e.g. archive
-            files indexed as ``memory/archive/...``). Defaults to
+            ``MemorySyncManager._scan_files`` convention. Defaults to
             ``memory_dir.parent`` since manager.py keeps the parent /
             child relationship in both ``source="workspace"`` and
             ``source="state"`` modes.
@@ -95,7 +94,7 @@ async def prune_expired_memory_files(
         exempt_dot_prefix_dirs: If True (default), files under any
             dot-prefix subdirectory survive. Mirrors ``sync_manager._scan_files`` rule.
         cap_per_sweep: Max files to delete in one call. Bounds the
-            blast radius of the first restart sweep when archives have
+            blast radius of the first restart sweep when files have
             accumulated. Subsequent sweeps pick up the rest.
         debounce_seconds: Margin subtracted from the cutoff so files
             written within the last ``debounce_seconds`` are never
@@ -166,8 +165,8 @@ async def prune_expired_memory_files(
         if mtime >= cutoff:
             continue
 
-        # Store keys are workspace-relative (e.g. "memory/archive/x.md"),
-        # NOT memory-relative — must match MemorySyncManager._scan_files.
+        # Store keys are workspace-relative, NOT memory-relative — must
+        # match MemorySyncManager._scan_files.
         try:
             store_key = path.relative_to(workspace_root).as_posix()
         except ValueError:

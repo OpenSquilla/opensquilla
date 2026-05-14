@@ -49,6 +49,21 @@ _CHANNEL_DEFAULT_ALLOW: frozenset[str] = frozenset(
         "memory_search",
         "pdf",
         "publish_artifact",
+        "create_csv",
+        "create_pdf_report",
+        "create_pptx",
+        "create_xlsx",
+        "feishu_doc_create",
+        "feishu_doc_list_blocks",
+        "feishu_doc_read_raw",
+        "feishu_drive_meta",
+        "feishu_drive_search",
+        "feishu_drive_upload_artifact",
+        "feishu_media_upload_artifact",
+        "feishu_scopes_status",
+        "feishu_wiki_get_node",
+        "feishu_wiki_list_nodes",
+        "feishu_wiki_list_spaces",
         "read_file",
         "session_status",
         "sessions_history",
@@ -59,15 +74,49 @@ _CHANNEL_DEFAULT_ALLOW: frozenset[str] = frozenset(
     }
 )
 
+_CHANNEL_HARD_DENY_NON_OWNER: frozenset[str] = frozenset(
+    {
+        "apply_patch",
+        "background_process",
+        "edit_file",
+        "exec_command",
+        "execute_code",
+        "git_commit",
+        "write_file",
+    }
+)
+
 
 def filter_by_profile(
     tools: list[ToolDefinition],
     profile: ToolProfile | str,
+    ctx: ToolContext | None = None,
 ) -> list[ToolDefinition]:
     resolved = ToolProfile(profile)
     if resolved is ToolProfile.OWNER_FULL:
         return list(tools)
-    return [tool for tool in tools if tool.name in _CHANNEL_DEFAULT_ALLOW]
+    explicit = ctx.allowed_tools if ctx is not None else None
+    return [
+        tool
+        for tool in tools
+        if profile_allows_tool(tool.name, resolved, explicitly_allowed=explicit)
+    ]
+
+
+def profile_allows_tool(
+    tool_name: str,
+    profile: ToolProfile | str,
+    *,
+    explicitly_allowed: set[str] | frozenset[str] | None = None,
+) -> bool:
+    resolved = ToolProfile(profile)
+    if resolved is ToolProfile.OWNER_FULL:
+        return True
+    if tool_name in _CHANNEL_DEFAULT_ALLOW:
+        return True
+    if tool_name in _CHANNEL_HARD_DENY_NON_OWNER:
+        return False
+    return bool(explicitly_allowed and tool_name in explicitly_allowed)
 
 
 def resolve_profile(ctx: ToolContext | None) -> ToolProfile:

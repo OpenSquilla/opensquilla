@@ -6,8 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 
-from opensquilla.tools.types import InteractionMode, ToolContext
+from opensquilla.tools.types import CallerKind, InteractionMode, ToolContext
 
+_PRIVATE_MEMORY_READ_TOOL_NAMES: frozenset[str] = frozenset(
+    {"memory_get", "memory_search"}
+)
 _TOOL_GROUPS: Mapping[str, frozenset[str]] = {
     "group:runtime": frozenset({"exec_command", "background_process"}),
     "group:fs": frozenset(
@@ -27,6 +30,61 @@ _TOOL_GROUPS: Mapping[str, frozenset[str]] = {
     "group:memory": frozenset({"memory_search", "memory_get"}),
     "group:web": frozenset({"web_search", "web_fetch", "http_request"}),
     "group:messaging": frozenset({"message"}),
+    "channel:chat": frozenset(
+        {
+            "message",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send",
+            "session_status",
+        }
+    ),
+    "channel:media": frozenset(
+        {
+            "create_csv",
+            "create_pdf_report",
+            "create_pptx",
+            "create_xlsx",
+            "feishu_media_upload_artifact",
+            "image",
+            "image_generate",
+            "pdf",
+            "publish_artifact",
+            "tts",
+        }
+    ),
+    "channel:doc": frozenset(
+        {
+            "create_pdf_report",
+            "feishu_doc_create",
+            "feishu_doc_list_blocks",
+            "feishu_doc_read_raw",
+            "web_fetch",
+            "web_search",
+        }
+    ),
+    "channel:wiki": frozenset(
+        {
+            "feishu_wiki_get_node",
+            "feishu_wiki_list_nodes",
+            "feishu_wiki_list_spaces",
+            "web_fetch",
+            "web_search",
+        }
+    ),
+    "channel:drive": frozenset(
+        {
+            "create_csv",
+            "create_pdf_report",
+            "create_pptx",
+            "create_xlsx",
+            "feishu_drive_meta",
+            "feishu_drive_search",
+            "feishu_drive_upload_artifact",
+        }
+    ),
+    "channel:scopes": frozenset({"feishu_scopes_status"}),
+    "channel:perm": frozenset({"feishu_perm_grant_member"}),
     # Trusted host/gateway tools intentionally do not imply OS sandbox
     # execution. They remain addressable for explicit allow/deny policy so the
     # sandboxed-agent tool surface is not confused with operator-owned host
@@ -54,6 +112,34 @@ _CHANNEL_RUNTIME_TOOL_NAMES: frozenset[str] = frozenset({"message"})
 _ADMIN_RUNTIME_TOOL_NAMES: frozenset[str] = frozenset({"agents_list", "subagents"})
 _GATEWAY_RUNTIME_TOOL_NAMES: frozenset[str] = frozenset({"gateway"})
 _SCHEDULER_RUNTIME_TOOL_NAMES: frozenset[str] = frozenset({"cron"})
+_SENDER_SCOPED_TOOL_GROUPS: frozenset[str] = frozenset({"channel:perm"})
+_SENDER_SCOPED_TOOL_NAMES: frozenset[str] = _TOOL_GROUPS["channel:perm"]
+
+
+def private_memory_read_tools_blocked(ctx: ToolContext | None) -> bool:
+    """Return True when this context must not read private memory sources."""
+
+    if ctx is None:
+        return False
+    if ctx.caller_kind in {CallerKind.SUBAGENT, CallerKind.CRON}:
+        return True
+    if ctx.caller_kind is CallerKind.CHANNEL and not ctx.session_key:
+        return True
+    if not ctx.session_key:
+        return False
+
+    from opensquilla.session.keys import allows_private_memory_prompt_injection
+
+    return not allows_private_memory_prompt_injection(ctx.session_key)
+
+
+def private_memory_read_tool_denied(ctx: ToolContext | None, tool_name: str) -> bool:
+    """Return True when a specific tool call would read blocked private memory."""
+
+    return (
+        tool_name in _PRIVATE_MEMORY_READ_TOOL_NAMES
+        and private_memory_read_tools_blocked(ctx)
+    )
 
 
 @dataclass(frozen=True)
@@ -165,11 +251,17 @@ def _apply_base_policy(
 
 
 def _matches_sender(selector: str, sender_id: str | None) -> bool:
-    if selector == "*":
+    normalized = selector.strip()
+    if normalized == "*":
         return True
     if not sender_id:
         return False
-    return selector == f"id:{sender_id}" or selector == sender_id
+    if ":" in normalized:
+        key, value = normalized.split(":", 1)
+        if key.strip().lower() == "id":
+            return value == sender_id
+        return False
+    return normalized == sender_id
 
 
 def _get_field(value: object, name: str, default: object = None) -> object:
@@ -196,14 +288,15 @@ def _policy_from_config(value: object) -> ToolPolicy | None:
 
     tools_value = _get_field(value, "tools")
     sender_value = _get_field(value, "toolsBySender", _get_field(value, "tools_by_sender"))
-    if tools_value is not None or sender_value is not None:
+    if tools_value is not None:
         base = _policy_from_config(tools_value) or ToolPolicy()
+        wrapper_by_sender = _sender_policies_from_config(sender_value)
         return ToolPolicy(
             profile=base.profile,
             allow=base.allow,
             deny=base.deny,
             also_allow=base.also_allow,
-            by_sender=_sender_policies_from_config(sender_value),
+            by_sender={**base.by_sender, **wrapper_by_sender},
         )
 
     profile = _get_field(value, "profile")
@@ -213,7 +306,9 @@ def _policy_from_config(value: object) -> ToolPolicy | None:
         deny=_string_set(_get_field(value, "deny")),
         also_allow=_string_set(_get_field(value, "alsoAllow", _get_field(value, "also_allow"))),
         by_sender=_sender_policies_from_config(
-            _get_field(value, "by_sender", _get_field(value, "bySender"))
+            sender_value
+            if sender_value is not None
+            else _get_field(value, "by_sender", _get_field(value, "bySender"))
         ),
     )
 
@@ -273,6 +368,8 @@ def resolve_runtime_tool_surface(
         if not caps.channel_backing:
             denied_tools |= set(_CHANNEL_RUNTIME_TOOL_NAMES)
         denied_tools |= set(_ADMIN_RUNTIME_TOOL_NAMES)
+    if private_memory_read_tools_blocked(ctx):
+        denied_tools |= set(_PRIVATE_MEMORY_READ_TOOL_NAMES)
 
     allowed_tools = _remove_denied_from_allowed(allowed_tools, denied_tools)
     return replace(ctx, allowed_tools=allowed_tools, denied_tools=denied_tools)
@@ -367,9 +464,17 @@ def _apply_channel_layer(
 ) -> tuple[set[str] | None, set[str]]:
     if policy is None:
         return allowed_tools, channel_denied
+    profile_allowed = _profile_allowlist(policy.profile, available_tools)
+    if profile_allowed is not None:
+        allowed_tools = profile_allowed
+    channel_selectors = (
+        (policy.allow | policy.also_allow)
+        - _SENDER_SCOPED_TOOL_GROUPS
+        - _SENDER_SCOPED_TOOL_NAMES
+    )
     allowed_tools = _add_allowed(
         allowed_tools,
-        _expand_selectors(policy.allow | policy.also_allow, available_tools),
+        _expand_selectors(channel_selectors, available_tools),
     )
     channel_denied |= _expand_selectors(policy.deny, available_tools)
     return allowed_tools, channel_denied

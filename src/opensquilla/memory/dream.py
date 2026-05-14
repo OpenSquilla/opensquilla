@@ -150,7 +150,7 @@ class Dream:
     ) -> None:
         self.workspace = workspace
         self.memory_dir = workspace / "memory"
-        self.memory_md = self.memory_dir / "MEMORY.md"
+        self.memory_md = workspace / "MEMORY.md"
         self.cursor = DreamCursor(self.memory_dir)
         self.provider = provider
         self.model = model

@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from opensquilla.engine import Agent, AgentConfig
 from opensquilla.memory.flush import resolve_flush_plan
 from opensquilla.memory.protocols import MemoryToolHandler
+from opensquilla.memory.session_flush import FlushReceipt, SessionFlushService
 from opensquilla.provider import Message
 from opensquilla.tool_boundary import ToolCall, ToolResult
 
@@ -90,3 +92,76 @@ async def test_agent_memory_flush_timeout_enters_backoff_without_retrigger(
     assert calls == 1
     assert first_backoff_until > time.monotonic()
     assert agent._flush_backoff_seconds == 10.0
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_flush_raw_receipt_keeps_backoff() -> None:
+    agent = Agent(
+        provider=None,  # type: ignore[arg-type]
+        config=AgentConfig(
+            flush_backoff_initial_seconds=10.0,
+            flush_backoff_max_seconds=20.0,
+        ),
+        session_key="agent:main:webchat:s1",
+    )
+
+    class RawFlushService:
+        async def execute(self, *_args, **_kwargs) -> FlushReceipt:
+            return FlushReceipt(
+                mode="raw",
+                flushed_paths=["memory/.raw_fallbacks/raw.md"],
+                slug=None,
+                message_count=1,
+                duration_ms=1,
+                raw_reason="timeout",
+                error=None,
+            )
+
+    cast(Any, agent)._session_flush_service = RawFlushService()
+    task = asyncio.create_task(
+        agent._run_flush(SimpleNamespace(relative_path="memory/2026-05-14.md"), [])
+    )
+    agent._active_flush_task = task
+    await task
+
+    agent._mark_flush_task_completed(task)
+
+    assert agent._flush_backoff_until > time.monotonic()
+    assert agent._flush_backoff_seconds == 10.0
+
+
+@pytest.mark.asyncio
+async def test_session_flush_raw_fallback_deduplicates_same_transcript() -> None:
+    calls: list[ToolCall] = []
+
+    async def handler(call: ToolCall) -> ToolResult:
+        calls.append(call)
+        return ToolResult(
+            tool_use_id=call.tool_use_id,
+            tool_name=call.tool_name,
+            content="Saved to memory/.raw_fallbacks/raw.md (0 chunks indexed).",
+        )
+
+    service = SessionFlushService(
+        provider_selector=lambda _agent_id: None,
+        tool_registry=SimpleNamespace(to_tool_definitions=lambda: []),
+        tool_handler=handler,
+    )
+    messages = [Message(role="user", content="same transcript")]
+
+    first = await service._raw_dump_fallback(
+        messages,
+        reason="timeout",
+        agent_id="main",
+        session_key="agent:main:webchat:s1",
+    )
+    second = await service._raw_dump_fallback(
+        messages,
+        reason="timeout",
+        agent_id="main",
+        session_key="agent:main:webchat:s1",
+    )
+
+    assert len(calls) == 1
+    assert second.flushed_paths == first.flushed_paths
+    assert second.raw_reason == "timeout"

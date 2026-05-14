@@ -19,7 +19,7 @@ this workspace, what it should prioritize, and what it must avoid.
   here.
 - Do not store user profile facts here; use `USER.md`.
 - Do not store assistant voice or naming here; use `SOUL.md` or `IDENTITY.md`.
-- Do not store long-term factual memory here; use `MEMORY.md` or `memory/*.md`.
+- Do not store long-term factual memory here; use `MEMORY.md` or `memory/**/*.md`.
 - Do not store secrets, credentials, or one-off task notes here.
 - In shared, channel, cron, or subagent contexts, avoid exposing private user or
   long-term memory content unless runtime policy explicitly makes it available.

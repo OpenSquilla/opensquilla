@@ -63,7 +63,6 @@ class MemorySyncManager:
         interval_minutes: float = 0.0,
         ttl_days: int = 0,
         ttl_sweep_interval_minutes: float = 0.0,
-        index_archive: bool = False,
     ) -> None:
         self._store = store
         self._workspace_dir = Path(workspace_dir).expanduser().resolve()
@@ -73,13 +72,11 @@ class MemorySyncManager:
         self._interval_minutes = interval_minutes
         self._ttl_days = ttl_days
         self._ttl_sweep_interval_minutes = ttl_sweep_interval_minutes
-        self._index_archive = index_archive
 
         self._dirty = False
         self._warmed_sessions: set[str] = set()
         self._delta = SessionDeltaTracker()
         self._mtimes: dict[str, float] = {}
-        self._excluded_index_paths_removed: set[str] = set()
         self._pending_changes: set[str] = set()
         self._pending_deletes: set[str] = set()
         self._last_change_time: float = 0.0
@@ -98,8 +95,8 @@ class MemorySyncManager:
         """Start the file watcher, optional timer, and optional TTL sweep.
 
         Critical ordering: TTL sweep runs **before** the initial
-        ``_do_file_sync()`` so we don't waste an embed/index pass on
-        archive files we are about to delete.
+        ``_do_file_sync()`` so we don't waste an embed/index pass on files
+        we are about to delete.
 
         Initial sync still runs with empty _mtimes so every surviving
         disk file is seen as "new". index_file() skips unchanged files
@@ -109,7 +106,7 @@ class MemorySyncManager:
             return
         self._running = True
         # 1. TTL sweep FIRST — drop expired files before we waste cycles
-        #    embedding archive content we are about to throw away.
+        #    embedding content we are about to throw away.
         if self._ttl_enabled():
             await self._do_ttl_sweep(initial=True)
         # 2. THEN initial sync — surviving files get indexed.
@@ -214,26 +211,8 @@ class MemorySyncManager:
                     if any(part.startswith(".") for part in rel_to_memory.parts[:-1]):
                         continue
                     rel = path.relative_to(self._workspace_dir).as_posix()
-                    if not self._index_archive and self._is_archive_path(rel):
-                        continue
                     result[rel] = path.stat().st_mtime
         return result
-
-    @staticmethod
-    def _is_archive_path(rel_path: str) -> bool:
-        return Path(rel_path.replace("\\", "/")).parts[:2] == ("memory", "archive")
-
-    def _scan_excluded_index_files(self) -> set[str]:
-        if self._index_archive or not self._memory_dir.is_dir():
-            return set()
-        archive_dir = self._memory_dir / "archive"
-        if not archive_dir.is_dir():
-            return set()
-        return {
-            path.relative_to(self._workspace_dir).as_posix()
-            for path in archive_dir.rglob("*.md")
-            if path.is_file()
-        }
 
     async def _do_file_sync(
         self,
@@ -263,15 +242,12 @@ class MemorySyncManager:
             for path in set(self._mtimes) - set(current):
                 deletes.add(path)
 
-            deletes.update(self._scan_excluded_index_files() - self._excluded_index_paths_removed)
             self._mtimes = current
 
         failed_deletes: set[str] = set()
         for rel_path in deletes:
             try:
                 await self._store.remove_file(rel_path)
-                if self._is_archive_path(rel_path):
-                    self._excluded_index_paths_removed.add(rel_path)
                 logger.info("sync_manager.removed", path=rel_path)
             except Exception:
                 failed_deletes.add(rel_path)

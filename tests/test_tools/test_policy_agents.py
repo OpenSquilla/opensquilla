@@ -52,7 +52,7 @@ def test_cron_route_tool_policy_can_only_narrow_or_extend_cron_baseline() -> Non
 
     assert envelope.metadata["tool_policy"] == job.tool_policy
     assert result.caller_kind is CallerKind.CRON
-    assert result.allowed_tools == {"session_status", "memory_search"}
+    assert result.allowed_tools == {"session_status"}
     assert "web_fetch" in result.denied_tools
     assert "exec_command" in result.denied_tools
 
@@ -78,3 +78,124 @@ def test_messaging_group_does_not_revive_removed_agent_send_wrapper() -> None:
     assert "message" in result.allowed_tools
     assert "sessions_send" in result.allowed_tools
     assert "send_message" not in result.allowed_tools
+
+
+def test_channel_media_group_expands_safe_file_authoring_tools() -> None:
+    cfg = {
+        "channels": {
+            "feishu": {
+                "groups": {
+                    "oc_demo": {
+                        "tools": {"profile": "minimal", "also_allow": ["channel:media"]}
+                    }
+                }
+            }
+        }
+    }
+    ctx = ToolContext(
+        is_owner=False,
+        caller_kind=CallerKind.CHANNEL,
+        channel_kind="feishu",
+        channel_id="oc_demo",
+        sender_id="ou_user",
+    )
+
+    result = apply_tool_policy_from_config(
+        ctx,
+        available_tools=[
+            "session_status",
+            "create_csv",
+            "create_xlsx",
+            "create_pptx",
+            "create_pdf_report",
+            "execute_code",
+        ],
+        config=cfg,
+    )
+
+    assert result.allowed_tools == {
+        "session_status",
+        "create_csv",
+        "create_xlsx",
+        "create_pptx",
+        "create_pdf_report",
+    }
+
+
+def test_channel_perm_group_is_empty_until_explicit_tools_exist() -> None:
+    cfg = {
+        "channels": {
+            "feishu": {
+                "groups": {
+                    "oc_demo": {
+                        "tools": {"profile": "minimal", "also_allow": ["channel:perm"]}
+                    }
+                }
+            }
+        }
+    }
+    ctx = ToolContext(
+        is_owner=False,
+        caller_kind=CallerKind.CHANNEL,
+        channel_kind="feishu",
+        channel_id="oc_demo",
+        sender_id="ou_user",
+    )
+
+    result = apply_tool_policy_from_config(
+        ctx,
+        available_tools=["session_status", "feishu_permission_grant"],
+        config=cfg,
+    )
+
+    assert result.allowed_tools == {"session_status"}
+
+
+def test_channel_sender_policy_can_enable_drive_for_one_sender() -> None:
+    cfg = {
+        "channels": {
+            "feishu": {
+                "groups": {
+                    "oc_demo": {
+                        "tools": {
+                            "profile": "minimal",
+                            "toolsBySender": {
+                                "id:ou_allowed": {"also_allow": ["channel:drive"]}
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
+    available = ["session_status", "create_pptx", "feishu_drive_upload_artifact"]
+
+    allowed = apply_tool_policy_from_config(
+        ToolContext(
+            is_owner=False,
+            caller_kind=CallerKind.CHANNEL,
+            channel_kind="feishu",
+            channel_id="oc_demo",
+            sender_id="ou_allowed",
+        ),
+        available_tools=available,
+        config=cfg,
+    )
+    other = apply_tool_policy_from_config(
+        ToolContext(
+            is_owner=False,
+            caller_kind=CallerKind.CHANNEL,
+            channel_kind="feishu",
+            channel_id="oc_demo",
+            sender_id="ou_other",
+        ),
+        available_tools=available,
+        config=cfg,
+    )
+
+    assert allowed.allowed_tools == {
+        "session_status",
+        "create_pptx",
+        "feishu_drive_upload_artifact",
+    }
+    assert other.allowed_tools == {"session_status"}

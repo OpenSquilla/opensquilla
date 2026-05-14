@@ -84,6 +84,8 @@ SUBAGENT_TOOL_DENY: frozenset[str] = frozenset(
         "gateway",
         "agents_list",
         "subagents",
+        "memory_get",
+        "memory_search",
         "message",
         "publish_artifact",
     }
@@ -97,8 +99,6 @@ CRON_AGENT_ALLOW: frozenset[str] = frozenset(
         "glob_search",
         "grep_search",
         "list_dir",
-        "memory_get",
-        "memory_search",
         "pdf",
         "read_file",
         "session_status",

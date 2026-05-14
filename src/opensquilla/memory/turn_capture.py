@@ -1,4 +1,4 @@
-"""Turn-level memory capture into archive-tier Markdown sources."""
+"""Turn-level capture into private agent-state Markdown files."""
 
 from __future__ import annotations
 
@@ -8,9 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from opensquilla.engine.steps.inject_time_prefix import TIME_PREFIX_RE
-
-from .store import LongTermMemoryStore
-from .types import MemorySource
 
 _SESSION_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _TRUNCATION_SUFFIX = "\n... (truncated)"
@@ -33,17 +30,26 @@ def _truncate(text: str, max_chars: int) -> str:
 
 
 class TurnCaptureService:
-    """Persist turn deltas into archive audit files; indexing is opt-in."""
+    """Persist turn deltas into private state files.
+
+    Raw turns are audit/debug state, not curated memory. They deliberately do
+    not index into the ordinary memory store.
+    """
 
     def __init__(
         self,
         *,
-        store: LongTermMemoryStore,
         workspace_dir: str | Path,
+        turns_dir: str | Path | None = None,
         memory_config: Any | None = None,
     ) -> None:
-        self._store = store
         self._workspace_dir = Path(workspace_dir).expanduser().resolve()
+        self._turns_dir = (
+            Path(turns_dir).expanduser().resolve()
+            if turns_dir is not None
+            else (self._workspace_dir / ".opensquilla" / "turns").resolve()
+        )
+        self._turns_parent = self._turns_dir.parent
         self._memory_config = memory_config
 
     def _enabled(self) -> bool:
@@ -51,7 +57,7 @@ class TurnCaptureService:
             return True
         if not bool(getattr(self._memory_config, "auto_capture_enabled", True)):
             return False
-        return getattr(self._memory_config, "capture_mode", "archive_turn_pair") != "off"
+        return getattr(self._memory_config, "capture_mode", "turn_pair") != "off"
 
     def _capture_max_chars(self) -> int:
         if self._memory_config is None:
@@ -69,34 +75,29 @@ class TurnCaptureService:
             return False
         return bool(getattr(self._memory_config, "capture_assistant", False))
 
-    def _index_captured_turns(self) -> bool:
-        if self._memory_config is None:
-            return False
-        return bool(getattr(self._memory_config, "index_captured_turns", False))
-
-    def _archive_roll_max_chars(self) -> int:
+    def _turn_roll_max_chars(self) -> int:
         if self._memory_config is None:
             return 50_000
         value = int(getattr(self._memory_config, "capture_roll_max_chars", 50_000) or 0)
         return max(0, value)
 
-    def _archive_rel_path(self, session_key: str, captured_at: datetime) -> str:
+    def _turn_rel_path(self, session_key: str, captured_at: datetime) -> str:
         date_part = captured_at.strftime("%Y-%m-%d")
-        return f"memory/archive/{_session_slug(session_key)}/{date_part}.md"
+        return f"{self._turns_dir.name}/{_session_slug(session_key)}/{date_part}.md"
 
-    def _archive_part_rel_path(
+    def _turn_part_rel_path(
         self,
         session_key: str,
         captured_at: datetime,
         part: int,
     ) -> str:
         date_part = captured_at.strftime("%Y-%m-%d")
-        return f"memory/archive/{_session_slug(session_key)}/{date_part}-part{part:03d}.md"
+        return f"{self._turns_dir.name}/{_session_slug(session_key)}/{date_part}-part{part:03d}.md"
 
     def _file_header(self, session_key: str) -> str:
         return "\n".join(
             [
-                "# Turn Capture Archive",
+                "# Turn Capture",
                 "",
                 "- source_kind: turn_capture",
                 f"- session_key: {session_key}",
@@ -152,26 +153,26 @@ class TurnCaptureService:
             lines.extend(["", "### Assistant", assistant_text])
         return "\n".join(lines)
 
-    def _select_archive_target(
+    def _select_turn_target(
         self,
         *,
         session_key: str,
         captured_at: datetime,
         entry: str,
     ) -> tuple[str, Path, str | None, str]:
-        roll_max_chars = self._archive_roll_max_chars()
+        roll_max_chars = self._turn_roll_max_chars()
 
         for part in range(1, 1000):
             rel_path = (
-                self._archive_rel_path(session_key, captured_at)
+                self._turn_rel_path(session_key, captured_at)
                 if part == 1
-                else self._archive_part_rel_path(session_key, captured_at, part)
+                else self._turn_part_rel_path(session_key, captured_at, part)
             )
-            abs_path = (self._workspace_dir / rel_path).resolve()
+            abs_path = (self._turns_parent / rel_path).resolve()
             try:
-                abs_path.relative_to(self._workspace_dir)
+                abs_path.relative_to(self._turns_parent)
             except ValueError as exc:  # pragma: no cover - defensive
-                raise RuntimeError("turn capture path escaped workspace root") from exc
+                raise RuntimeError("turn capture path escaped state root") from exc
 
             previous_content = abs_path.read_text(encoding="utf-8") if abs_path.exists() else None
             existing = (
@@ -187,7 +188,7 @@ class TurnCaptureService:
             ):
                 return rel_path, abs_path, previous_content, new_content
 
-        raise RuntimeError("turn capture archive part limit exceeded")
+        raise RuntimeError("turn capture part limit exceeded")
 
     async def capture_turn(
         self,
@@ -228,7 +229,7 @@ class TurnCaptureService:
             assistant_text=cleaned_assistant,
             source=source,
         )
-        rel_path, abs_path, previous_content, new_content = self._select_archive_target(
+        rel_path, abs_path, previous_content, new_content = self._select_turn_target(
             session_key=session_key,
             captured_at=captured_at,
             entry=entry,
@@ -237,12 +238,6 @@ class TurnCaptureService:
         had_existing = previous_content is not None
         try:
             abs_path.write_text(new_content, encoding="utf-8")
-            if index_immediately and self._index_captured_turns():
-                await self._store.index_file(
-                    path=rel_path,
-                    content=new_content,
-                    source=MemorySource.memory,
-                )
         except Exception:
             if had_existing and previous_content is not None:
                 abs_path.write_text(previous_content, encoding="utf-8")

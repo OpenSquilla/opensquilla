@@ -25,6 +25,12 @@ from .embedding import (
 )
 from .meta import MemoryIndexMeta
 from .types import (
+    DEFAULT_MEMORY_SEARCH_MIN_SCORE,
+    DEFAULT_MEMORY_SEARCH_RESULTS,
+    LEXICAL_GUARANTEE_METADATA_KEY,
+    LEXICAL_GUARANTEE_METADATA_VALUE,
+    RELAXED_KEYWORD_MATCH_METADATA_KEY,
+    RELAXED_KEYWORD_MATCH_METADATA_VALUE,
     MemorySearchResult,
     MemorySource,
     SearchMode,
@@ -684,7 +690,7 @@ class LongTermMemoryStore:
         """Clear rebuildable index rows.
 
         File sync is responsible for re-indexing canonical MEMORY.md and
-        memory/*.md sources after this call.
+        memory/**/*.md sources after this call.
         """
         assert self._db is not None
         if self._vec_available:
@@ -745,8 +751,8 @@ class LongTermMemoryStore:
     async def search(
         self,
         query: str,
-        max_results: int = 10,
-        min_score: float = 0.0,
+        max_results: int = DEFAULT_MEMORY_SEARCH_RESULTS,
+        min_score: float = DEFAULT_MEMORY_SEARCH_MIN_SCORE,
         vector_weight: float = 0.7,
         text_weight: float = 0.3,
     ) -> tuple[list[MemorySearchResult], SearchMode]:
@@ -820,24 +826,31 @@ class LongTermMemoryStore:
                 rows = await cur.fetchall()
 
             results = []
+            relaxed_results = []
             for row in rows:
                 cid, path, source, sl, el, text, rank = row
                 score = _bm25_to_score(rank)
+                result = MemorySearchResult(
+                    chunk_id=cid,
+                    path=path,
+                    source=MemorySource(source),
+                    start_line=sl,
+                    end_line=el,
+                    snippet=text[:700],
+                    score=score,
+                    text_score=score,
+                    text=text,
+                    citation=f"{path}#L{sl}-L{el}",
+                )
+                relaxed_results.append(result)
                 if score >= min_score:
-                    results.append(
-                        MemorySearchResult(
-                            chunk_id=cid,
-                            path=path,
-                            source=MemorySource(source),
-                            start_line=sl,
-                            end_line=el,
-                            snippet=text[:700],
-                            score=score,
-                            text_score=score,
-                            text=text,
-                            citation=f"{path}#L{sl}-L{el}",
-                        )
+                    results.append(result)
+            if not results and relaxed_results:
+                for result in relaxed_results:
+                    result.metadata[RELAXED_KEYWORD_MATCH_METADATA_KEY] = (
+                        RELAXED_KEYWORD_MATCH_METADATA_VALUE
                     )
+                results = relaxed_results
             results = results[:k]
 
             # Fetch content hashes for all results in a single follow-up query.
@@ -919,7 +932,81 @@ class LongTermMemoryStore:
                     )
                 )
 
+        strict_ids = {result.chunk_id for result in results}
+        lexical_guarantees: list[MemorySearchResult] = []
+        if results:
+            for cid, s in scores.items():
+                if cid in strict_ids or cid not in chunk_rows or "text" not in s:
+                    continue
+                tscore = s.get("text", 0.0)
+                if tscore < min_score:
+                    continue
+                row = chunk_rows[cid]
+                vscore = s.get("vector", 0.0)
+                combined = vector_weight * vscore + text_weight * tscore
+                lexical_guarantees.append(
+                    MemorySearchResult(
+                        chunk_id=cid,
+                        path=row[1],
+                        source=MemorySource(row[2]),
+                        start_line=row[3],
+                        end_line=row[4],
+                        snippet=row[5][:700],
+                        score=combined,
+                        vector_score=vscore,
+                        text_score=tscore,
+                        text=row[5],
+                        chunk_hash=row[6],
+                        metadata={
+                            LEXICAL_GUARANTEE_METADATA_KEY: (
+                                LEXICAL_GUARANTEE_METADATA_VALUE
+                            )
+                        },
+                        citation=f"{row[1]}#L{row[3]}-L{row[4]}",
+                    )
+                )
+
+        if not results and fts_results:
+            relaxed_min_score = min(min_score, text_weight)
+            for cid, s in scores.items():
+                if cid not in chunk_rows or "text" not in s:
+                    continue
+                row = chunk_rows[cid]
+                vscore = s.get("vector", 0.0)
+                tscore = s.get("text", 0.0)
+                combined = vector_weight * vscore + text_weight * tscore
+                if combined >= relaxed_min_score:
+                    results.append(
+                        MemorySearchResult(
+                            chunk_id=cid,
+                            path=row[1],
+                            source=MemorySource(row[2]),
+                            start_line=row[3],
+                            end_line=row[4],
+                            snippet=row[5][:700],
+                            score=combined,
+                            vector_score=vscore,
+                            text_score=tscore,
+                            text=row[5],
+                            chunk_hash=row[6],
+                            metadata={
+                                RELAXED_KEYWORD_MATCH_METADATA_KEY: (
+                                    RELAXED_KEYWORD_MATCH_METADATA_VALUE
+                                )
+                            },
+                            citation=f"{row[1]}#L{row[3]}-L{row[4]}",
+                        )
+                    )
+
         results.sort(key=lambda r: r.score, reverse=True)
+        lexical_guarantees.sort(
+            key=lambda r: (r.text_score or 0.0, r.score),
+            reverse=True,
+        )
+        if lexical_guarantees:
+            guarantee_cap = min(len(lexical_guarantees), max(1, min(2, (k + 2) // 3)))
+            strict_keep = max(0, k - guarantee_cap)
+            return (results[:strict_keep] + lexical_guarantees[:guarantee_cap])[:k]
         return results[:k]
 
     # ------------------------------------------------------------------

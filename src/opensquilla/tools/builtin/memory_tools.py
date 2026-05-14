@@ -29,6 +29,11 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 import structlog
 
+from opensquilla.memory.types import (
+    DEFAULT_MEMORY_SEARCH_MIN_SCORE,
+    DEFAULT_MEMORY_SEARCH_RESULTS,
+    normalize_memory_search_min_score,
+)
 from opensquilla.tools.registry import tool
 from opensquilla.tools.types import ToolError, current_tool_context
 
@@ -85,8 +90,7 @@ async def _prune_expired_files(
     (``_apply_memory_writes`` indexes ``plan.path`` which is
     workspace-relative). Defaults to ``memory_dir.parent`` for legacy
     direct calls. The background sweeper in ``MemorySyncManager`` covers
-    paths the in-line call cannot reach (notably ``memory/archive/**``
-    written by ``TurnCaptureService``).
+    paths the in-line call cannot reach.
     """
     from opensquilla.memory.retention import prune_expired_memory_files
 
@@ -98,24 +102,13 @@ async def _prune_expired_files(
     )
 
 
-def _is_memory_archive_path(path: str) -> bool:
-    rel = Path(path)
-    return (
-        not rel.is_absolute()
-        and not any(part in {"", ".", ".."} for part in rel.parts)
-        and rel.parts[:2] == ("memory", "archive")
-    )
-
-
-def _is_memory_source_path(path: str, *, allow_archive: bool = False) -> bool:
+def _is_memory_source_path(path: str) -> bool:
     """Return True for OpenSquilla memory source files."""
     rel = Path(path)
     if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
         return False
     if rel.parts == ("MEMORY.md",):
         return True
-    if rel.parts[:2] == ("memory", "archive") and not allow_archive:
-        return False
     return (
         len(rel.parts) >= 2
         and rel.parts[0] == "memory"
@@ -155,9 +148,10 @@ def _is_memory_save_path(path: str) -> bool:
     return _is_memory_source_path(path) or _is_raw_fallback_save_path(path)
 
 
-_MEMORY_SEARCH_DEFAULT_RESULTS: Final[int] = 10
+_MEMORY_SEARCH_DEFAULT_RESULTS: Final[int] = DEFAULT_MEMORY_SEARCH_RESULTS
 _MEMORY_SEARCH_MAX_RESULTS: Final[int] = 20
 _MEMORY_SEARCH_EVIDENCE_CHARS: Final[int] = 900
+_MEMORY_SOURCE_PATH_HINT: Final[str] = "Use MEMORY.md or memory/**/*.md."
 _MEMORY_SEARCH_STOP_WORDS: Final[frozenset[str]] = frozenset(
     {
         "about",
@@ -450,16 +444,6 @@ def create_memory_tools(
                 "Read it first, then write the full updated content."
             )
 
-    def _allow_archive_memory_source() -> bool:
-        return bool(memory_config and getattr(memory_config, "index_captured_turns", False))
-
-    def _private_archive_error() -> str:
-        return (
-            "Error: memory archive is private turn-capture storage. Use durable memory "
-            "sources returned by memory_search. Enable index_captured_turns only when "
-            "raw captured turns are intentionally part of the product contract."
-        )
-
     def _ensure_clean_memory_content(content: str, path: str) -> None:
         threat = _scan_memory_content(content)
         if threat:
@@ -648,7 +632,7 @@ def create_memory_tools(
         description=(
             "Recall step for prior work, decisions, dated history, todos, and "
             "historical memory not already present in injected context. Searches "
-            "memory source files (MEMORY.md + memory/*.md) and returns top snippets "
+            "memory source files (MEMORY.md + memory/**/*.md) and returns top snippets "
             "with path + lines. User identity/profile fields such as name, preferred "
             "address, pronouns, and timezone belong in injected USER.md when present. "
             "Do not use memory_search for current user identity/profile questions when "
@@ -658,17 +642,28 @@ def create_memory_tools(
             "query": {"type": "string", "description": "Search query"},
             "max_results": {
                 "type": "integer",
-                "description": "Maximum results to return (default 10, clamped to 1-20)",
+                "description": "Maximum results to return (default 6, clamped to 1-20)",
+            },
+            "min_score": {
+                "type": "number",
+                "description": "Minimum score to return (default 0.35, clamped to 0-1)",
             },
         },
         required=["query"],
         registry=registry,
     )
-    async def memory_search(query: str, max_results: int = _MEMORY_SEARCH_DEFAULT_RESULTS) -> str:
+    async def memory_search(
+        query: str,
+        max_results: int = _MEMORY_SEARCH_DEFAULT_RESULTS,
+        min_score: float = DEFAULT_MEMORY_SEARCH_MIN_SCORE,
+    ) -> str:
         from opensquilla.memory.types import MemorySearchOpts, SearchIntent
 
         r = _resolve()
-        opts = MemorySearchOpts(max_results=_memory_search_limit(max_results))
+        opts = MemorySearchOpts(
+            max_results=_memory_search_limit(max_results),
+            min_score=normalize_memory_search_min_score(min_score),
+        )
         results = await r.retriever.search(query, opts, intent=SearchIntent.TOOL)
         if not results:
             return "No results found."
@@ -738,13 +733,13 @@ def create_memory_tools(
     @tool(
         name="memory_get",
         description=(
-            "Read from memory source files (MEMORY.md or memory/*.md) with optional from/lines. "
+            "Read from memory source files (MEMORY.md or memory/**/*.md) with optional from/lines. "
             "Use after memory_search to pull only the needed lines and keep context small."
         ),
         params={
             "path": {
                 "type": "string",
-                "description": "Workspace-relative memory source path: MEMORY.md or memory/*.md",
+                "description": "Workspace-relative memory source path: MEMORY.md or memory/**/*.md",
             },
             "from": {
                 "type": "integer",
@@ -782,11 +777,8 @@ def create_memory_tools(
         except ValueError:
             return "Error: path traversal not allowed."
 
-        allow_archive = _allow_archive_memory_source()
-        if _is_memory_archive_path(path) and not allow_archive:
-            return _private_archive_error()
-        if not _is_memory_source_path(path, allow_archive=allow_archive):
-            return "Error: path is not a memory source file. Use MEMORY.md or memory/*.md."
+        if not _is_memory_source_path(path):
+            return f"Error: path is not a memory source file. {_MEMORY_SOURCE_PATH_HINT}"
 
         if not file_path.exists():
             return f"Error: {path} not found."
@@ -830,11 +822,8 @@ def create_memory_tools(
         except ValueError:
             return "Error: path traversal not allowed."
 
-        allow_archive = _allow_archive_memory_source()
-        if _is_memory_archive_path(path) and not allow_archive:
-            return _private_archive_error()
-        if not _is_memory_source_path(path, allow_archive=allow_archive):
-            return "Error: path is not a memory source file. Use MEMORY.md or memory/*.md."
+        if not _is_memory_source_path(path):
+            return f"Error: path is not a memory source file. {_MEMORY_SOURCE_PATH_HINT}"
 
         if not file_path.exists():
             return f"Error: {path} not found."

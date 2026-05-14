@@ -12,7 +12,7 @@ Examples:
 
 User identity and profile fields belong in `USER.md`.
 Agent name, tone, and persona belong in IDENTITY.md or SOUL.md.
-Daily/session notes belong in `memory/*.md`.
+Daily/session notes belong in `memory/**/*.md`.
 
 Do not store secrets, credentials, private keys, or ordinary one-off deliverables
 here.

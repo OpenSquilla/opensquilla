@@ -89,6 +89,7 @@ DEFAULT_FLUSH_EXTRACTION_MAX_TOKENS = 3072
 DEFAULT_SEGMENT_EXTRACTION_CONCURRENCY = 4
 DEFAULT_TEMPORAL_SOURCE_BACKFILL_LIMIT = 50
 FLUSH_OBLIGATION_POLICY_VERSION = "temporal-source-obligation-v1"
+RAW_FALLBACK_DEDUPE_MAX_ENTRIES = 256
 _RAW_ERROR_MESSAGE_LIMIT = 2_000
 _ALLOWED_CANDIDATE_KINDS: set[str] = {
     "fact",
@@ -1870,6 +1871,7 @@ class SessionFlushService:
         self._default_timeout = default_timeout
         self._extraction_stats_by_session: dict[tuple[str, str], dict[str, Any]] = {}
         self._last_extraction_stats: dict[str, Any] = {}
+        self._raw_fallback_receipts: dict[tuple[str, str, str, str], FlushReceipt] = {}
 
     def last_extraction_stats(
         self,
@@ -2813,6 +2815,20 @@ class SessionFlushService:
         excerpt = dump_transcript_excerpt_with_audit(messages, max_chars=32_000)
         body = excerpt.text
         header = f"# Raw flush ({reason})\n\n"
+        fingerprint = hashlib.sha256((header + body).encode("utf-8")).hexdigest()
+        cache_key = (agent_id, session_key or "", reason, fingerprint)
+        cached = self._raw_fallback_receipts.get(cache_key)
+        if cached is not None:
+            logger.info(
+                "session_flush.raw_fallback_deduped",
+                extra={
+                    "reason": reason,
+                    "agent_id": agent_id,
+                    "session_key": session_key,
+                    "path": cached.flushed_paths[0] if cached.flushed_paths else "",
+                },
+            )
+            return cached
         _ctx_token = current_tool_context.set(_flush_tool_context(agent_id, source_name="raw-dump"))
         try:
             await self._tool_handler(
@@ -2824,7 +2840,7 @@ class SessionFlushService:
             )
         finally:
             current_tool_context.reset(_ctx_token)
-        return FlushReceipt(
+        receipt = FlushReceipt(
             mode="raw",
             flushed_paths=[path],
             slug=None,
@@ -2840,3 +2856,7 @@ class SessionFlushService:
                 prompt_char_count=len(body),
             ),
         )
+        self._raw_fallback_receipts[cache_key] = receipt
+        if len(self._raw_fallback_receipts) > RAW_FALLBACK_DEDUPE_MAX_ENTRIES:
+            self._raw_fallback_receipts.pop(next(iter(self._raw_fallback_receipts)))
+        return receipt

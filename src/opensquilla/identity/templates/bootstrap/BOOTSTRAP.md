@@ -22,4 +22,4 @@ Where to save durable setup results:
 - `SOUL.md` for durable voice and interaction style.
 - `AGENTS.md` for operating rules.
 - `TOOLS.md` for local tool conventions.
-- `MEMORY.md` or `memory/*.md` for long-term non-profile memory.
+- `MEMORY.md` or `memory/**/*.md` for long-term non-profile memory.
