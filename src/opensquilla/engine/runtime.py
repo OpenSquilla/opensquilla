@@ -10,6 +10,7 @@ import asyncio
 import base64
 import binascii
 import contextvars
+import copy
 import inspect
 import json
 import os
@@ -1178,7 +1179,7 @@ class TurnRunner:
         session = await self._session_manager.get_session(session_key)
         if session is None:
             return
-        captured_path = await capture_service.capture_turn(
+        await capture_service.capture_turn(
             session_key=session_key,
             session_id=getattr(session, "session_id", ""),
             user_text=runtime_message,
@@ -1192,17 +1193,6 @@ class TurnRunner:
             index_immediately=False,
             no_memory_capture=no_memory_capture,
         )
-        if (
-            captured_path
-            and self._memory_sync_managers
-            and bool(getattr(memory_cfg, "index_captured_turns", False))
-        ):
-            sync_manager = self._memory_sync_managers.get(
-                agent_id
-            ) or self._memory_sync_managers.get("main")
-            mark_dirty = getattr(sync_manager, "mark_dirty", None)
-            if callable(mark_dirty):
-                mark_dirty()
 
     @staticmethod
     def _capture_filter_matches(value: str | None, excluded_values: Any) -> bool:
@@ -1290,6 +1280,10 @@ class TurnRunner:
         attachments: list[dict] | None = None,
         timeout: float | None = None,
         max_iterations: int | None = None,
+        iteration_timeout: float | None = None,
+        tool_timeout: float | None = None,
+        request_timeout: float | None = None,
+        max_provider_retries: int | None = None,
         input_mode: str = "user",
         persist_input: bool = False,
         input_provenance: dict[str, Any] | None = None,
@@ -1337,6 +1331,10 @@ class TurnRunner:
                 effective_tool_context,
                 timeout=timeout,
                 max_iterations=max_iterations,
+                iteration_timeout=iteration_timeout,
+                tool_timeout=tool_timeout,
+                request_timeout=request_timeout,
+                max_provider_retries=max_provider_retries,
                 input_mode=input_mode,
                 persist_input=persist_input,
                 input_provenance=input_provenance,
@@ -1368,6 +1366,10 @@ class TurnRunner:
                         effective_tool_context,
                         timeout=timeout,
                         max_iterations=max_iterations,
+                        iteration_timeout=iteration_timeout,
+                        tool_timeout=tool_timeout,
+                        request_timeout=request_timeout,
+                        max_provider_retries=max_provider_retries,
                         input_mode=input_mode,
                         persist_input=persist_input,
                         input_provenance=input_provenance,
@@ -1394,6 +1396,10 @@ class TurnRunner:
         tool_context: ToolContext | None = None,
         timeout: float | None = None,
         max_iterations: int | None = None,
+        iteration_timeout: float | None = None,
+        tool_timeout: float | None = None,
+        request_timeout: float | None = None,
+        max_provider_retries: int | None = None,
         input_mode: str = "user",
         persist_input: bool = False,
         input_provenance: dict[str, Any] | None = None,
@@ -1555,9 +1561,13 @@ class TurnRunner:
             turn.metadata.update(tool_metadata)
             if self._config is not None and hasattr(self._config, "memory_mode_fingerprint"):
                 try:
-                    turn.metadata["memory_mode_fingerprint"] = (
-                        self._config.memory_mode_fingerprint()
-                    )
+                    fingerprint = self._config.memory_mode_fingerprint()
+                    prompt_fingerprint = turn.metadata.get("memory_mode_fingerprint")
+                    if isinstance(prompt_fingerprint, dict):
+                        fingerprint.update(
+                            {str(k): str(v) for k, v in prompt_fingerprint.items()}
+                        )
+                    turn.metadata["memory_mode_fingerprint"] = fingerprint
                 except Exception:
                     pass
             effective_runtime_message = getattr(turn, "message", runtime_message)
@@ -1648,7 +1658,22 @@ class TurnRunner:
                 session_key,
                 max_iterations,
             )
-            effective_request_timeout = self._resolve_llm_timeout(session_key)
+            effective_iteration_timeout = self._resolve_agent_iteration_timeout(
+                session_key,
+                iteration_timeout,
+            )
+            effective_tool_timeout = self._resolve_agent_tool_timeout(
+                session_key,
+                tool_timeout,
+            )
+            effective_agent_request_timeout = self._resolve_agent_request_timeout(
+                session_key,
+                request_timeout,
+            )
+            effective_max_provider_retries = self._resolve_agent_max_provider_retries(
+                session_key,
+                max_provider_retries,
+            )
 
             # Resolve max_tokens & context_window from model catalog
             user_max_tokens = getattr(getattr(self._config, "llm", None), "max_tokens", 0)
@@ -1694,7 +1719,10 @@ class TurnRunner:
                 skills_context_prompt=turn.metadata.get("skills_context_prompt"),
                 model_id=resolved_model,
                 timeout=effective_runtime_timeout,
-                request_timeout=effective_request_timeout,
+                iteration_timeout=effective_iteration_timeout,
+                tool_timeout=effective_tool_timeout,
+                request_timeout=effective_agent_request_timeout,
+                max_provider_retries=effective_max_provider_retries,
                 max_tokens=max_tokens,
                 context_window_tokens=context_window,
                 flush_enabled=getattr(_mem_cfg, "flush_enabled", True),
@@ -2603,6 +2631,233 @@ class TurnRunner:
 
         return AgentConfig().max_iterations
 
+    def _resolve_agent_iteration_timeout(
+        self,
+        session_key: str,
+        explicit: float | None = None,
+    ) -> float:
+        """Resolve per-iteration timeout for this turn.
+
+        Precedence: explicit arg > session config > env > gateway config > default.
+        """
+
+        if explicit is not None:
+            if self._non_bool_number(explicit) and explicit >= 0:
+                return float(explicit)
+            raise ValueError("iteration_timeout must be a non-negative number")
+
+        sm = self._session_manager
+        if sm is not None and hasattr(sm, "get_session_config"):
+            try:
+                session_cfg = sm.get_session_config(session_key)
+                if session_cfg is not None:
+                    value = getattr(session_cfg, "agent_iteration_timeout_seconds", None)
+                    if self._non_bool_number(value) and value >= 0:
+                        return float(value)
+                    if value is not None:
+                        log.warning(
+                            "turn_runner.invalid_agent_iteration_timeout",
+                            source="session",
+                            value=value,
+                        )
+            except Exception:  # noqa: BLE001
+                pass
+
+        env_value = os.environ.get("OPENSQUILLA_AGENT_ITERATION_TIMEOUT")
+        if env_value is not None and env_value.strip():
+            raw = env_value.strip()
+            try:
+                value = float(raw)
+            except ValueError:
+                log.warning(
+                    "turn_runner.invalid_agent_iteration_timeout", source="env", raw=raw
+                )
+            else:
+                if value >= 0:
+                    return value
+                log.warning(
+                    "turn_runner.invalid_agent_iteration_timeout", source="env", value=value
+                )
+
+        value = getattr(self._config, "agent_iteration_timeout_seconds", None)
+        if self._non_bool_number(value) and value >= 0:
+            return float(value)
+        if value is not None:
+            log.warning(
+                "turn_runner.invalid_agent_iteration_timeout",
+                source="config",
+                value=value,
+            )
+
+        return AgentConfig().iteration_timeout
+
+    def _resolve_agent_tool_timeout(
+        self,
+        session_key: str,
+        explicit: float | None = None,
+    ) -> float:
+        """Resolve per-tool execution timeout for this turn."""
+
+        if explicit is not None:
+            if self._non_bool_number(explicit) and explicit >= 0:
+                return float(explicit)
+            raise ValueError("tool_timeout must be a non-negative number")
+
+        sm = self._session_manager
+        if sm is not None and hasattr(sm, "get_session_config"):
+            try:
+                session_cfg = sm.get_session_config(session_key)
+                if session_cfg is not None:
+                    value = getattr(session_cfg, "agent_tool_timeout_seconds", None)
+                    if self._non_bool_number(value) and value >= 0:
+                        return float(value)
+                    if value is not None:
+                        log.warning(
+                            "turn_runner.invalid_agent_tool_timeout",
+                            source="session",
+                            value=value,
+                        )
+            except Exception:  # noqa: BLE001
+                pass
+
+        env_value = os.environ.get("OPENSQUILLA_AGENT_TOOL_TIMEOUT")
+        if env_value is not None and env_value.strip():
+            raw = env_value.strip()
+            try:
+                value = float(raw)
+            except ValueError:
+                log.warning("turn_runner.invalid_agent_tool_timeout", source="env", raw=raw)
+            else:
+                if value >= 0:
+                    return value
+                log.warning("turn_runner.invalid_agent_tool_timeout", source="env", value=value)
+
+        value = getattr(self._config, "agent_tool_timeout_seconds", None)
+        if self._non_bool_number(value) and value >= 0:
+            return float(value)
+        if value is not None:
+            log.warning(
+                "turn_runner.invalid_agent_tool_timeout",
+                source="config",
+                value=value,
+            )
+
+        return AgentConfig().tool_timeout
+
+    def _resolve_agent_request_timeout(
+        self,
+        session_key: str,
+        explicit: float | None = None,
+    ) -> float:
+        """Resolve single LLM request timeout for this turn (agent-runtime path)."""
+
+        if explicit is not None:
+            if self._non_bool_number(explicit) and explicit > 0:
+                return float(explicit)
+            raise ValueError("request_timeout must be a positive number")
+
+        sm = self._session_manager
+        if sm is not None and hasattr(sm, "get_session_config"):
+            try:
+                session_cfg = sm.get_session_config(session_key)
+                if session_cfg is not None:
+                    value = getattr(session_cfg, "agent_request_timeout_seconds", None)
+                    if self._non_bool_number(value) and value > 0:
+                        return float(value)
+                    if value is not None:
+                        log.warning(
+                            "turn_runner.invalid_agent_request_timeout",
+                            source="session",
+                            value=value,
+                        )
+            except Exception:  # noqa: BLE001
+                pass
+
+        env_value = os.environ.get("OPENSQUILLA_AGENT_REQUEST_TIMEOUT")
+        if env_value is not None and env_value.strip():
+            raw = env_value.strip()
+            try:
+                value = float(raw)
+            except ValueError:
+                log.warning(
+                    "turn_runner.invalid_agent_request_timeout", source="env", raw=raw
+                )
+            else:
+                if value > 0:
+                    return value
+                log.warning(
+                    "turn_runner.invalid_agent_request_timeout", source="env", value=value
+                )
+
+        value = getattr(self._config, "agent_request_timeout_seconds", None)
+        if self._non_bool_number(value) and value > 0:
+            return float(value)
+        if value is not None:
+            log.warning(
+                "turn_runner.invalid_agent_request_timeout",
+                source="config",
+                value=value,
+            )
+
+        return self._resolve_llm_timeout(session_key)
+
+    def _resolve_agent_max_provider_retries(
+        self,
+        session_key: str,
+        explicit: int | None = None,
+    ) -> int:
+        """Resolve max provider retries for this turn."""
+
+        if explicit is not None:
+            if self._non_bool_int(explicit) and explicit >= 0:
+                return int(explicit)
+            raise ValueError("max_provider_retries must be an integer >= 0")
+
+        sm = self._session_manager
+        if sm is not None and hasattr(sm, "get_session_config"):
+            try:
+                session_cfg = sm.get_session_config(session_key)
+                if session_cfg is not None:
+                    value = getattr(session_cfg, "agent_max_provider_retries", None)
+                    if self._non_bool_int(value) and value >= 0:
+                        return int(value)
+                    if value is not None:
+                        log.warning(
+                            "turn_runner.invalid_agent_max_provider_retries",
+                            source="session",
+                            value=value,
+                        )
+            except Exception:  # noqa: BLE001
+                pass
+
+        env_value = os.environ.get("OPENSQUILLA_AGENT_MAX_PROVIDER_RETRIES")
+        if env_value is not None and env_value.strip():
+            raw = env_value.strip()
+            try:
+                value = int(raw)
+            except ValueError:
+                log.warning(
+                    "turn_runner.invalid_agent_max_provider_retries", source="env", raw=raw
+                )
+            else:
+                if value >= 0:
+                    return value
+                log.warning(
+                    "turn_runner.invalid_agent_max_provider_retries", source="env", value=value
+                )
+
+        value = getattr(self._config, "agent_max_provider_retries", None)
+        if self._non_bool_int(value) and value >= 0:
+            return int(value)
+        if value is not None:
+            log.warning(
+                "turn_runner.invalid_agent_max_provider_retries",
+                source="config",
+                value=value,
+            )
+
+        return AgentConfig().max_provider_retries
+
     def _resolve_turn_thinking(self, turn: Any) -> bool | ThinkingLevel:
         """Resolve explicit config thinking before squilla-router suggestions."""
 
@@ -2697,7 +2952,7 @@ class TurnRunner:
         )
         tool_defs = self._tool_registry.to_tool_definitions(ctx)
         profile = resolve_profile(ctx)
-        tool_defs = filter_by_profile(tool_defs, profile)
+        tool_defs = filter_by_profile(tool_defs, profile, ctx)
         # layered intentionally — policy first, profile second.
         log.debug(
             "tool_policy.profile_post",
@@ -2976,7 +3231,22 @@ class TurnRunner:
                 prompt_metadata["memory_prompt_injection_skipped"] = (
                     "stateless" if stateless_prompt else "session-scope"
                 )
-            prompt_metadata["retrieval_mode"] = "fts_only"
+            retrieval_metadata = self._effective_memory_retrieval_metadata(agent_id)
+            prompt_metadata["retrieval_mode"] = retrieval_metadata.get("retrieval_mode")
+            prompt_metadata["embedding_requested_provider"] = retrieval_metadata.get(
+                "embedding_requested_provider"
+            )
+            prompt_metadata["embedding_effective_provider"] = retrieval_metadata.get(
+                "embedding_effective_provider"
+            )
+            prompt_metadata["embedding_model"] = retrieval_metadata.get("embedding_model")
+            prompt_metadata["memory_retrieval_vector_weight"] = retrieval_metadata.get(
+                "vector_weight"
+            )
+            prompt_metadata["memory_retrieval_text_weight"] = retrieval_metadata.get(
+                "text_weight"
+            )
+            prompt_metadata["memory_mode_fingerprint"] = retrieval_metadata
 
         soul_doc = parse_soul(workspace_files["SOUL.md"]) if "SOUL.md" in workspace_files else None
         identity_fields = (
@@ -3057,6 +3327,32 @@ class TurnRunner:
 
         source = getattr(getattr(self._config, "memory", None), "source", "state")
         return resolve_agent_memory_source_dir(agent_id, self._config, source=source)
+
+    def _effective_memory_retrieval_metadata(self, agent_id: str) -> dict[str, str]:
+        retrievers = self._memory_retrievers or {}
+        for key in (agent_id, "main"):
+            retriever = retrievers.get(key)
+            metadata_fn = getattr(retriever, "effective_retrieval_metadata", None)
+            if callable(metadata_fn):
+                try:
+                    metadata = metadata_fn()
+                except Exception:
+                    continue
+                if isinstance(metadata, dict):
+                    return {str(k): str(v) for k, v in metadata.items()}
+
+        memory_cfg = getattr(self._config, "memory", None)
+        configured_mode = str(getattr(memory_cfg, "retrieval_mode", "hybrid"))
+        effective_mode = "fts_only" if configured_mode == "fts_only" else configured_mode
+        return {
+            "configured_retrieval_mode": configured_mode,
+            "retrieval_mode": effective_mode,
+            "embedding_requested_provider": "",
+            "embedding_effective_provider": "",
+            "embedding_model": "",
+            "vector_weight": str(getattr(memory_cfg, "vector_weight", "")),
+            "text_weight": str(getattr(memory_cfg, "text_weight", "")),
+        }
 
     def _resolve_bootstrap_workspace_dir(self, agent_id: str):
         from opensquilla.agents.scope import resolve_agent_workspace_dir
@@ -3143,6 +3439,47 @@ class TurnRunner:
             observe_reasoning_hint,
             resolve_model,
         )
+        from opensquilla.engine.steps.squilla_router import (
+            commit_deferred_router_history,
+        )
+
+        router_cfg = getattr(self._config, "squilla_router", None)
+        router_timeout = float(getattr(router_cfg, "routing_timeout_seconds", 5.0) or 5.0)
+
+        def _copy_router_turn(turn: TurnContext) -> TurnContext:
+            metadata: dict[str, Any] = {}
+            for key, value in turn.metadata.items():
+                try:
+                    metadata[key] = copy.deepcopy(value)
+                except Exception:
+                    metadata[key] = value
+            pipeline_steps = metadata.get("pipeline_steps")
+            if isinstance(pipeline_steps, list):
+                metadata["pipeline_steps"] = list(pipeline_steps)
+            metadata["_defer_squilla_router_history"] = True
+            return replace(
+                turn,
+                tool_defs=list(turn.tool_defs),
+                attachments=list(turn.attachments),
+                metadata=metadata,
+            )
+
+        async def _bounded_apply_squilla_router(turn: TurnContext) -> TurnContext:
+            async def _run_router_step() -> TurnContext:
+                return await apply_squilla_router(_copy_router_turn(turn))
+
+            try:
+                routed = await asyncio.wait_for(
+                    asyncio.to_thread(lambda: asyncio.run(_run_router_step())),
+                    timeout=router_timeout,
+                )
+                return commit_deferred_router_history(routed)
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    f"squilla router timed out after {router_timeout:g}s"
+                ) from exc
+
+        _bounded_apply_squilla_router.__name__ = "apply_squilla_router"
 
         initial_metadata: dict[str, Any] = {"skill_loader": self._skill_loader}
         if ingress_pipeline_steps:
@@ -3175,7 +3512,7 @@ class TurnRunner:
             turn,
             [
                 resolve_model,
-                apply_squilla_router,
+                _bounded_apply_squilla_router,
                 observe_reasoning_hint,
                 filter_skills,
                 inject_subagent_grounding,

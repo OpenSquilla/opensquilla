@@ -14,6 +14,7 @@ from opensquilla.provider import (
     ChatConfig,
     ContentBlockText,
     ContentBlockToolResult,
+    ContentBlockToolUse,
     Message,
     ModelCapabilities,
 )
@@ -153,6 +154,129 @@ def test_tool_result_compression_default_behavior_is_unchanged() -> None:
     assert config.tool_result_compression_enabled is True
     assert config.tool_result_compression_mode is None
     assert agent._tool_result_compression_mode() == "truncate"
+
+
+def test_agent_aggregate_tool_result_budget_compacts_old_bulky_results() -> None:
+    agent = Agent(
+        provider=CapturingProvider(),
+        config=AgentConfig(
+            context_window_tokens=200,
+            tool_result_compression_max_share=0.25,
+        ),
+    )
+    messages = [
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockToolUse(id="old-1", name="execute_code", input={}),
+            ],
+        ),
+        Message(
+            role="user",
+            content=[
+                ContentBlockToolResult(
+                    tool_use_id="old-1",
+                    content="old bulky output\n" + ("x" * 4000),
+                    is_error=False,
+                )
+            ],
+        ),
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockToolUse(id="err-1", name="execute_code", input={}),
+            ],
+        ),
+        Message(
+            role="user",
+            content=[
+                ContentBlockToolResult(
+                    tool_use_id="err-1",
+                    content="Traceback\n" + ("e" * 4000),
+                    is_error=True,
+                )
+            ],
+        ),
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockToolUse(id="new-1", name="execute_code", input={}),
+            ],
+        ),
+        Message(
+            role="user",
+            content=[
+                ContentBlockToolResult(
+                    tool_use_id="new-1",
+                    content="recent output\n" + ("r" * 4000),
+                    is_error=False,
+                )
+            ],
+        ),
+    ]
+
+    compacted = agent._compact_aggregate_tool_results_for_provider(messages)
+
+    old_result = compacted[1].content[0]
+    err_result = compacted[3].content[0]
+    new_result = compacted[5].content[0]
+    assert isinstance(old_result, ContentBlockToolResult)
+    assert isinstance(err_result, ContentBlockToolResult)
+    assert isinstance(new_result, ContentBlockToolResult)
+    assert "aggregate_tool_result_compacted" in old_result.content
+    assert len(old_result.content) < 1000
+    assert "Traceback" in err_result.content
+    assert len(err_result.content) > 4000
+    assert "recent output" in new_result.content
+    assert len(new_result.content) > 4000
+    assert agent.config.metadata["tool_aggregate_compression_applied"] is True
+    assert agent.config.metadata["tool_compression_applied"] is True
+    assert agent.config.metadata["tool_compression_tokens_saved"] > 0
+
+
+def test_agent_aggregate_tool_result_budget_uses_total_not_single_result_size() -> None:
+    agent = Agent(
+        provider=CapturingProvider(),
+        config=AgentConfig(
+            context_window_tokens=1200,
+            tool_result_compression_max_share=0.25,
+        ),
+    )
+    messages: list[Message] = []
+    for index in range(5):
+        tool_id = f"tool-{index}"
+        messages.extend(
+            [
+                Message(
+                    role="assistant",
+                    content=[
+                        ContentBlockToolUse(id=tool_id, name="execute_code", input={}),
+                    ],
+                ),
+                Message(
+                    role="user",
+                    content=[
+                        ContentBlockToolResult(
+                            tool_use_id=tool_id,
+                            content=f"chunk {index}\n" + ("x" * 800),
+                            is_error=False,
+                        )
+                    ],
+                ),
+            ]
+        )
+
+    compacted = agent._compact_aggregate_tool_results_for_provider(messages)
+
+    compacted_contents = [
+        message.content[0].content
+        for message in compacted
+        if isinstance(message.content, list)
+        and message.content
+        and isinstance(message.content[0], ContentBlockToolResult)
+    ]
+    assert any("aggregate_tool_result_compacted" in content for content in compacted_contents)
+    assert "recent output" not in "\n".join(compacted_contents)
 
 
 @pytest.mark.asyncio

@@ -186,3 +186,94 @@ def test_agent_fallback_still_does_not_retry_auth_failures() -> None:
 
     assert kind is ProviderErrorKind.AUTH_FAILURE
     assert policy.should_retry(kind, attempt=0) is False
+
+
+@pytest.mark.parametrize(
+    ("raw_code", "message"),
+    [
+        ("empty_response", ""),
+        ("", "Provider returned an empty response"),
+        ("", "empty_response"),
+    ],
+)
+def test_provider_failure_classifies_empty_responses(
+    raw_code: str, message: str
+) -> None:
+    assert (
+        classify_provider_error("openrouter", None, raw_code=raw_code, message=message)
+        is ProviderFailureKind.EMPTY_RESPONSE
+    )
+
+
+def test_provider_failure_keeps_empty_http_gateway_body_transient() -> None:
+    assert (
+        classify_provider_error(
+            "openai",
+            500,
+            message="OpenAI chat request failed (HTTP 500): empty response body",
+        )
+        is ProviderFailureKind.PROVIDER_OVERLOADED
+    )
+
+
+def test_agent_fallback_identifies_but_does_not_retry_empty_responses() -> None:
+    policy = FallbackPolicy(max_retries=2)
+
+    kind = policy.classify_error("Provider returned an empty response")
+
+    assert kind is ProviderErrorKind.EMPTY_RESPONSE
+    assert policy.should_retry(kind, attempt=0) is False
+
+
+@pytest.mark.parametrize(
+    "status_code",
+    [499, 500, 521, 529],
+)
+def test_new_transient_status_codes_classify_as_provider_overloaded(
+    status_code: int,
+) -> None:
+    assert (
+        classify_provider_error("openrouter", status_code, message="")
+        is ProviderFailureKind.PROVIDER_OVERLOADED
+    )
+    assert (
+        classify_provider_error("anthropic", status_code, message="")
+        is ProviderFailureKind.PROVIDER_OVERLOADED
+    )
+
+
+@pytest.mark.parametrize("status_code", [520, 521])
+def test_anthropic_gateway_status_codes_use_canonical_transient_set(
+    status_code: int,
+) -> None:
+    assert (
+        classify_provider_error("anthropic", status_code, message="")
+        is ProviderFailureKind.PROVIDER_OVERLOADED
+    )
+
+
+def test_anthropic_gateway_status_codes_match_via_text() -> None:
+    assert (
+        classify_provider_error("anthropic", None, message="HTTP 520")
+        is ProviderFailureKind.PROVIDER_OVERLOADED
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "HTTP 499",
+        "HTTP 500",
+        "HTTP 502",
+        "HTTP 503",
+        "HTTP 521",
+        "HTTP 529",
+        "status_code: 500",
+        "error code 521",
+    ],
+)
+def test_new_transient_status_codes_match_via_text(message: str) -> None:
+    assert (
+        classify_provider_error("openrouter", None, message=message)
+        is ProviderFailureKind.PROVIDER_OVERLOADED
+    )

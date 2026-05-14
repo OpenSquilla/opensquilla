@@ -19,6 +19,7 @@ def test_memory_core_defaults_keep_single_stable_path() -> None:
     assert config.memory.dream.enabled is False
     assert config.memory.dream.preview_mode is True
     assert config.memory.dream.auto_schedule is False
+    assert config.memory.capture_mode == "turn_pair"
     assert config.memory_mode_fingerprint()["mode"] == "stable"
     assert "derived_cache" not in config.memory_mode_fingerprint()
 
@@ -37,5 +38,17 @@ def test_memory_core_defaults_keep_single_stable_path() -> None:
     ],
 )
 def test_rejected_memory_lanes_are_not_configurable(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        GatewayConfig(memory=payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"capture_mode": "archive_turn_pair"},
+        {"index_captured_turns": True},
+    ],
+)
+def test_legacy_turn_archive_controls_are_not_configurable(payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         GatewayConfig(memory=payload)

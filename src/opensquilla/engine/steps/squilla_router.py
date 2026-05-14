@@ -78,6 +78,9 @@ class RoutingHistoryStore:
 
 
 _history_store = RoutingHistoryStore()
+_DEFER_ROUTING_HISTORY_KEY = "_defer_squilla_router_history"
+_PENDING_ROUTING_HISTORY_ENTRY_KEY = "_pending_squilla_router_history_entry"
+_PENDING_ROUTING_HISTORY_SESSION_KEY = "_pending_squilla_router_history_session"
 _THINKING_LEVELS = {"minimal", "low", "medium", "high", "xhigh", "adaptive"}
 _TIER_TO_ROUTE_CLASS = {"t0": "R0", "t1": "R1", "t2": "R2", "t3": "R3"}
 _ROUTE_CLASS_TO_TIER = {v: k for k, v in _TIER_TO_ROUTE_CLASS.items()}
@@ -185,6 +188,52 @@ _COMPLAINT_TERMS = (
     "nonsense",
     "useless",
 )
+
+
+def _routing_history_entry(
+    *,
+    text: str,
+    extra: dict,
+    decision: RoutingDecision,
+) -> dict:
+    return {
+        "text": text,
+        **extra,
+        "base_tier": extra.get("base_tier", decision.tier),
+        "final_tier": extra.get("final_tier", decision.tier),
+        "final_route_class": extra.get("final_route_class"),
+    }
+
+
+def _append_routing_history(session_key: str, entry_payload: dict) -> list[dict]:
+    history = _history_store.setdefault(session_key, [])
+    entry = {
+        "turn_index": len(history),
+        "_ts": time.monotonic(),
+        **entry_payload,
+    }
+    history.append(entry)
+    if len(history) > _MAX_ROUTING_HISTORY:
+        _history_store.set(session_key, history[-_MAX_ROUTING_HISTORY:])
+    log.debug(
+        "squilla_router.history_appended",
+        session=session_key,
+        turn_index=entry["turn_index"],
+        route_class=entry.get("route_class"),
+        total_history=_history_store.length(session_key),
+    )
+    return _history_store.get(session_key) or []
+
+
+def commit_deferred_router_history(ctx: TurnContext) -> TurnContext:
+    """Commit deferred routing history after a bounded router step succeeds."""
+
+    entry_payload = ctx.metadata.pop(_PENDING_ROUTING_HISTORY_ENTRY_KEY, None)
+    session_key = ctx.metadata.pop(_PENDING_ROUTING_HISTORY_SESSION_KEY, ctx.session_key)
+    ctx.metadata.pop(_DEFER_ROUTING_HISTORY_KEY, None)
+    if isinstance(entry_payload, dict):
+        ctx.metadata["routing_history"] = _append_routing_history(session_key, entry_payload)
+    return ctx
 
 _RESPONSE_POLICY_OPEN = "[RESPONSE_POLICY:"
 
@@ -762,27 +811,37 @@ async def apply_squilla_router(ctx: TurnContext) -> TurnContext:
         return ctx
     strategy = _get_strategy(router_cfg)
     strategy_name = _strategy_name(router_cfg)
+    defer_history = bool(ctx.metadata.get(_DEFER_ROUTING_HISTORY_KEY))
 
     # History-aware routers load accumulated routing history for this session.
     routing_history = None
     if _is_history_strategy(strategy_name):
-        routing_history = _history_store.get(ctx.session_key)
+        stored_history = _history_store.get(ctx.session_key)
+        routing_history = [dict(entry) for entry in stored_history or []] or None
         if not routing_history:
             persisted = ctx.metadata.get("routing_history")
             if persisted:
                 now = time.monotonic()
-                routing_history = [{**e, "_ts": now} if "_ts" not in e else e for e in persisted]
-                _history_store.set(ctx.session_key, routing_history)
-                log.debug(
-                    "squilla_router.history_cold_start",
-                    session=ctx.session_key,
-                    restored=len(routing_history),
-                )
+                routing_history = [
+                    {**dict(entry), "_ts": now}
+                    if "_ts" not in entry
+                    else dict(entry)
+                    for entry in persisted
+                    if isinstance(entry, dict)
+                ]
+                if not defer_history:
+                    _history_store.set(ctx.session_key, routing_history)
+                    log.debug(
+                        "squilla_router.history_cold_start",
+                        session=ctx.session_key,
+                        restored=len(routing_history),
+                    )
         if routing_history:
             cutoff = time.monotonic() - _ROUTING_HISTORY_WINDOW
             routing_history = [e for e in routing_history if e.get("_ts", 0) > cutoff]
             routing_history = routing_history[-_MAX_ROUTING_HISTORY:]
-            _history_store.set(ctx.session_key, routing_history)
+            if not defer_history:
+                _history_store.set(ctx.session_key, routing_history)
         log.debug(
             "squilla_router.history_loaded",
             session=ctx.session_key,
@@ -895,27 +954,28 @@ async def apply_squilla_router(ctx: TurnContext) -> TurnContext:
     if _is_history_strategy(strategy_name):
         extra = ctx.metadata.get("routing_extra")
         if extra:
-            history = _history_store.setdefault(ctx.session_key, [])
-            entry = {
-                "turn_index": len(history),
-                "_ts": time.monotonic(),
-                "text": semantic_message,
-                **extra,
-                "base_tier": extra.get("base_tier", decision.tier),
-                "final_tier": extra.get("final_tier", decision.tier),
-                "final_route_class": extra.get("final_route_class"),
-            }
-            history.append(entry)
-            if len(history) > _MAX_ROUTING_HISTORY:
-                _history_store.set(ctx.session_key, history[-_MAX_ROUTING_HISTORY:])
-            ctx.metadata["routing_history"] = _history_store.get(ctx.session_key)
-            log.debug(
-                "squilla_router.history_appended",
-                session=ctx.session_key,
-                turn_index=entry["turn_index"],
-                route_class=entry.get("route_class"),
-                total_history=_history_store.length(ctx.session_key),
+            entry_payload = _routing_history_entry(
+                text=semantic_message,
+                extra=extra,
+                decision=decision,
             )
+            if defer_history:
+                ctx.metadata[_PENDING_ROUTING_HISTORY_ENTRY_KEY] = entry_payload
+                ctx.metadata[_PENDING_ROUTING_HISTORY_SESSION_KEY] = ctx.session_key
+                local_history = list(routing_history or [])
+                local_entry = {
+                    "turn_index": len(local_history),
+                    "_ts": time.monotonic(),
+                    **entry_payload,
+                }
+                ctx.metadata["routing_history"] = [*local_history, local_entry][
+                    -_MAX_ROUTING_HISTORY:
+                ]
+            else:
+                ctx.metadata["routing_history"] = _append_routing_history(
+                    ctx.session_key,
+                    entry_payload,
+                )
 
     # Pull observability fields from routing_extra so operators can see
     # what the model raw-believed (probabilities) vs what was selected

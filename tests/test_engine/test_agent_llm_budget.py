@@ -13,12 +13,21 @@ from opensquilla.engine import (
     DoneEvent,
     ErrorEvent,
     RunHeartbeatEvent,
+    ToolResult,
 )
 from opensquilla.engine.session_sanitize import session_payload_chars
-from opensquilla.provider import ChatConfig, Message, ProviderHeartbeatEvent
+from opensquilla.provider import (
+    ChatConfig,
+    Message,
+    ProviderHeartbeatEvent,
+    ToolDefinition,
+    ToolInputSchema,
+)
 from opensquilla.provider import DoneEvent as ProviderDone
 from opensquilla.provider import ErrorEvent as ProviderError
 from opensquilla.provider import TextDeltaEvent as ProviderText
+from opensquilla.provider import ToolUseEndEvent as ProviderToolUseEnd
+from opensquilla.provider import ToolUseStartEvent as ProviderToolUseStart
 from opensquilla.session.compaction import CompactionResult
 
 
@@ -119,6 +128,34 @@ class _ProviderHeartbeatThenText:
         return []
 
 
+class _ToolUseProvider:
+    provider_name = "fake"
+
+    def __init__(self) -> None:
+        self.calls: list[list[Message]] = []
+
+    def chat(
+        self,
+        messages: list[Message],
+        tools: list[Any] | None = None,
+        config: ChatConfig | None = None,
+    ) -> AsyncIterator[Any]:
+        self.calls.append(messages)
+        return self._stream()
+
+    async def _stream(self) -> AsyncIterator[Any]:
+        yield ProviderToolUseStart(tool_use_id="tool-1", tool_name="slow")
+        yield ProviderToolUseEnd(
+            tool_use_id="tool-1",
+            tool_name="slow",
+            arguments={},
+        )
+        yield ProviderDone(stop_reason="tool_use", input_tokens=1, output_tokens=1)
+
+    async def list_models(self) -> list[Any]:
+        return []
+
+
 @pytest.mark.asyncio
 async def test_provider_heartbeat_reaches_agent_stream() -> None:
     agent = Agent(
@@ -168,6 +205,42 @@ async def test_iteration_timeout_interrupts_stalled_provider_stream() -> None:
     assert len(provider.calls) == 1
     assert provider.stream_closed is True
     assert not any(isinstance(event, DoneEvent) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_iteration_timeout_caps_tool_execution() -> None:
+    async def slow_tool(call: object) -> ToolResult:
+        await asyncio.sleep(0.5)
+        return ToolResult(
+            tool_use_id=getattr(call, "tool_use_id"),
+            tool_name=getattr(call, "tool_name"),
+            content="late",
+        )
+
+    agent = Agent(
+        provider=_ToolUseProvider(),
+        config=AgentConfig(
+            iteration_timeout=0.05,
+            timeout=1.0,
+            tool_timeout=5.0,
+            max_provider_retries=0,
+        ),
+        tool_definitions=[
+            ToolDefinition(
+                name="slow",
+                description="Slow tool.",
+                input_schema=ToolInputSchema(),
+            )
+        ],
+        tool_handler=slow_tool,
+    )
+
+    events = await asyncio.wait_for(_collect_events(agent.run_turn("hello")), timeout=0.25)
+
+    assert any(
+        isinstance(event, ErrorEvent) and event.code == "iteration_timeout"
+        for event in events
+    )
 
 
 @pytest.mark.asyncio

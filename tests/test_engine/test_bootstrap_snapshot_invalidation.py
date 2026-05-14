@@ -95,6 +95,46 @@ def test_unattended_bootstrap_context_skips_only_bootstrap_md(tmp_path) -> None:
     assert {"AGENTS.md", "SOUL.md", "IDENTITY.md", "TOOLS.md", "USER.md"} <= filenames
 
 
+def test_prompt_metadata_uses_effective_memory_retrieval_metadata(tmp_path) -> None:
+    (tmp_path / "AGENTS.md").write_text("agents\n", encoding="utf-8")
+
+    class _Retriever:
+        def effective_retrieval_metadata(self) -> dict[str, str]:
+            return {
+                "configured_retrieval_mode": "hybrid",
+                "retrieval_mode": "hybrid",
+                "embedding_requested_provider": "auto",
+                "embedding_effective_provider": "local",
+                "embedding_model": "BAAI/bge-small-zh-v1.5",
+                "vector_weight": "0.7",
+                "text_weight": "0.3",
+            }
+
+    runner = TurnRunner(
+        provider_selector=None,
+        config=SimpleNamespace(
+            workspace_dir=str(tmp_path),
+            memory=SimpleNamespace(source="workspace", retrieval_mode="hybrid"),
+            tools=SimpleNamespace(profile=None),
+        ),
+        memory_retrievers={"main": _Retriever()},
+    )
+    metadata: dict[str, object] = {}
+
+    runner._assemble_prompt(
+        "main",
+        [],
+        session_key="agent:main:auto",
+        prompt_metadata=metadata,
+    )
+
+    assert metadata["retrieval_mode"] == "hybrid"
+    assert metadata["embedding_effective_provider"] == "local"
+    assert metadata["embedding_model"] == "BAAI/bge-small-zh-v1.5"
+    assert metadata["memory_retrieval_vector_weight"] == "0.7"
+    assert metadata["memory_retrieval_text_weight"] == "0.3"
+
+
 def test_stateless_bootstrap_context_skips_persona_memory_and_bootstrap(tmp_path) -> None:
     for filename in (
         "AGENTS.md",

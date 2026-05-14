@@ -174,6 +174,18 @@ def _is_threshold_denial(result: ToolResult) -> bool:
     )
 
 
+def _tool_result_content_has_artifact(content: str) -> bool:
+    try:
+        payload = json.loads(content)
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if isinstance(payload.get("artifact"), dict) or isinstance(payload.get("artifacts"), list):
+        return True
+    return payload.get("status") in {"published", "already_published"}
+
+
 def _artifact_event_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "kind",
@@ -237,6 +249,54 @@ class _ProviderAttemptClassification:
     kind: _ProviderAttemptKind
     stop_reason: str | None = None
     user_visible_emitted: bool = False
+
+
+@dataclass(frozen=True)
+class _ProviderRetryPolicy:
+    max_provider_retries: int
+    attempt_budgets: dict[_ProviderAttemptKind, int]
+    provider_failure_budgets: dict[ProviderFailureKind, int]
+
+    @classmethod
+    def from_provider_budget(cls, max_provider_retries: int) -> _ProviderRetryPolicy:
+        return cls(
+            max_provider_retries=max_provider_retries,
+            attempt_budgets={
+                _ProviderAttemptKind.REASONING_ONLY: 1,
+                _ProviderAttemptKind.MALFORMED_EMPTY: 1,
+                _ProviderAttemptKind.STREAM_INCOMPLETE: 1,
+            },
+            provider_failure_budgets={ProviderFailureKind.EMPTY_RESPONSE: 1},
+        )
+
+    def used_attempts(self) -> dict[_ProviderAttemptKind, int]:
+        return {kind: 0 for kind in self.attempt_budgets}
+
+    def can_retry_attempt(
+        self,
+        kind: _ProviderAttemptKind,
+        used: dict[_ProviderAttemptKind, int],
+    ) -> bool:
+        return (
+            self.max_provider_retries > 0
+            and used.get(kind, 0) < self.attempt_budgets.get(kind, 0)
+        )
+
+    def can_retry_provider_failure(
+        self,
+        failure_kind: ProviderFailureKind,
+        *,
+        post_tool_turn: bool,
+        provider_retry_attempt: int,
+    ) -> bool:
+        if failure_kind is ProviderFailureKind.EMPTY_RESPONSE:
+            return (
+                post_tool_turn
+                and self.max_provider_retries > 0
+                and provider_retry_attempt
+                < self.provider_failure_budgets.get(failure_kind, self.max_provider_retries)
+            )
+        return provider_retry_attempt < self.max_provider_retries
 
 
 def _classify_provider_attempt(
@@ -492,6 +552,162 @@ class Agent:
             self.config.context_window_tokens * self.config.tool_result_compression_max_share
         )
         return get_approx_tokens(text) > budget_tokens
+
+    def _compact_aggregate_tool_results_for_provider(
+        self,
+        messages: list[Message],
+    ) -> list[Message]:
+        """Compact old bulky tool results in the provider request view only.
+
+        Per-result compression happens at execution time. This pass handles the
+        aggregate case where many already-compressed or under-threshold results
+        accumulate across iterations. It never mutates persisted history and it
+        preserves recent, error, and artifact-producing results.
+        """
+
+        if self._tool_result_compression_mode() == "off":
+            return messages
+
+        tool_result_refs: list[tuple[int, int, ContentBlockToolResult]] = []
+        for message_index, message in enumerate(messages):
+            if not isinstance(message.content, list):
+                continue
+            for block_index, block in enumerate(message.content):
+                if isinstance(block, ContentBlockToolResult):
+                    tool_result_refs.append((message_index, block_index, block))
+
+        if len(tool_result_refs) <= 2:
+            return messages
+
+        recent_ids = {
+            id(block)
+            for _message_index, _block_index, block in tool_result_refs[-2:]
+        }
+        budget_tokens = int(
+            self.config.context_window_tokens * self.config.tool_result_compression_max_share
+        )
+        eligible_refs: list[tuple[int, int, ContentBlockToolResult, str, int]] = []
+        total_tool_result_tokens = 0
+        for message_index, block_index, block in tool_result_refs:
+            content = block.content if isinstance(block.content, str) else str(block.content)
+            tokens = get_approx_tokens(content)
+            total_tool_result_tokens += tokens
+            if (
+                id(block) in recent_ids
+                or block.is_error
+                or _tool_result_content_has_artifact(content)
+            ):
+                continue
+            eligible_refs.append((message_index, block_index, block, content, tokens))
+
+        if total_tool_result_tokens <= budget_tokens or not eligible_refs:
+            return messages
+
+        replacements: dict[tuple[int, int], ContentBlockToolResult] = {}
+
+        for message_index, block_index, block, content, original_tokens in eligible_refs:
+            if total_tool_result_tokens <= budget_tokens:
+                break
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            head = content[:240]
+            tail = content[-240:] if len(content) > 240 else ""
+            omitted = max(0, len(content) - len(head) - len(tail))
+            compacted = (
+                "[aggregate_tool_result_compacted]\n"
+                f"tool_use_id: {block.tool_use_id}\n"
+                f"original_chars: {len(content)}\n"
+                f"original_tokens_estimate: {get_approx_tokens(content)}\n"
+                f"sha256: {digest}\n"
+                f"omitted_chars: {omitted}\n"
+                "reason: older non-error tool result compacted for provider context budget.\n"
+                f"head:\n{head}"
+            )
+            if tail and tail != head:
+                compacted += f"\n...\ntail:\n{tail}"
+            replacements[(message_index, block_index)] = ContentBlockToolResult(
+                tool_use_id=block.tool_use_id,
+                content=compacted,
+                is_error=block.is_error,
+            )
+            replacement_tokens = get_approx_tokens(compacted)
+            total_tool_result_tokens -= max(0, original_tokens - replacement_tokens)
+
+        if not replacements:
+            return messages
+
+        compacted_messages: list[Message] = []
+        for message_index, message in enumerate(messages):
+            if not isinstance(message.content, list):
+                compacted_messages.append(message)
+                continue
+            next_content: list[Any] = []
+            message_changed = False
+            for block_index, block in enumerate(message.content):
+                replacement = replacements.get((message_index, block_index))
+                if replacement is None:
+                    next_content.append(block)
+                    continue
+                next_content.append(replacement)
+                message_changed = True
+            if not message_changed:
+                compacted_messages.append(message)
+                continue
+            compacted_messages.append(
+                Message(
+                    role=message.role,
+                    content=next_content,
+                    reasoning_content=getattr(message, "reasoning_content", None),
+                )
+            )
+
+        before_tokens = sum(
+            get_approx_tokens(
+                block.content if isinstance(block.content, str) else str(block.content)
+            )
+            for _message_index, _block_index, block in tool_result_refs
+        )
+        after_tokens = 0
+        for message in compacted_messages:
+            if not isinstance(message.content, list):
+                continue
+            for block in message.content:
+                if isinstance(block, ContentBlockToolResult):
+                    content = (
+                        block.content if isinstance(block.content, str) else str(block.content)
+                    )
+                    after_tokens += get_approx_tokens(content)
+
+        self.config.metadata["tool_aggregate_compression_applied"] = True
+        self.config.metadata["tool_aggregate_compression_calls"] = (
+            self.config.metadata.get("tool_aggregate_compression_calls", 0) + 1
+        )
+        self.config.metadata["tool_aggregate_compression_tokens_before"] = before_tokens
+        self.config.metadata["tool_aggregate_compression_tokens_after"] = after_tokens
+        self.config.metadata["tool_aggregate_compression_tokens_saved"] = max(
+            0, before_tokens - after_tokens
+        )
+        self.config.metadata["tool_compression_applied"] = True
+        self.config.metadata["tool_compression_calls"] = (
+            self.config.metadata.get("tool_compression_calls", 0) + len(replacements)
+        )
+        self.config.metadata["tool_compression_tokens_before"] = (
+            self.config.metadata.get("tool_compression_tokens_before", 0) + before_tokens
+        )
+        self.config.metadata["tool_compression_tokens_after"] = (
+            self.config.metadata.get("tool_compression_tokens_after", 0) + after_tokens
+        )
+        self.config.metadata["tool_compression_tokens_saved"] = (
+            self.config.metadata.get("tool_compression_tokens_saved", 0)
+            + max(0, before_tokens - after_tokens)
+        )
+        self._write_turn_call_log(
+            "tool_aggregate_compression",
+            original_tool_results=len(tool_result_refs),
+            compacted_tool_results=len(replacements),
+            tokens_before=before_tokens,
+            tokens_after=after_tokens,
+        )
+        return compacted_messages
 
     @staticmethod
     def _trim_summary_input(text: str, max_chars: int) -> str:
@@ -876,9 +1092,10 @@ class Agent:
 
                 _retry_attempt = 0
                 _call_attempt = 0
-                _reasoning_only_retry_done = False
-                _malformed_empty_retry_done = False
-                _stream_incomplete_retry_done = False
+                _retry_policy = _ProviderRetryPolicy.from_provider_budget(
+                    _fallback.max_retries
+                )
+                _attempt_retries_used = _retry_policy.used_attempts()
                 _invalid_response_fallback_done = False
                 while _retry_attempt <= _fallback.max_retries:
                     provider_error = None
@@ -901,6 +1118,9 @@ class Agent:
                         request_context_insert_index,
                         runtime_context_message,
                         runtime_context_insert_index,
+                    )
+                    request_source_messages = self._compact_aggregate_tool_results_for_provider(
+                        request_source_messages
                     )
                     request_messages, request_sanitize_result = sanitize_session_messages(
                         request_source_messages
@@ -1017,6 +1237,13 @@ class Agent:
                                 # they must not be appended to conversation history or the
                                 # live context-window gauge below.
                                 if self._usage_tracker and self._session_key:
+                                    # Forward the provider's real per-call billed_cost so
+                                    # the per-model breakdown can show actual numbers
+                                    # instead of the cache-blind pricing-table estimate.
+                                    # See engine/usage.py:ModelUsage.billed_cost and
+                                    # gateway/rpc_usage.py:_reconcile_breakdown_to_row
+                                    # (the pro-rate fallback now skips when items
+                                    # already carry real billed totals).
                                     self._usage_tracker.add(
                                         self._session_key,
                                         input_tokens=raw_ev.input_tokens,
@@ -1024,6 +1251,7 @@ class Agent:
                                         model_id=raw_ev.model or self.config.model_id or "",
                                         cache_read_tokens=raw_ev.cached_tokens,
                                         cache_write_tokens=raw_ev.cache_write_tokens,
+                                        billed_cost=raw_ev.billed_cost,
                                     )
 
                             elif isinstance(raw_ev, ProviderErrorEvent):
@@ -1142,10 +1370,12 @@ class Agent:
                         if (
                             attempt_classification.kind == _ProviderAttemptKind.REASONING_ONLY
                             and thinking_enabled
-                            and not _reasoning_only_retry_done
-                            and _fallback.max_retries > 0
+                            and _retry_policy.can_retry_attempt(
+                                _ProviderAttemptKind.REASONING_ONLY,
+                                _attempt_retries_used,
+                            )
                         ):
-                            _reasoning_only_retry_done = True
+                            _attempt_retries_used[_ProviderAttemptKind.REASONING_ONLY] += 1
                             _thinking_fallback_done = True
                             thinking_enabled = False
                             thinking_budget = 0
@@ -1162,10 +1392,12 @@ class Agent:
 
                         if (
                             attempt_classification.kind == _ProviderAttemptKind.MALFORMED_EMPTY
-                            and not _malformed_empty_retry_done
-                            and _fallback.max_retries > 0
+                            and _retry_policy.can_retry_attempt(
+                                _ProviderAttemptKind.MALFORMED_EMPTY,
+                                _attempt_retries_used,
+                            )
                         ):
-                            _malformed_empty_retry_done = True
+                            _attempt_retries_used[_ProviderAttemptKind.MALFORMED_EMPTY] += 1
                             delay = backoff_sleep(
                                 0,
                                 _fallback.base_backoff_ms,
@@ -1184,10 +1416,12 @@ class Agent:
                             attempt_classification.kind
                             == _ProviderAttemptKind.STREAM_INCOMPLETE
                             and not attempt_classification.user_visible_emitted
-                            and not _stream_incomplete_retry_done
-                            and _fallback.max_retries > 0
+                            and _retry_policy.can_retry_attempt(
+                                _ProviderAttemptKind.STREAM_INCOMPLETE,
+                                _attempt_retries_used,
+                            )
                         ):
-                            _stream_incomplete_retry_done = True
+                            _attempt_retries_used[_ProviderAttemptKind.STREAM_INCOMPLETE] += 1
                             delay = backoff_sleep(
                                 0,
                                 _fallback.base_backoff_ms,
@@ -1325,6 +1559,37 @@ class Agent:
                         kind = _fallback.classify_error(
                             provider_error.message,
                         )
+                        if (
+                            failure_kind == ProviderFailureKind.EMPTY_RESPONSE
+                            and _retry_policy.can_retry_provider_failure(
+                                failure_kind,
+                                post_tool_turn=post_tool_turn,
+                                provider_retry_attempt=_retry_attempt,
+                            )
+                        ):
+                            delay = backoff_sleep(
+                                _retry_attempt,
+                                _fallback.base_backoff_ms,
+                                _fallback.max_backoff_ms,
+                                _fake=True,
+                            )
+                            _log.warning(
+                                "provider.empty_response_retry",
+                                attempt=_retry_attempt + 1,
+                                delay_s=round(delay, 2),
+                                post_tool_turn=True,
+                            )
+                            yield WarningEvent(
+                                code="provider_empty_retry",
+                                message=(
+                                    "The provider returned an empty response after tool "
+                                    "execution; retrying once."
+                                ),
+                            )
+                            await asyncio.sleep(delay)
+                            _retry_attempt += 1
+                            _call_attempt += 1
+                            continue
                         if failure_kind == ProviderFailureKind.CONTEXT_OVERFLOW:
                             if overflow_retries >= self.config.max_overflow_retries:
                                 yield self._transition(AgentState.ERROR)
@@ -1661,6 +1926,12 @@ class Agent:
                 # Map tool_use_id -> ToolResult built up below.
                 results_by_id: dict[str, ToolResult] = {}
 
+                def _cap_timeout_by_deadlines(timeout: float) -> float:
+                    remaining = min(timeout, max(0.0, _iter_deadline - _loop.time()))
+                    if _total_deadline is not None:
+                        remaining = min(remaining, max(0.0, _total_deadline - _loop.time()))
+                    return max(0.001, remaining)
+
                 async def _run_one(tc: ToolCall) -> ToolResult:
                     started = time.monotonic()
                     self._write_turn_call_log(
@@ -1670,7 +1941,7 @@ class Agent:
                         name=tc.tool_name,
                         arguments=tc.arguments,
                     )
-                    tool_timeout = self._tool_execution_timeout(tc)
+                    tool_timeout = _cap_timeout_by_deadlines(self._tool_execution_timeout(tc))
                     try:
                         res = await asyncio.wait_for(
                             self._execute_tool(tc), timeout=tool_timeout
@@ -1706,18 +1977,50 @@ class Agent:
                     last_event_at = started
                     try:
                         while pending:
-                            if interval <= 0:
-                                done, pending = await asyncio.wait(
-                                    pending,
-                                    return_when=asyncio.FIRST_COMPLETED,
+                            remaining = max(0.0, _iter_deadline - _loop.time())
+                            if _total_deadline is not None:
+                                remaining = min(
+                                    remaining,
+                                    max(0.0, _total_deadline - _loop.time()),
                                 )
-                            else:
-                                done, pending = await asyncio.wait(
-                                    pending,
-                                    timeout=interval,
-                                    return_when=asyncio.FIRST_COMPLETED,
-                                )
+                            if remaining <= 0:
+                                for task, tc in list(task_to_tool_call.items()):
+                                    if task in pending:
+                                        task.cancel()
+                                        results_by_id[tc.tool_use_id] = ToolResult(
+                                            tool_use_id=tc.tool_use_id,
+                                            tool_name=tc.tool_name,
+                                            content=(
+                                                f"Tool '{tc.tool_name}' timed out after "
+                                                f"{self.config.iteration_timeout}s"
+                                            ),
+                                            is_error=True,
+                                        )
+                                return
+                            wait_timeout = remaining if interval <= 0 else min(interval, remaining)
+                            done, pending = await asyncio.wait(
+                                pending,
+                                timeout=max(0.001, wait_timeout),
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
                             if not done:
+                                if _loop.time() >= _iter_deadline or (
+                                    _total_deadline is not None
+                                    and _loop.time() >= _total_deadline
+                                ):
+                                    for task, tc in list(task_to_tool_call.items()):
+                                        if task in pending:
+                                            task.cancel()
+                                            results_by_id[tc.tool_use_id] = ToolResult(
+                                                tool_use_id=tc.tool_use_id,
+                                                tool_name=tc.tool_name,
+                                                content=(
+                                                    f"Tool '{tc.tool_name}' timed out after "
+                                                    f"{self.config.iteration_timeout}s"
+                                                ),
+                                                is_error=True,
+                                            )
+                                    return
                                 now = time.monotonic()
                                 yield RunHeartbeatEvent(
                                     phase="tool",
@@ -2279,14 +2582,24 @@ class Agent:
         if self._active_flush_task is not task:
             return
         try:
-            task.result()
+            receipt = task.result()
         except asyncio.CancelledError:
             logger.debug("memory_flush.cancelled")
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_flush.background_failed", error=str(exc))
         else:
-            self._flush_backoff_seconds = 0.0
-            self._flush_backoff_until = 0.0
+            mode = getattr(receipt, "mode", None)
+            if mode in {"raw", "error"}:
+                next_retry_seconds = self._ensure_flush_degraded_backoff()
+                logger.warning(
+                    "memory_flush.degraded",
+                    mode=mode,
+                    raw_reason=getattr(receipt, "raw_reason", None),
+                    next_retry_seconds=next_retry_seconds,
+                )
+            else:
+                self._flush_backoff_seconds = 0.0
+                self._flush_backoff_until = 0.0
         self._active_flush_task = None
 
     def _record_flush_timeout_backoff(self) -> float:
@@ -2303,6 +2616,12 @@ class Agent:
         self._flush_backoff_seconds = next_retry_seconds
         self._flush_backoff_until = time.monotonic() + next_retry_seconds
         return next_retry_seconds
+
+    def _ensure_flush_degraded_backoff(self) -> float:
+        remaining = self._flush_backoff_until - time.monotonic()
+        if remaining > 0:
+            return remaining
+        return self._record_flush_timeout_backoff()
 
     @staticmethod
     def _adjust_compacted_insert_index(
@@ -2337,7 +2656,7 @@ class Agent:
         self,
         plan: Any,
         messages: list[Message],
-    ) -> None:
+    ) -> Any | None:
         """Fire-and-forget memory flush; delegates to SessionFlushService.
 
         When a ``SessionFlushService`` is injected (post-PR2a), this method
@@ -2351,7 +2670,7 @@ class Agent:
                 from opensquilla.session.keys import parse_agent_id
 
                 sk = getattr(self, "_session_key", None) or "agent:main:legacy"
-                await service.execute(
+                return await service.execute(
                     messages,
                     session_key=sk,
                     agent_id=parse_agent_id(sk),
@@ -2363,7 +2682,7 @@ class Agent:
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_flush.service_failed", error=str(exc))
-            return
+            return None
 
         # Legacy fallback — only hit when no service is injected.
         from opensquilla.memory.flush import dump_transcript_excerpt
@@ -2384,6 +2703,7 @@ class Agent:
                         },
                     )
                 )
+        return None
 
     async def _execute_tool(self, tc: ToolCall) -> ToolResult:
         """Dispatch a tool call to the registered handler."""

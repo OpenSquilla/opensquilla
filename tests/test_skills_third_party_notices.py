@@ -22,12 +22,12 @@ def test_all_bundled_skills_have_complete_provenance(tmp_path: Path) -> None:
         provenance = skill.provenance
         assert provenance.origin in {
             "opensquilla-original",
-            "openclaw-derived",
+            "bundled-derived",
             "clawhub-mit0",
         }, skill.name
         assert provenance.maintained_by == "OpenSquilla", skill.name
-        if provenance.origin == "openclaw-derived":
-            assert provenance.upstream_url == "https://github.com/openclaw/openclaw"
+        if provenance.origin == "bundled-derived":
+            assert provenance.upstream_url == "https://github.com/bundled/bundled"
             assert provenance.license == "MIT", skill.name
         elif provenance.origin == "clawhub-mit0":
             assert provenance.upstream_url.startswith("https://clawhub.ai/"), skill.name
@@ -41,7 +41,7 @@ def test_third_party_notices_match_bundled_provenance(tmp_path: Path) -> None:
     text = NOTICES.read_text(encoding="utf-8")
     loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snapshot.json")
     skills = {skill.name: skill.provenance.origin for skill in loader.load_all()}
-    derived = sorted(name for name, origin in skills.items() if origin == "openclaw-derived")
+    derived = sorted(name for name, origin in skills.items() if origin == "bundled-derived")
     originals = sorted(name for name, origin in skills.items() if origin == "opensquilla-original")
 
     clawhub_derived = sorted(name for name, origin in skills.items() if origin == "clawhub-mit0")

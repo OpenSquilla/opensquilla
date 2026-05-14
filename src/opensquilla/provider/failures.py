@@ -16,6 +16,7 @@ class ProviderFailureKind(StrEnum):
     MODEL_NOT_FOUND = "model_not_found"
     TRANSPORT_TRANSIENT = "transport_transient"
     POLICY_REFUSAL = "policy_refusal"
+    EMPTY_RESPONSE = "empty_response"
     MALFORMED_RESPONSE = "malformed_response"
     BAD_REQUEST = "bad_request"
     UNKNOWN = "unknown"
@@ -53,8 +54,8 @@ _OPENAI_COMPAT_PROVIDERS = {
     "ovms",
 }
 
-_GATEWAY_TRANSIENT_STATUS_CODES = {502, 503, 504, 520, 522, 523, 524}
-_GATEWAY_CODES = r"(?:504|520|522|523|524)"
+_GATEWAY_TRANSIENT_STATUS_CODES = {499, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}
+_GATEWAY_CODES = r"(?:499|500|502|503|504|520|521|522|523|524|529)"
 _GATEWAY_CONTEXT = r"(?:cloudflare|openrouter|upstream|gateway|backend)"
 _GATEWAY_ERROR_TERMS = (
     r"(?:error|returned|returning|failed|failure|unreachable|timeout|timed out|"
@@ -102,6 +103,16 @@ def _is_policy_refusal(text: str) -> bool:
     )
 
 
+def _is_empty_response(raw_code: str, message: str) -> bool:
+    normalized_code = (raw_code or "").strip().lower()
+    normalized_message = (message or "").strip().lower()
+    return normalized_code == "empty_response" or normalized_message in {
+        "empty_response",
+        "empty response",
+        "provider returned an empty response",
+    }
+
+
 def _is_gateway_transient(text: str) -> bool:
     return bool(_GATEWAY_TRANSIENT_RE.search(text))
 
@@ -121,6 +132,8 @@ def classify_provider_error(
         return ProviderFailureKind.CONTEXT_OVERFLOW
     if _is_policy_refusal(text):
         return ProviderFailureKind.POLICY_REFUSAL
+    if _is_empty_response(raw_code, message):
+        return ProviderFailureKind.EMPTY_RESPONSE
 
     if provider in _OPENAI_COMPAT_PROVIDERS:
         if status_code in {401, 403} or "invalid api key" in text or "unauthorized" in text:
@@ -147,7 +160,7 @@ def classify_provider_error(
             return ProviderFailureKind.AUTH_INVALID
         if status_code == 429 or "rate_limit_error" in text:
             return ProviderFailureKind.RATE_LIMITED
-        if status_code in {529, 502, 503, 504} or "overloaded_error" in text:
+        if status_code in _GATEWAY_TRANSIENT_STATUS_CODES or "overloaded_error" in text:
             return ProviderFailureKind.PROVIDER_OVERLOADED
         if "invalid_request_error" in text:
             return ProviderFailureKind.BAD_REQUEST

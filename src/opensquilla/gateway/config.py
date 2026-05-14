@@ -563,11 +563,9 @@ class MemoryConfig(BaseSettings):
 
     # TTL (0 = disabled, no auto-prune)
     entry_ttl_days: int = 0
-    # Background TTL sweep cadence (minutes). Default 60 covers archive
-    # files (memory/archive/**) that the in-line memory_save TTL never
-    # reaches. Set to 0 to opt out of background sweep while keeping
-    # in-line TTL on memory_save. No-op when
-    # entry_ttl_days = 0.
+    # Background TTL sweep cadence (minutes). Set to 0 to opt out of
+    # background sweep while keeping in-line TTL on memory_save. No-op
+    # when entry_ttl_days = 0.
     ttl_sweep_interval_minutes: float = Field(default=60.0, ge=0.0)
 
     # Flush (pre-compaction memory save)
@@ -579,10 +577,9 @@ class MemoryConfig(BaseSettings):
 
     # Per-turn auto capture / recall
     auto_capture_enabled: bool = True
-    capture_mode: Literal["archive_turn_pair", "off"] = "archive_turn_pair"
+    capture_mode: Literal["turn_pair", "off"] = "turn_pair"
     capture_user: bool = True
     capture_assistant: bool = False
-    index_captured_turns: bool = False
     capture_excluded_run_kinds: list[str] = Field(
         default_factory=lambda: ["recall", "session_recall"]
     )
@@ -990,6 +987,7 @@ class SquillaRouterConfig(BaseSettings):
     confidence_threshold: float = 0.5
     v4_bundle_dir: str | None = None  # V4 Phase 3 bundle root; defaults to bundled assets
     v4_use_aux_head: bool | None = True  # override router.runtime.yaml aux head when set
+    routing_timeout_seconds: float = Field(default=5.0, gt=0.0)
     kv_cache_anti_downgrade_enabled: bool = True
     kv_cache_anti_downgrade_window_seconds: int = 600
     complaint_upgrade_enabled: bool = True
@@ -1494,6 +1492,18 @@ class GatewayConfig(BaseSettings):
     # Agent runtime timeout (whole turn lifecycle). ``None`` means use the
     # long built-in runtime default; ``0`` disables the runtime budget.
     agent_runtime_timeout_seconds: float | None = None
+    # Per-iteration timeout: one LLM call + its tool executions. ``None``
+    # means use the AgentConfig default.
+    agent_iteration_timeout_seconds: float | None = None
+    # Per-tool execution timeout. ``None`` means use the AgentConfig default.
+    agent_tool_timeout_seconds: float | None = None
+    # Per-turn override for the single LLM HTTP/streaming request timeout.
+    # ``None`` defers to ``llm_request_timeout_seconds`` so existing
+    # deployments keep their tuned value.
+    agent_request_timeout_seconds: float | None = None
+    # Maximum provider-level retries for transient errors. ``None`` means
+    # use the AgentConfig default.
+    agent_max_provider_retries: int | None = None
     # Agent model/tool loop budget for a single turn.
     agent_max_iterations: int = Field(default=100, ge=1)
     # Provider request timeout (single LLM HTTP/streaming request).
@@ -1657,7 +1667,6 @@ class GatewayConfig(BaseSettings):
             "capture_mode": self.memory.capture_mode,
             "capture_user": str(self.memory.capture_user).lower(),
             "capture_assistant": str(self.memory.capture_assistant).lower(),
-            "index_captured_turns": str(self.memory.index_captured_turns).lower(),
             "capture_excluded_run_kinds": ",".join(self.memory.capture_excluded_run_kinds),
             "capture_excluded_provenance_kinds": ",".join(
                 self.memory.capture_excluded_provenance_kinds
