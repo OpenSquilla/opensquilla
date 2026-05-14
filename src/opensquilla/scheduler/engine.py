@@ -124,6 +124,10 @@ class SchedulerEngine:
         cron_expr: str | None = None,
         delivery: DeliveryConfig | None = None,
         tool_policy: dict[str, Any] | None = None,
+        tz: str = "",
+        jitter_seconds: float | None = None,
+        creator_session_key: str = "",
+        creator_sender_id: str = "",
     ) -> CronJob:
         """Create and persist a new job; compute initial next_run_at.
 
@@ -144,6 +148,10 @@ class SchedulerEngine:
             delivery=delivery,
             origin_session_key=origin_session_key,
             tool_policy=tool_policy,
+            tz=tz,
+            jitter_seconds=jitter_seconds,
+            creator_session_key=creator_session_key,
+            creator_sender_id=creator_sender_id,
         )
         self._timer.nudge()
         return job

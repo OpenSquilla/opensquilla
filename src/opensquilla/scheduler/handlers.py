@@ -406,6 +406,7 @@ def make_system_event_handler(
         heartbeat_loop = heartbeat_loop_ref() if heartbeat_loop_ref else None
         reason = f"cron:{job.id}"
         wake_mode = getattr(job.wake_mode, "value", str(job.wake_mode or CronWakeMode.NOW))
+        delivery_override = _resolve_system_event_heartbeat_delivery_override(job)
 
         if wake_mode == CronWakeMode.NEXT_HEARTBEAT.value:
             await _request_heartbeat_now(
@@ -436,7 +437,7 @@ def make_system_event_handler(
             session_key=session_key,
             workspace_resolver=workspace_resolver,
         )
-        heartbeat_kwargs = {
+        heartbeat_kwargs: dict[str, Any] = {
             "reason": reason,
             "agent_id": agent_id,
             "session_key": session_key,
@@ -445,17 +446,22 @@ def make_system_event_handler(
             "tool_context": tool_context,
             "timeout": job.timeout_seconds,
         }
+        if delivery_override is not None:
+            heartbeat_kwargs["delivery_override"] = delivery_override
         run_once_now = getattr(heartbeat_loop, "run_once_now", None)
         if callable(run_once_now):
             async def _run_once():
-                return await run_once_now(
-                    reason=reason,
-                    agent_id=agent_id,
-                    session_key=session_key,
-                    target="last",
-                    tool_context=tool_context,
-                    timeout=job.timeout_seconds,
-                )
+                run_once_kwargs: dict[str, Any] = {
+                    "reason": reason,
+                    "agent_id": agent_id,
+                    "session_key": session_key,
+                    "target": "last",
+                    "tool_context": tool_context,
+                    "timeout": job.timeout_seconds,
+                }
+                if delivery_override is not None:
+                    run_once_kwargs["delivery_override"] = delivery_override
+                return await run_once_now(**run_once_kwargs)
 
         else:
             async def _run_once():

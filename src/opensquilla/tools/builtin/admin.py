@@ -145,13 +145,32 @@ def gateway_config_available() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _owns_cron_job(job: Any, sender_id: str, session_key: str) -> bool:
+    """Caller-ownership test for non-owner cron actions.
+
+    Prefer the stable channel sender_id; fall back to session_key for jobs
+    created before sender_id tracking existed (or for non-channel sessions).
+    """
+    job_sender = (getattr(job, "creator_sender_id", "") or "")
+    job_session = (getattr(job, "creator_session_key", "") or "")
+    if sender_id and job_sender:
+        return job_sender == sender_id
+    if session_key and job_session:
+        return job_session == session_key
+    return False
+
+
 @tool(
     name="cron",
     description=(
         "Create, list, remove, or trigger scheduled cron jobs. "
         "Use this tool (NOT exec_command or background_process) for any recurring/timed "
         "task scheduling or reminders. For reminders such as '每分钟提醒我喝水', use "
-        "job_kind=system_event and session_target=main."
+        "job_kind=system_event and session_target=main. For recurring background "
+        "agent tasks such as 'every morning summarize yesterday's emails', use "
+        "job_kind=agent_turn with session_target=isolated. "
+        "Channel users can create reminders and tasks bound to the calling channel; "
+        "list / remove / run only affect jobs the caller created."
     ),
     params={
         "action": {
@@ -210,9 +229,17 @@ def gateway_config_available() -> bool:
                 "Optional per-job cron tool policy with profile, allow, also_allow, and deny."
             ),
         },
+        "tz": {
+            "type": "string",
+            "description": (
+                "Optional IANA timezone (e.g. 'America/Los_Angeles', 'Asia/Shanghai'). "
+                "Applies to cron expressions; '0 9 * * *' with tz='America/Los_Angeles' "
+                "fires at 09:00 LA wall time. Empty string keeps the legacy UTC behaviour."
+            ),
+        },
     },
     required=["action"],
-    owner_only=True,
+    owner_only=False,
 )
 async def cron(
     action: str,
@@ -225,6 +252,7 @@ async def cron(
     agent_id: str = "main",
     wake_mode: str = "now",
     tool_policy: dict[str, Any] | None = None,
+    tz: str = "",
 ) -> str:
     if action not in _VALID_CRON_ACTIONS:
         raise ToolError(f"Invalid action: {action}. Must be list|add|remove|run")
@@ -240,8 +268,47 @@ async def cron(
 
     sched = _scheduler
 
+    # Resolve caller context. Owner-context calls (loopback CLI, owner WebUI,
+    # channel_admin_senders) pass through unchanged. Non-owner channel callers
+    # get caller-scoped list / remove / run filtering and have target_session_key
+    # / tool_policy blocked (privilege escalation knobs the model should not
+    # synthesise on a normal channel turn).
+    from opensquilla.tools.types import current_tool_context
+
+    ctx = current_tool_context.get()
+    is_owner_caller = bool(getattr(ctx, "is_owner", False)) if ctx is not None else True
+    caller_session_key = (
+        ctx.session_key if ctx is not None and ctx.session_key else ""
+    )
+    caller_sender_id = (
+        ctx.sender_id if ctx is not None and getattr(ctx, "sender_id", "") else ""
+    )
+
+    if not is_owner_caller:
+        if not caller_session_key:
+            raise ToolError(
+                "cron requires a session context for non-owner callers; "
+                "call from a channel-bound session"
+            )
+        if action == "add":
+            if target_session_key:
+                raise ToolError(
+                    "target_session_key is reserved for owner callers; "
+                    "non-owner reminders are scoped to your current session"
+                )
+            if tool_policy:
+                raise ToolError(
+                    "tool_policy is reserved for owner callers"
+                )
+
     if action == "list":
         jobs = await sched.list_jobs()
+        if not is_owner_caller:
+            jobs = [
+                j
+                for j in jobs
+                if _owns_cron_job(j, caller_sender_id, caller_session_key)
+            ]
         items = [
             {
                 "job_id": j.id,
@@ -276,38 +343,65 @@ async def cron(
         if wake_mode not in ("now", "next-heartbeat"):
             raise ToolError("wake_mode must be now or next-heartbeat")
 
-        # Auto-detect delivery target
+        # Auto-detect delivery target from session storage.
         delivery = None
-        sk = ""
-        try:
-            from opensquilla.scheduler.delivery import infer_delivery
-            from opensquilla.tools.builtin.sessions import _get_session_manager
-            from opensquilla.tools.types import current_tool_context
+        if caller_session_key:
+            try:
+                from opensquilla.scheduler.delivery import infer_delivery
+                from opensquilla.tools.builtin.sessions import _get_session_manager
 
-            ctx = current_tool_context.get()
-            sk = ctx.session_key if ctx is not None and ctx.session_key else ""
-            if sk and session_target != "main":
                 mgr = _get_session_manager()
                 storage = getattr(mgr, "_storage", mgr)
-                delivery = await infer_delivery(
+                inferred = await infer_delivery(
                     session_storage=storage,
-                    session_key=sk,
+                    session_key=caller_session_key,
                     user_overrides=None,
                 )
                 if (
-                    delivery.mode == DeliveryMode.ORIGIN
-                    and delivery.channel_name
-                    and delivery.originating_reply_target is None
+                    inferred.mode == DeliveryMode.ORIGIN
+                    and inferred.channel_name
+                    and inferred.originating_reply_target is None
                 ):
-                    delivery.originating_reply_target = ReplyTargetSnapshot(
-                        channel_name=delivery.channel_name,
-                        channel_type=delivery.channel_name,
-                        to=delivery.channel_id,
-                        account_id=delivery.account_id,
-                        thread_id=delivery.thread_id,
+                    inferred.originating_reply_target = ReplyTargetSnapshot(
+                        channel_name=inferred.channel_name,
+                        channel_type=inferred.channel_name,
+                        to=inferred.channel_id,
+                        account_id=inferred.account_id,
+                        thread_id=inferred.thread_id,
                     )
-        except Exception:
-            pass
+                if session_target == "main":
+                    # Main heartbeat ignores the channel mode (persistence forces
+                    # NONE for main) but uses the snapshot to pin the reply target.
+                    if inferred.originating_reply_target is not None:
+                        delivery = DeliveryConfig(
+                            mode=DeliveryMode.NONE,
+                            originating_reply_target=inferred.originating_reply_target,
+                        )
+                else:
+                    delivery = inferred
+            except Exception:
+                pass
+
+        # Snapshot fallback: when session storage did not yield a channel-
+        # routable target (fresh session before last_channel was written), build
+        # one from the live ToolContext so the first cron call still binds.
+        if (
+            ctx is not None
+            and getattr(ctx, "channel_kind", None)
+            and getattr(delivery, "originating_reply_target", None) is None
+        ):
+            snapshot = ReplyTargetSnapshot(
+                channel_name=ctx.channel_kind or "",
+                channel_type=ctx.channel_kind or "",
+                to=ctx.channel_id or "",
+            )
+            if delivery is None:
+                delivery = DeliveryConfig(
+                    mode=DeliveryMode.NONE,
+                    originating_reply_target=snapshot,
+                )
+            else:
+                delivery.originating_reply_target = snapshot
 
         payload = (
             make_system_event_payload(task, agent_id)
@@ -323,8 +417,11 @@ async def cron(
             session_key=target_session_key or "",
             wake_mode=wake_mode,
             delivery=delivery,
-            origin_session_key=sk,
+            origin_session_key=caller_session_key,
             tool_policy=tool_policy,
+            tz=tz or "",
+            creator_session_key=caller_session_key,
+            creator_sender_id=caller_sender_id,
         )
         # Populate ws_topic
         if job.delivery and not job.delivery.ws_topic:
@@ -342,12 +439,21 @@ async def cron(
                 "payload_kind": job_kind,
                 "session_target": session_target,
                 "wake_mode": wake_mode,
+                "tz": tz or "",
                 "status": "scheduled",
             }
         )
 
     if action == "remove":
         assert job_id is not None
+        if not is_owner_caller:
+            target_job = await sched.get_job(job_id)
+            if target_job is None:
+                raise ToolError(f"Job not found: {job_id}")
+            if not _owns_cron_job(target_job, caller_sender_id, caller_session_key):
+                raise ToolError(
+                    "permission denied: you can only remove cron jobs you created"
+                )
         removed = await sched.remove_job(job_id)
         if not removed:
             raise ToolError(f"Job not found: {job_id}")
@@ -355,6 +461,14 @@ async def cron(
 
     # run
     assert job_id is not None
+    if not is_owner_caller:
+        target_job = await sched.get_job(job_id)
+        if target_job is None:
+            raise ToolError(f"Job not found: {job_id}")
+        if not _owns_cron_job(target_job, caller_sender_id, caller_session_key):
+            raise ToolError(
+                "permission denied: you can only run cron jobs you created"
+            )
     result = await sched.run_job_now(job_id)
     status = getattr(result, "status", "")
     status_str = status.value if hasattr(status, "value") else str(status)

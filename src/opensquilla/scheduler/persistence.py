@@ -18,6 +18,7 @@ from .types import (
     CronWakeMode,
     DeliveryConfig,
     DeliveryMode,
+    FailureDestination,
     JobExecution,
     JobReservation,
     JobReservationRejected,
@@ -85,6 +86,10 @@ _NEW_COLUMNS: list[tuple[str, str]] = [
     ("reservation_source", "TEXT NOT NULL DEFAULT ''"),
     ("scheduled_run_at", "TEXT"),
     ("tool_policy_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("tz", "TEXT NOT NULL DEFAULT ''"),
+    ("anchor_at", "TEXT"),
+    ("creator_session_key", "TEXT NOT NULL DEFAULT ''"),
+    ("creator_sender_id", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -131,6 +136,10 @@ def _row_to_job(row: aiosqlite.Row) -> CronJob:
         jitter_seconds=row["jitter_seconds"],
         schedule_kind=ScheduleKind(_get("schedule_kind", "cron")),
         schedule_raw=_get("schedule_raw", "") or "",
+        tz=_get("tz", "") or "",
+        anchor_at=_dt(_get("anchor_at")),
+        creator_session_key=_get("creator_session_key", "") or "",
+        creator_sender_id=_get("creator_sender_id", "") or "",
         session_target=session_target,
         session_key=session_key,
         timeout_seconds=_get("timeout_seconds", 600.0) or 600.0,
@@ -167,7 +176,13 @@ def _effective_delivery_for_target(
     session_target: SessionTarget,
     delivery: DeliveryConfig,
 ) -> DeliveryConfig:
-    if session_target == SessionTarget.MAIN and delivery.mode != DeliveryMode.NONE:
+    if (
+        session_target == SessionTarget.MAIN
+        and delivery.mode != DeliveryMode.NONE
+        and delivery.mode != DeliveryMode.WEBHOOK
+    ):
+        # Webhook delivery is permitted for main targets; other modes are
+        # wiped because main heartbeat handles its own routing.
         return DeliveryConfig()
     return delivery
 
@@ -184,17 +199,35 @@ def _parse_json_object(raw: object) -> dict:
     return dict(parsed) if isinstance(parsed, dict) else {}
 
 
+def _serialize_failure_destination(fd: FailureDestination | None) -> dict | None:
+    if fd is None:
+        return None
+    return {
+        "mode": getattr(fd.mode, "value", str(fd.mode)),
+        "channel_name": fd.channel_name,
+        "channel_id": fd.channel_id,
+        "account_id": fd.account_id,
+        "thread_id": fd.thread_id,
+        "webhook_url": fd.webhook_url,
+        "webhook_token": fd.webhook_token,
+    }
+
+
 def _serialize_delivery(delivery: DeliveryConfig) -> str:
     snapshot = delivery.originating_reply_target
     return json.dumps(
         {
-            "schema_version": 2,
+            "schema_version": 4,
             "mode": getattr(delivery.mode, "value", str(delivery.mode)),
             "channel_name": delivery.channel_name,
             "channel_id": delivery.channel_id,
             "account_id": delivery.account_id,
             "thread_id": delivery.thread_id,
             "ws_topic": delivery.ws_topic,
+            "webhook_url": delivery.webhook_url,
+            "webhook_token": delivery.webhook_token,
+            "best_effort": delivery.best_effort,
+            "failure_destination": _serialize_failure_destination(delivery.failure_destination),
             "originating_reply_target": (
                 {
                     "channel_name": snapshot.channel_name,
@@ -211,13 +244,31 @@ def _serialize_delivery(delivery: DeliveryConfig) -> str:
     )
 
 
+def _parse_failure_destination(raw: object) -> FailureDestination | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        mode = DeliveryMode(raw.get("mode", "none"))
+    except ValueError:
+        return None
+    return FailureDestination(
+        mode=mode,
+        channel_name=raw.get("channel_name", "") or "",
+        channel_id=raw.get("channel_id", "") or "",
+        account_id=raw.get("account_id", "") or "",
+        thread_id=raw.get("thread_id", "") or "",
+        webhook_url=raw.get("webhook_url", "") or "",
+        webhook_token=raw.get("webhook_token", "") or "",
+    )
+
+
 def _parse_delivery(raw: str | None) -> DeliveryConfig:
     if not raw:
         return DeliveryConfig()
     try:
         d = json.loads(raw)
         schema_version = int(d.get("schema_version", 1))
-        if schema_version > 2:
+        if schema_version > 4:
             log.warning(
                 "scheduler.delivery_json_unknown_schema",
                 schema_version=schema_version,
@@ -233,6 +284,11 @@ def _parse_delivery(raw: str | None) -> DeliveryConfig:
                 thread_id=target.get("thread_id", ""),
                 request_id=target.get("request_id"),
             )
+        failure_destination = (
+            _parse_failure_destination(d.get("failure_destination"))
+            if schema_version >= 4
+            else None
+        )
         return DeliveryConfig(
             mode=DeliveryMode(d.get("mode", "none")),
             channel_name=d.get("channel_name", ""),
@@ -240,7 +296,11 @@ def _parse_delivery(raw: str | None) -> DeliveryConfig:
             account_id=d.get("account_id", ""),
             thread_id=d.get("thread_id", ""),
             ws_topic=d.get("ws_topic", ""),
+            webhook_url=d.get("webhook_url", "") or "",
+            webhook_token=d.get("webhook_token", "") or "",
+            best_effort=bool(d.get("best_effort", False)),
             originating_reply_target=snapshot,
+            failure_destination=failure_destination,
         )
     except (json.JSONDecodeError, ValueError):
         return DeliveryConfig()
@@ -386,8 +446,9 @@ class JobStore:
                  timeout_seconds, wake_mode, delete_after_run, enabled, backoff_until,
                  consecutive_errors, delivery_json, origin_session_key,
                  reservation_token, reserved_at, reserved_by, reservation_source,
-                 scheduled_run_at, tool_policy_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 scheduled_run_at, tool_policy_json, tz, anchor_at,
+                 creator_session_key, creator_sender_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
                 cron_expr=excluded.cron_expr,
@@ -419,7 +480,11 @@ class JobStore:
                 reserved_by=excluded.reserved_by,
                 reservation_source=excluded.reservation_source,
                 scheduled_run_at=excluded.scheduled_run_at,
-                tool_policy_json=excluded.tool_policy_json
+                tool_policy_json=excluded.tool_policy_json,
+                tz=excluded.tz,
+                anchor_at=excluded.anchor_at,
+                creator_session_key=excluded.creator_session_key,
+                creator_sender_id=excluded.creator_sender_id
             """,
             (
                 job.id,
@@ -455,6 +520,10 @@ class JobStore:
                 job.reservation_source,
                 self._iso(job.scheduled_run_at),
                 json.dumps(job.tool_policy or {}),
+                job.tz or "",
+                self._iso(job.anchor_at),
+                job.creator_session_key or "",
+                job.creator_sender_id or "",
             ),
         )
 

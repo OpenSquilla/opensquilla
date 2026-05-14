@@ -37,6 +37,7 @@ class ToolProfile(StrEnum):
 
 _CHANNEL_DEFAULT_ALLOW: frozenset[str] = frozenset(
     {
+        "cron",  # channel-safe reminders; cron tool enforces caller-scoped quotas
         "git_diff",
         "git_log",
         "git_status",

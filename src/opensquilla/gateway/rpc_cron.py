@@ -18,6 +18,7 @@ from opensquilla.scheduler.payloads import (
 from opensquilla.scheduler.types import (
     DeliveryConfig,
     DeliveryMode,
+    FailureDestination,
     ReplyTargetSnapshot,
     SessionTarget,
 )
@@ -45,7 +46,7 @@ def _job_to_wire(j: Any) -> dict[str, Any]:
     delivery = None if session_target == "main" else d.get("delivery")
     text = payload_text(payload, session_target)
     kind = payload_kind(payload, session_target)
-    return {
+    return {  # noqa: PIE810 — wire schema favors flat literal dict
         "id": d.get("id"),
         "name": d.get("name", ""),
         "expression": d.get("schedule_raw") or d.get("cron_expr", ""),
@@ -65,6 +66,7 @@ def _job_to_wire(j: Any) -> dict[str, Any]:
         "created_at": _iso(d.get("created_at")),
         "schedule_kind": str(d.get("schedule_kind", "cron")),
         "schedule_raw": d.get("schedule_raw", ""),
+        "tz": d.get("tz", "") or "",
         "session_target": session_target,
         "sessionTarget": session_target,
         "targetSessionKey": d.get("session_key", ""),
@@ -74,6 +76,28 @@ def _job_to_wire(j: Any) -> dict[str, Any]:
         "consecutive_errors": d.get("consecutive_errors", 0),
         "delivery": _delivery_to_wire(delivery),
         "toolPolicy": _tool_policy_to_wire(d.get("tool_policy")),
+    }
+
+
+def _failure_destination_to_wire(fd: Any) -> dict[str, Any] | None:
+    if fd is None:
+        return None
+    if isinstance(fd, dict):
+        return {
+            "mode": fd.get("mode", "none"),
+            "channelName": fd.get("channel_name", ""),
+            "channelId": fd.get("channel_id", ""),
+            "accountId": fd.get("account_id", ""),
+            "webhookUrl": fd.get("webhook_url", "") or "",
+        }
+    mode = getattr(fd, "mode", None)
+    mode_str = getattr(mode, "value", str(mode)) if mode is not None else "none"
+    return {
+        "mode": mode_str,
+        "channelName": getattr(fd, "channel_name", ""),
+        "channelId": getattr(fd, "channel_id", ""),
+        "accountId": getattr(fd, "account_id", ""),
+        "webhookUrl": getattr(fd, "webhook_url", "") or "",
     }
 
 
@@ -87,6 +111,11 @@ def _delivery_to_wire(delivery: Any) -> dict[str, Any]:
             "channelId": delivery.get("channel_id", ""),
             "accountId": delivery.get("account_id", ""),
             "threadId": delivery.get("thread_id", ""),
+            "webhookUrl": delivery.get("webhook_url", "") or "",
+            "bestEffort": bool(delivery.get("best_effort", False)),
+            "failureDestination": _failure_destination_to_wire(
+                delivery.get("failure_destination")
+            ),
         }
     return {
         "mode": (
@@ -98,6 +127,11 @@ def _delivery_to_wire(delivery: Any) -> dict[str, Any]:
         "channelId": getattr(delivery, "channel_id", ""),
         "accountId": getattr(delivery, "account_id", ""),
         "threadId": getattr(delivery, "thread_id", ""),
+        "webhookUrl": getattr(delivery, "webhook_url", "") or "",
+        "bestEffort": bool(getattr(delivery, "best_effort", False)),
+        "failureDestination": _failure_destination_to_wire(
+            getattr(delivery, "failure_destination", None)
+        ),
     }
 
 
@@ -239,6 +273,68 @@ def _resolve_wake_mode(params: dict[str, Any], current: Any = "now") -> str:
     return value
 
 
+def _is_webhook_delivery(delivery_raw: Any) -> bool:
+    if not isinstance(delivery_raw, dict):
+        return False
+    mode = delivery_raw.get("mode")
+    return isinstance(mode, str) and mode.strip().lower() == "webhook"
+
+
+def _build_failure_destination(raw: Any) -> FailureDestination | None:
+    """Parse delivery.failureDestination wire payload into a FailureDestination."""
+    from opensquilla.scheduler.delivery import validate_webhook_url
+
+    if not isinstance(raw, dict):
+        return None
+    mode_str = raw.get("mode", "")
+    if not isinstance(mode_str, str):
+        return None
+    mode_norm = mode_str.strip().lower()
+    if mode_norm not in ("channel", "webhook", "announce"):
+        return None
+    if mode_norm == "announce":
+        mode_norm = "channel"
+    if mode_norm == "webhook":
+        url = raw.get("webhookUrl") or raw.get("to") or ""
+        if not url:
+            raise ValueError(
+                "failureDestination mode='webhook' requires webhookUrl"
+            )
+        validate_webhook_url(str(url))
+        return FailureDestination(
+            mode=DeliveryMode.WEBHOOK,
+            webhook_url=str(url),
+            webhook_token=str(raw.get("webhookToken") or raw.get("token") or ""),
+        )
+    return FailureDestination(
+        mode=DeliveryMode.CHANNEL,
+        channel_name=str(raw.get("channelName") or raw.get("channel") or ""),
+        channel_id=str(raw.get("channelId") or raw.get("to") or ""),
+        account_id=str(raw.get("accountId") or ""),
+        thread_id=str(raw.get("threadId") or ""),
+    )
+
+
+def _build_webhook_delivery(delivery_raw: dict[str, Any]) -> DeliveryConfig:
+    """Construct a webhook DeliveryConfig from an RPC delivery payload."""
+    from opensquilla.scheduler.delivery import validate_webhook_url
+
+    url = delivery_raw.get("webhookUrl") or delivery_raw.get("to") or ""
+    token = delivery_raw.get("webhookToken") or delivery_raw.get("token") or ""
+    best_effort = bool(delivery_raw.get("bestEffort", False))
+    validate_webhook_url(str(url))
+    failure_destination = _build_failure_destination(
+        delivery_raw.get("failureDestination")
+    )
+    return DeliveryConfig(
+        mode=DeliveryMode.WEBHOOK,
+        webhook_url=str(url),
+        webhook_token=str(token),
+        best_effort=best_effort,
+        failure_destination=failure_destination,
+    )
+
+
 def _parse_delivery_overrides(delivery_raw: Any) -> dict[str, str] | None:
     if not isinstance(delivery_raw, dict) or not delivery_raw.get("channelName"):
         return None
@@ -255,6 +351,9 @@ def _ensure_delivery_supported(
     session_target: SessionTarget,
     delivery_raw: Any,
 ) -> None:
+    if _is_webhook_delivery(delivery_raw):
+        # Webhook delivery is permitted for any sessionTarget.
+        return
     if session_target != SessionTarget.MAIN:
         return
     if isinstance(delivery_raw, dict) and delivery_raw.get("mode") == "none":
@@ -345,6 +444,22 @@ async def _handle_cron_add(params: dict | None, ctx: RpcContext) -> dict[str, An
     delivery_raw = params.get("delivery")
     _ensure_delivery_supported(session_target=session_target, delivery_raw=delivery_raw)
     scheduler = _require_scheduler(ctx)
+
+    # Webhook delivery bypasses session-based channel inference entirely.
+    if _is_webhook_delivery(delivery_raw):
+        delivery = _build_webhook_delivery(delivery_raw)
+        return await _finalize_cron_add(
+            scheduler=scheduler,
+            params=params,
+            text=text,
+            payload=payload,
+            payload_kind_name=payload_kind_name,
+            session_target=session_target,
+            target_session_key=target_session_key,
+            origin_session_key=origin_session_key,
+            delivery=delivery,
+        )
+
     # Infer or parse delivery config
     user_overrides = _parse_delivery_overrides(delivery_raw)
 
@@ -379,6 +494,48 @@ async def _handle_cron_add(params: dict | None, ctx: RpcContext) -> dict[str, An
         delivery = delivery or DeliveryConfig()
         delivery.originating_reply_target = snapshot
 
+    if isinstance(delivery_raw, dict) and delivery_raw.get("failureDestination") is not None:
+        if delivery is None:
+            delivery = DeliveryConfig()
+        delivery.failure_destination = _build_failure_destination(
+            delivery_raw["failureDestination"]
+        )
+
+    return await _finalize_cron_add(
+        scheduler=scheduler,
+        params=params,
+        text=text,
+        payload=payload,
+        payload_kind_name=payload_kind_name,
+        session_target=session_target,
+        target_session_key=target_session_key,
+        origin_session_key=origin_session_key,
+        delivery=delivery,
+    )
+
+
+async def _finalize_cron_add(
+    *,
+    scheduler: Any,
+    params: dict[str, Any],
+    text: str,
+    payload: dict[str, Any],
+    payload_kind_name: str,
+    session_target: SessionTarget,
+    target_session_key: str,
+    origin_session_key: str,
+    delivery: DeliveryConfig | None,
+) -> dict[str, Any]:
+    tz_value = params.get("tz") or params.get("timezone") or ""
+    if not isinstance(tz_value, str):
+        tz_value = ""
+    jitter_seconds: float | None = None
+    if "jitterSeconds" in params or "staggerSeconds" in params:
+        raw_jitter = params.get("jitterSeconds", params.get("staggerSeconds"))
+        if isinstance(raw_jitter, (int, float)) and raw_jitter >= 0:
+            jitter_seconds = float(raw_jitter)
+    elif params.get("exact") is True:
+        jitter_seconds = 0.0
     job = await scheduler.add_job(
         name=params.get("name") or text,
         schedule_raw=params.get("schedule") or params["expression"],
@@ -391,6 +548,8 @@ async def _handle_cron_add(params: dict | None, ctx: RpcContext) -> dict[str, An
         delivery=delivery,
         origin_session_key=origin_session_key,
         tool_policy=_tool_policy_from_params(params),
+        tz=tz_value,
+        jitter_seconds=jitter_seconds,
     )
     # Populate ws_topic
     if job.delivery and not job.delivery.ws_topic:
@@ -418,6 +577,10 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
 
     if "expression" in params or "schedule" in params:
         patch["schedule_raw"] = params.get("schedule") or params.get("expression")
+
+    if "tz" in params or "timezone" in params:
+        tz_value = params.get("tz") if "tz" in params else params.get("timezone")
+        patch["tz"] = tz_value if isinstance(tz_value, str) else ""
 
     if "enabled" in params:
         if params["enabled"]:

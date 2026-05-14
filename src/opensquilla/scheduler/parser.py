@@ -5,8 +5,19 @@ from __future__ import annotations
 import re as _re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .types import ScheduleKind
+
+
+def validate_tz(tz: str) -> None:
+    """Raise ValueError if ``tz`` is set but not a valid IANA timezone name."""
+    if not tz:
+        return
+    try:
+        ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"Unknown timezone: {tz!r}") from exc
 
 
 class CronParseError(ValueError):

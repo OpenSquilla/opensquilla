@@ -240,6 +240,7 @@ class HeartbeatLoop:
         target: str = "last",
         tool_context: Any = None,
         timeout: float | None = None,
+        delivery_override: dict[str, str] | None = None,
     ) -> HeartbeatRunResult:
         """Run one heartbeat immediately with the loop's normal gates.
 
@@ -282,17 +283,20 @@ class HeartbeatLoop:
                 ran_at_ms=ran_at_ms,
             )
 
+        service_kwargs: dict[str, Any] = {
+            "reason": reason,
+            "agent_id": agent_id,
+            "session_key": session_key,
+            "prompt": snap["prompt"] or DEFAULT_HEARTBEAT_PROMPT,
+            "target": target,
+            "heartbeat_ack_max_chars": snap["ack_max_chars"],
+            "heartbeat_light_context": snap["light_context"],
+            "tool_context": tool_context or self._tool_context,
+            "timeout": timeout,
+        }
+        if delivery_override is not None:
+            service_kwargs["delivery_override"] = delivery_override
         return cast(
             HeartbeatRunResult,
-            await self._heartbeat_service.run_once(
-                reason=reason,
-                agent_id=agent_id,
-                session_key=session_key,
-                prompt=snap["prompt"] or DEFAULT_HEARTBEAT_PROMPT,
-                target=target,
-                heartbeat_ack_max_chars=snap["ack_max_chars"],
-                heartbeat_light_context=snap["light_context"],
-                tool_context=tool_context or self._tool_context,
-                timeout=timeout,
-            ),
+            await self._heartbeat_service.run_once(**service_kwargs),
         )

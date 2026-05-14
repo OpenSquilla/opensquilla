@@ -26,6 +26,7 @@ class DeliveryMode(StrEnum):
     NONE = "none"
     ORIGIN = "origin"
     CHANNEL = "channel"
+    WEBHOOK = "webhook"
 
 
 class CronWakeMode(StrEnum):
@@ -71,6 +72,24 @@ class ReplyTargetSnapshot:
 
 
 @dataclass
+class FailureDestination:
+    """Separate destination for failure notifications.
+
+    When a cron job's primary delivery is e.g. ``announce`` to a public
+    channel, ``failure_destination`` lets operators receive errors out-of-band
+    (different channel or a webhook). Mode must be ``channel`` or ``webhook``.
+    """
+
+    mode: DeliveryMode = DeliveryMode.NONE
+    channel_name: str = ""
+    channel_id: str = ""
+    account_id: str = ""
+    thread_id: str = ""
+    webhook_url: str = ""
+    webhook_token: str = ""
+
+
+@dataclass
 class DeliveryConfig:
     """Delivery routing for cron job results."""
 
@@ -81,6 +100,10 @@ class DeliveryConfig:
     thread_id: str = ""  # optional thread ID
     ws_topic: str = ""  # WS targeted push topic, default "cron:{job_id}"
     originating_reply_target: ReplyTargetSnapshot | None = None
+    webhook_url: str = ""  # http(s) endpoint for mode=WEBHOOK
+    webhook_token: str = ""  # optional bearer token for webhook Authorization
+    best_effort: bool = False  # when True, delivery failure does not fail the job
+    failure_destination: FailureDestination | None = None
 
 
 @dataclass
@@ -115,6 +138,10 @@ class CronJob:
     # New fields
     schedule_kind: ScheduleKind = ScheduleKind.CRON
     schedule_raw: str = ""
+    tz: str = ""  # IANA timezone for CRON schedules; empty == UTC
+    anchor_at: datetime | None = None  # EVERY+interval anchor (UTC)
+    creator_session_key: str = ""  # Session key of the caller that created the job
+    creator_sender_id: str = ""  # Channel sender id (when created from a channel)
     session_target: SessionTarget = SessionTarget.ISOLATED
     session_key: str = ""
     origin_session_key: str = ""
