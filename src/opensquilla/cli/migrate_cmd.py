@@ -27,11 +27,9 @@ from opensquilla.migration.hermes import (
     _is_valid_hermes_home,
 )
 from opensquilla.migration.openclaw import (
-    PERSONA_CONFLICT_MODES,
-)
-from opensquilla.migration.openclaw import (
     MIGRATION_OPTIONS,
     MIGRATION_PRESETS,
+    PERSONA_CONFLICT_MODES,
     SKILL_CONFLICT_MODES,
     MigrationOptions,
     OpenClawMigrator,
