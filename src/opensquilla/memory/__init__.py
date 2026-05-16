@@ -33,6 +33,15 @@ from .source_paths import (
 from .store import LongTermMemoryStore
 from .sync_manager import MemorySyncManager, SessionDeltaTracker
 from .sync_manager import MemorySyncManager as MemoryFileWatcher
+from .tool_search import (
+    MEMORY_SEARCH_DEFAULT_RESULTS,
+    MEMORY_SEARCH_MAX_RESULTS,
+    bounded_memory_search_evidence,
+    clean_memory_search_evidence,
+    format_memory_search_results,
+    memory_search_limit,
+    search_memory_tool,
+)
 from .tool_sources import (
     MemorySourceError,
     delete_memory_source,
@@ -83,6 +92,14 @@ __all__ = [
     "MemorySourceError",
     "delete_memory_source",
     "read_memory_source",
+    # tool search
+    "MEMORY_SEARCH_DEFAULT_RESULTS",
+    "MEMORY_SEARCH_MAX_RESULTS",
+    "bounded_memory_search_evidence",
+    "clean_memory_search_evidence",
+    "format_memory_search_results",
+    "memory_search_limit",
+    "search_memory_tool",
     # tool writes
     "MemoryWriteError",
     "PlannedMemoryWrite",
