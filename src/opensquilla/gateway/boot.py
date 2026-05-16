@@ -1439,6 +1439,7 @@ def build_turn_runner_from_services(
     import asyncio as _asyncio
 
     from opensquilla.engine.runtime import TurnRunner
+    from opensquilla.gateway.rpc_config import _persist_config
 
     resolved_config = config if config is not None else svc.config
     # Standalone lock dict for CLI / test paths (no TaskRuntime involved).
@@ -1462,6 +1463,7 @@ def build_turn_runner_from_services(
         turn_capture_services=getattr(svc, "turn_capture_services", None) or None,
         session_flush_service=getattr(svc, "flush_service", None),
         session_lock_provider=_standalone_lock_provider,
+        config_persist=_persist_config,
         diagnostics_state=diagnostics_state,
     )
 

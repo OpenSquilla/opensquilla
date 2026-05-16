@@ -30,9 +30,8 @@ class Surface(StrEnum):
 
 
 # Per-envelope params builder for channel-mode dispatch. Kept as a generic
-# Callable to avoid a cycle with opensquilla.gateway.routing.RouteEnvelope at
-# import time — the channel dispatcher passes its own envelope and we only
-# require attribute access (`session_key`).
+# Callable so the channel dispatcher can pass its own envelope while this
+# registry only requires attribute access (`session_key`).
 ParamsFactory = Callable[[Any], dict[str, Any]]
 
 
