@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import structlog
 
@@ -21,6 +21,19 @@ from opensquilla.scheduler.types import (
     SessionTarget,
 )
 from opensquilla.tools.registry import tool
+from opensquilla.tools.services import (
+    gateway_config_available as _tool_gateway_config_available,
+)
+from opensquilla.tools.services import get_gateway_config, get_scheduler, get_session_manager
+from opensquilla.tools.services import (
+    scheduler_available as _tool_scheduler_available,
+)
+from opensquilla.tools.services import (
+    set_gateway_config as _set_tool_gateway_config,
+)
+from opensquilla.tools.services import (
+    set_scheduler as _set_tool_scheduler,
+)
 from opensquilla.tools.types import ToolError
 
 log = structlog.get_logger(__name__)
@@ -115,29 +128,22 @@ class _SchedulerProtocol(Protocol):
     async def run_job_now(self, job_id: str) -> Any: ...
 
 
-# Setter-injected dependencies (gateway boot calls these)
-_scheduler: _SchedulerProtocol | None = None
-_gateway_config = None
-
-
-def set_scheduler(engine: _SchedulerProtocol) -> None:
+def set_scheduler(engine: _SchedulerProtocol | None) -> None:
     """Inject the SchedulerEngine (called from gateway boot)."""
-    global _scheduler
-    _scheduler = engine
+    _set_tool_scheduler(engine)
 
 
-def set_gateway_config(config: object) -> None:
+def set_gateway_config(config: object | None) -> None:
     """Inject the GatewayConfig (called from gateway boot)."""
-    global _gateway_config
-    _gateway_config = config
+    _set_tool_gateway_config(config)
 
 
 def scheduler_available() -> bool:
-    return _scheduler is not None
+    return _tool_scheduler_available()
 
 
 def gateway_config_available() -> bool:
-    return _gateway_config is not None
+    return _tool_gateway_config_available()
 
 
 # ---------------------------------------------------------------------------
@@ -235,10 +241,7 @@ async def cron(
         raise ToolError(f"'job_id' required for {action}")
 
     # Dispatch to injected scheduler
-    if _scheduler is None:
-        raise ToolError("Scheduler not available")
-
-    sched = _scheduler
+    sched = cast(_SchedulerProtocol, get_scheduler())
 
     if action == "list":
         jobs = await sched.list_jobs()
@@ -281,13 +284,12 @@ async def cron(
         sk = ""
         try:
             from opensquilla.scheduler.delivery import infer_delivery
-            from opensquilla.tools.builtin.sessions import _get_session_manager
             from opensquilla.tools.types import current_tool_context
 
             ctx = current_tool_context.get()
             sk = ctx.session_key if ctx is not None and ctx.session_key else ""
             if sk and session_target != "main":
-                mgr = _get_session_manager()
+                mgr = get_session_manager()
                 storage = getattr(mgr, "_storage", mgr)
                 delivery = await infer_delivery(
                     session_storage=storage,
@@ -430,10 +432,7 @@ async def gateway(
         except (json.JSONDecodeError, TypeError):
             raise ToolError("'value' must be valid JSON")
 
-    if _gateway_config is None:
-        raise ToolError("Gateway config not available")
-
-    config = _gateway_config
+    config = get_gateway_config()
 
     if action == "restart":
         raise ToolError("Gateway restart not supported via tool")
