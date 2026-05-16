@@ -11,6 +11,7 @@ from opensquilla.agents.files_rpc import (
     agent_files_list_rpc_payload,
     agent_files_set_rpc_payload,
 )
+from opensquilla.agents.rpc_payload import agent_id_error_details, agents_list_response
 from opensquilla.gateway.rpc import (
     RpcContext,
     RpcHandlerError,
@@ -49,9 +50,9 @@ async def _handle_agents_list(params: dict | None, ctx: RpcContext) -> dict:
     agent_registry = getattr(ctx, "agent_registry", None)
     if agent_registry is not None:
         agents = await agent_registry.list_agents(include_builtin=include_builtin)
-        return {"agents": agents}
+        return agents_list_response(agents)
 
-    return {"agents": []}
+    return agents_list_response([])
 
 
 _UPDATE_FIELD_MAP: tuple[tuple[str, ...], ...] = (
@@ -94,11 +95,11 @@ async def _handle_agents_create(params: dict | None, ctx: RpcContext) -> dict:
         msg = str(exc)
         if "already exists" in msg:
             raise RpcHandlerError(
-                "agent.exists", msg, details={"agentId": agent_id}
+                "agent.exists", msg, details=agent_id_error_details(agent_id)
             ) from exc
         if agent_id == "main" or "builtin" in msg.lower():
             raise RpcHandlerError(
-                "agent.builtin_immutable", msg, details={"agentId": agent_id}
+                "agent.builtin_immutable", msg, details=agent_id_error_details(agent_id)
             ) from exc
         raise
     return cast(dict, result)
@@ -125,14 +126,14 @@ async def _handle_agents_update(params: dict | None, ctx: RpcContext) -> dict:
         msg = str(exc)
         if "builtin" in msg.lower() or agent_id == "main":
             raise RpcHandlerError(
-                "agent.builtin_immutable", msg, details={"agentId": agent_id}
+                "agent.builtin_immutable", msg, details=agent_id_error_details(agent_id)
             ) from exc
         raise
     except KeyError as exc:
         raise RpcHandlerError(
             "agent.not_found",
             f"Agent '{agent_id}' does not exist",
-            details={"agentId": agent_id},
+            details=agent_id_error_details(agent_id),
         ) from exc
     return cast(dict, result)
 
@@ -149,7 +150,7 @@ async def _handle_agents_delete(params: dict | None, ctx: RpcContext) -> None:
         raise RpcHandlerError(
             "agent.builtin_immutable",
             "Cannot delete builtin agent: main",
-            details={"agentId": agent_id},
+            details=agent_id_error_details(agent_id),
         )
 
     agent_registry = _get_agent_registry(ctx)
@@ -159,7 +160,7 @@ async def _handle_agents_delete(params: dict | None, ctx: RpcContext) -> None:
         raise RpcHandlerError(
             "agent.not_found",
             f"Agent '{agent_id}' does not exist",
-            details={"agentId": agent_id},
+            details=agent_id_error_details(agent_id),
         ) from exc
     return None
 
