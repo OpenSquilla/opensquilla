@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
 from opensquilla.provider.image_generation_runtime import image_generation_available
+from opensquilla.provider.runtime_status import (
+    ProviderModelProbe,
+    ProviderStatusRow,
+    build_provider_status_report,
+)
 from opensquilla.search.runtime import get_active_provider
 from opensquilla.tools.builtin.web import (
     run_web_search_payload,
@@ -77,121 +81,48 @@ async def _handle_tools_search_provider(params: dict | None, ctx: RpcContext) ->
     return {"provider": get_active_provider()}
 
 
-def _active_llm_provider(ctx: RpcContext) -> str | None:
-    selector = getattr(ctx, "provider_selector", None)
-    current_config = getattr(selector, "current_config", None)
-    provider = getattr(current_config, "provider", None)
-    if provider:
-        return str(provider)
-    llm_cfg = getattr(getattr(ctx, "config", None), "llm", None)
-    provider = getattr(llm_cfg, "provider", None)
-    return str(provider) if provider else None
+def _model_probe_to_wire(probe: ProviderModelProbe) -> dict[str, Any]:
+    return {
+        "attempted": probe.attempted,
+        "status": probe.status,
+        "count": probe.count,
+        "error": probe.error,
+    }
 
 
-def _provider_key_configured(provider_id: str, env_key: str, ctx: RpcContext) -> bool:
-    active = provider_id == _active_llm_provider(ctx)
-    llm_cfg = getattr(getattr(ctx, "config", None), "llm", None)
-    if active and bool(getattr(llm_cfg, "api_key", "")):
-        return True
-    return bool(env_key and os.environ.get(env_key))
-
-
-def _provider_base_url(provider_id: str, default_base_url: str, ctx: RpcContext) -> str:
-    active = provider_id == _active_llm_provider(ctx)
-    llm_cfg = getattr(getattr(ctx, "config", None), "llm", None)
-    configured_base_url = getattr(llm_cfg, "base_url", None)
-    if active and configured_base_url:
-        return str(configured_base_url)
-    return default_base_url
-
-
-async def _model_probe(provider_id: str, ctx: RpcContext) -> dict[str, Any]:
-    selector = getattr(ctx, "provider_selector", None)
-    if selector is None:
-        return {
-            "attempted": True,
-            "status": "unavailable",
-            "count": 0,
-            "error": "No provider selector configured",
-        }
-    try:
-        rows = await selector.list_models()
-        matching = [
-            row
-            for row in rows
-            if isinstance(row, dict) and str(row.get("provider") or "") == provider_id
-        ]
-        return {"attempted": True, "status": "ok", "count": len(matching), "error": None}
-    except Exception as exc:  # noqa: BLE001 - diagnostic surface
-        return {"attempted": True, "status": "error", "count": 0, "error": str(exc)}
+def _provider_status_row_to_wire(row: ProviderStatusRow) -> dict[str, Any]:
+    return {
+        "providerId": row.provider_id,
+        "active": row.active,
+        "configured": row.configured,
+        "buildable": row.buildable,
+        "model": row.model,
+        "requiresApiKey": row.requires_api_key,
+        "apiKeyConfigured": row.api_key_configured,
+        "baseUrlConfigured": row.base_url_configured,
+        "error": row.error,
+        "modelProbe": _model_probe_to_wire(row.model_probe),
+    }
 
 
 @_d.method("providers.status", scope="operator.read")
 async def _handle_providers_status(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     from opensquilla.onboarding.provider_specs import list_provider_setup_specs
-    from opensquilla.provider.selector import ProviderBuildError, build_provider
 
     if params is not None and not isinstance(params, dict):
         raise ValueError("params must be an object")
     provider_filter = (params or {}).get("provider")
     probe_models = bool((params or {}).get("probeModels", False))
 
-    specs = list_provider_setup_specs()
-    by_id = {spec.provider_id: spec for spec in specs}
-    if provider_filter:
-        provider_filter = str(provider_filter)
-        if provider_filter not in by_id:
-            raise ValueError(f"Unknown provider: {provider_filter}")
-        specs = [by_id[provider_filter]]
-
-    active = _active_llm_provider(ctx)
-    llm_cfg = getattr(getattr(ctx, "config", None), "llm", None)
-    rows: list[dict[str, Any]] = []
-    for spec in specs:
-        is_active = spec.provider_id == active
-        api_key_configured = _provider_key_configured(spec.provider_id, spec.env_key, ctx)
-        base_url = _provider_base_url(spec.provider_id, spec.default_base_url, ctx)
-        base_url_configured = bool(base_url)
-        configured = (
-            spec.runtime_supported
-            and (not spec.requires_api_key or api_key_configured)
-            and (not spec.requires_base_url or base_url_configured)
-        )
-        model = str(getattr(llm_cfg, "model", "") or "") if is_active else ""
-        error: str | None = None
-        buildable = False
-        try:
-            build_provider(
-                spec.provider_id,
-                model or "diagnostic-model",
-                api_key=str(getattr(llm_cfg, "api_key", "") or "") if is_active else "",
-                base_url=base_url,
-            )
-            buildable = True
-        except ProviderBuildError as exc:
-            error = str(exc)
-        except Exception as exc:  # noqa: BLE001 - diagnostic surface
-            error = str(exc)
-        probe = (
-            await _model_probe(spec.provider_id, ctx)
-            if probe_models and is_active
-            else {"attempted": False, "status": "skipped", "count": 0, "error": None}
-        )
-        rows.append(
-            {
-                "providerId": spec.provider_id,
-                "active": is_active,
-                "configured": configured,
-                "buildable": buildable,
-                "model": model,
-                "requiresApiKey": spec.requires_api_key,
-                "apiKeyConfigured": api_key_configured,
-                "baseUrlConfigured": base_url_configured,
-                "error": error,
-                "modelProbe": probe,
-            }
-        )
-    return {"activeProvider": active, "providers": rows, "count": len(rows)}
+    report = await build_provider_status_report(
+        list_provider_setup_specs(),
+        provider_selector=getattr(ctx, "provider_selector", None),
+        config=getattr(ctx, "config", None),
+        provider_filter=str(provider_filter) if provider_filter else None,
+        probe_models=probe_models,
+    )
+    rows = [_provider_status_row_to_wire(row) for row in report.rows]
+    return {"activeProvider": report.active_provider, "providers": rows, "count": len(rows)}
 
 
 @_d.method("search.status", scope="operator.read")
