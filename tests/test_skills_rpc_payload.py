@@ -254,20 +254,16 @@ def test_skills_search_payloads_preserve_wire_shape_and_installed_aliases() -> N
 
 
 @pytest.mark.asyncio
-async def test_gateway_search_reads_installed_names_from_skills_boundary(
+async def test_gateway_search_delegates_to_hub_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeRouter:
-        async def search(
-            self,
-            query: str,
-            limit: int,
-            source_id: str | None,
-        ) -> list[SimpleNamespace]:
-            assert query == "plan"
-            assert limit == 3
-            assert source_id is None
-            return [
+    router = object()
+
+    async def fake_search_skills(actual_router: object, request: object) -> SimpleNamespace:
+        assert actual_router is router
+        assert request == ("search", {"query": "plan", "limit": 3})
+        return SimpleNamespace(
+            results=[
                 SimpleNamespace(
                     name="Display Planner",
                     description="Plan work",
@@ -277,13 +273,21 @@ async def test_gateway_search_reads_installed_names_from_skills_boundary(
                     trust_level="community",
                     identifier="planner",
                 )
-            ]
+            ],
+            installed_names={"planner"},
+            unavailable=False,
+        )
 
-    monkeypatch.setattr(rpc_skills, "installed_skill_names", lambda: {"planner"})
+    monkeypatch.setattr(
+        rpc_skills,
+        "skill_search_request",
+        lambda params: ("search", params),
+    )
+    monkeypatch.setattr(rpc_skills, "search_skills", fake_search_skills)
 
     payload = await rpc_skills._handle_skills_search(
         {"query": "plan", "limit": 3},
-        SimpleNamespace(_skill_router=FakeRouter()),
+        SimpleNamespace(_skill_router=router),
     )
 
     assert payload["results"][0]["installed"] is True
@@ -637,6 +641,18 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
         for node in ast.walk(handler)
         if isinstance(node, ast.Dict)
     }
+    handler_attrs = {
+        node.attr
+        for handler in handlers.values()
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Attribute)
+    }
+    handler_constants = {
+        node.value
+        for handler in handlers.values()
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Constant)
+    }
 
     assert "opensquilla.skills.eligibility" not in imported_modules
     assert "opensquilla.paths" not in imported_modules
@@ -647,7 +663,8 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     assert "opensquilla.skills.hub.installer" not in imported_modules
     assert "opensquilla.skills.hub.router" not in imported_modules
     assert "opensquilla.skills.hub.defaults" in imported_modules
-    assert "opensquilla.skills.hub.lockfile" in imported_modules
+    assert "opensquilla.skills.hub.lockfile" not in imported_modules
+    assert "opensquilla.skills.hub.search" in imported_modules
     assert "opensquilla.skills.loader" not in imported_modules
     assert "asyncio" not in imported_names
     assert "shutil" not in imported_names
@@ -671,9 +688,15 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
         "skills_update_unavailable_rpc_payload",
     }.issubset(imported_helpers)
     assert {
+        "search_skills",
+        "skill_search_request",
         "skills_search_rpc_payload",
         "skills_search_unavailable_rpc_payload",
     }.issubset(handler_names)
+    assert "search" not in handler_attrs
+    assert "query" not in handler_constants
+    assert "limit" not in handler_constants
+    assert "source" not in handler_constants
     bins_handler = {
         node.name: node
         for node in tree.body
