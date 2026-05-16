@@ -2,6 +2,7 @@
 
 from .anthropic import AnthropicProvider
 from .credentials import Credential, CredentialPool, NoCredentialsAvailable
+from .factory import ProviderFactory, ProviderFactoryPort, build_provider_from_config
 from .failures import (
     ProviderFailureKind,
     ProviderRecoveryAction,
@@ -90,6 +91,9 @@ __all__ = [
     "ProviderConfig",
     "ProviderBuildError",
     "build_provider",
+    "ProviderFactory",
+    "ProviderFactoryPort",
+    "build_provider_from_config",
     # Credentials
     "Credential",
     "CredentialPool",
