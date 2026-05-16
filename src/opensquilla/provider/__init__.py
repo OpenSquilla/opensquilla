@@ -30,6 +30,13 @@ from .registry import (
     list_provider_names,
     list_provider_specs,
 )
+from .runtime_status import (
+    ProviderModelProbe,
+    ProviderStatusReport,
+    ProviderStatusRow,
+    build_provider_status_report,
+    probe_provider_models,
+)
 from .selector import (
     ModelSelector,
     ProviderBuildError,
@@ -98,6 +105,11 @@ __all__ = [
     "build_provider_from_config",
     "ProviderModelRow",
     "list_provider_model_rows",
+    "ProviderModelProbe",
+    "ProviderStatusReport",
+    "ProviderStatusRow",
+    "build_provider_status_report",
+    "probe_provider_models",
     # Credentials
     "Credential",
     "CredentialPool",
