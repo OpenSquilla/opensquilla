@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Awaitable, Callable
 
 import structlog
 
@@ -13,6 +12,31 @@ from opensquilla.agents.limits import MAX_SPAWN_DEPTH
 from opensquilla.session.keys import build_subagent_session_key, parse_agent_id
 from opensquilla.session.subagent_routing import build_subagent_route_envelope
 from opensquilla.tools.registry import tool
+from opensquilla.tools.services import (
+    SpawnGroupCloser,
+    get_optional_gateway_config,
+    get_session_manager,
+    get_spawn_group_closer,
+    get_task_runtime,
+)
+from opensquilla.tools.services import (
+    session_manager_available as _tool_session_manager_available,
+)
+from opensquilla.tools.services import (
+    set_gateway_config as _set_tool_gateway_config,
+)
+from opensquilla.tools.services import (
+    set_session_manager as _set_tool_session_manager,
+)
+from opensquilla.tools.services import (
+    set_spawn_group_closer as _set_tool_spawn_group_closer,
+)
+from opensquilla.tools.services import (
+    set_task_runtime as _set_tool_task_runtime,
+)
+from opensquilla.tools.services import (
+    task_runtime_available as _tool_task_runtime_available,
+)
 from opensquilla.tools.types import ToolError, current_tool_context
 
 _log = structlog.get_logger("opensquilla.tools.sessions")
@@ -72,58 +96,40 @@ def _normalize_subagent_task_for_execution(task: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Setter-injected services wired by the composition layer.
-# ---------------------------------------------------------------------------
-
-_session_manager = None
-_task_runtime = None
-_gateway_config: object | None = None
-_spawn_group_closer: Callable[..., Awaitable[bool]] | None = None
-
-
-def set_session_manager(mgr: object) -> None:
+def set_session_manager(mgr: object | None) -> None:
     """Inject the SessionManager instance."""
-    global _session_manager
-    _session_manager = mgr
+    _set_tool_session_manager(mgr)
 
 
 def set_task_runtime(runtime: object | None) -> None:
     """Inject the TaskRuntime instance."""
-    global _task_runtime
-    _task_runtime = runtime
+    _set_tool_task_runtime(runtime)
 
 
 def set_gateway_config(config: object | None) -> None:
     """Inject the runtime configuration object."""
-    global _gateway_config
-    _gateway_config = config
+    _set_tool_gateway_config(config)
 
 
-def set_spawn_group_closer(closer: Callable[..., Awaitable[bool]] | None) -> None:
+def set_spawn_group_closer(closer: SpawnGroupCloser | None) -> None:
     """Inject the parent wake callback used by sessions_yield."""
-    global _spawn_group_closer
-    _spawn_group_closer = closer
+    _set_tool_spawn_group_closer(closer)
 
 
 def session_manager_available() -> bool:
-    return _session_manager is not None
+    return _tool_session_manager_available()
 
 
 def task_runtime_available() -> bool:
-    return _task_runtime is not None
+    return _tool_task_runtime_available()
 
 
 def _get_session_manager():  # noqa: ANN202
-    if _session_manager is None:
-        raise ToolError("Session manager not available")
-    return _session_manager
+    return get_session_manager()
 
 
 def _get_task_runtime():  # noqa: ANN202
-    if _task_runtime is None:
-        raise ToolError("Task runtime not available")
-    return _task_runtime
+    return get_task_runtime()
 
 
 def _manager_unavailable(exc: Exception) -> ToolError:
@@ -133,7 +139,7 @@ def _manager_unavailable(exc: Exception) -> ToolError:
 async def _resolve_subagent_policy(mgr: object, agent_id: str) -> dict:
     """Merge per-agent and global subagent defaults. Per-agent wins."""
     global_defaults: dict = {}
-    cfg = _gateway_config
+    cfg = get_optional_gateway_config()
     if cfg is not None:
         ad = getattr(cfg, "agents_defaults", None)
         if ad is not None and getattr(ad, "subagents", None) is not None:
@@ -358,7 +364,8 @@ async def sessions_spawn(
             pass  # Agent config lookup not implemented — allow spawn attempt
 
         # ── Per-agent disabled gate (gated by enforce_disabled_agents flag) ──
-        sub_cfg = getattr(_gateway_config, "subagents", None) if _gateway_config else None
+        gateway_config = get_optional_gateway_config()
+        sub_cfg = getattr(gateway_config, "subagents", None) if gateway_config else None
         enforce_disabled = bool(getattr(sub_cfg, "enforce_disabled_agents", False))
         if (
             enforce_disabled
@@ -630,8 +637,9 @@ async def sessions_yield(
             except ToolError:
                 pass
             else:
-                if _spawn_group_closer is not None:
-                    await _spawn_group_closer(
+                spawn_group_closer = get_spawn_group_closer()
+                if spawn_group_closer is not None:
+                    await spawn_group_closer(
                         ctx.session_key,
                         ctx.task_id,
                         session_manager=mgr,

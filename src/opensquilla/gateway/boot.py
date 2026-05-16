@@ -226,7 +226,7 @@ class ServiceContainer:
     WARNING: build_services() mutates module-level state:
     - tools.builtin.memory_tools (create_memory_tools)
     - tools.builtin.skill_tools (create_skill_tools)
-    - tools.builtin.admin (set_gateway_config, set_scheduler)
+    - tools.services (configure_tool_services)
     - search.providers (configure_search)
     Do not call build_services() twice in the same process without
     understanding these side effects.
@@ -298,9 +298,9 @@ class ServiceContainer:
             except Exception:
                 pass
             try:
-                from opensquilla.tools.builtin.sessions import set_task_runtime
+                from opensquilla.tools.services import configure_tool_services
 
-                set_task_runtime(None)
+                configure_tool_services(task_runtime=None)
             except Exception:
                 pass
 
@@ -1034,10 +1034,10 @@ async def build_services(
     resolve_memory_embedding(config.memory, local_available=lambda *_: False)
     _ensure_configured_agent_workspaces(config, extra_agent_ids=extra_agent_ids)
 
-    # Inject config into admin tool (needed by both gateway and standalone)
-    from opensquilla.tools.builtin.admin import set_gateway_config
+    # Seed shared tool service handles (needed by both gateway and standalone).
+    from opensquilla.tools.services import configure_tool_services
 
-    set_gateway_config(config)
+    configure_tool_services(gateway_config=config)
 
     from opensquilla.tools.ssrf import configure_trusted_fake_ip_cidrs
 
@@ -1103,27 +1103,18 @@ async def build_services(
     # Wire session services into the tool layer.
     from opensquilla.engine.steps.squilla_router import _history_store as _routing_history_store
     from opensquilla.gateway.subagent_announce import close_subagent_spawn_group
-    from opensquilla.tools.builtin.sessions import (
-        evict_spawn_lock,
-        set_session_manager,
-        set_spawn_group_closer,
-    )
-    from opensquilla.tools.builtin.sessions import (
-        set_gateway_config as _set_sessions_gateway_config,
-    )
+    from opensquilla.tools.builtin.sessions import evict_spawn_lock
 
     add_runtime_state_evictor = getattr(session_manager, "add_runtime_state_evictor", None)
     if callable(add_runtime_state_evictor):
         add_runtime_state_evictor(_routing_history_store.evict)
         add_runtime_state_evictor(evict_spawn_lock)
-    set_session_manager(session_manager)
-    _set_sessions_gateway_config(config)
-    set_spawn_group_closer(close_subagent_spawn_group)
-
-    # Wire agent registry into the agents_list tool surface.
-    from opensquilla.tools.builtin.agents import set_agent_registry as _set_agent_registry_tool
-
-    _set_agent_registry_tool(agent_registry)
+    configure_tool_services(
+        session_manager=session_manager,
+        gateway_config=config,
+        spawn_group_closer=close_subagent_spawn_group,
+        agent_registry=agent_registry,
+    )
 
     # ── Provider selector ───────────────────────────────────────────
     llm_runtime = resolve_llm_runtime_config(config)
@@ -1319,10 +1310,8 @@ async def build_services(
             },
         )
         await cron_scheduler.start()
-        # Inject into admin tool so `cron` tool can dispatch to the scheduler
-        from opensquilla.tools.builtin.admin import set_scheduler
-
-        set_scheduler(cron_scheduler)
+        # Expose the scheduler to the cron tool through the shared services handle.
+        configure_tool_services(scheduler=cron_scheduler)
         log.info("build_services.cron_scheduler_started")
     except Exception as e:
         log.warning("build_services.cron_scheduler_failed", error=str(e))
@@ -1594,6 +1583,7 @@ async def start_gateway_server(
     )
     from opensquilla.scheduler.heartbeat_loop import HeartbeatLoop
     from opensquilla.scheduler.heartbeat_service import HeartbeatService
+    from opensquilla.tools.services import configure_tool_services
 
     heartbeat_service = HeartbeatService(
         turn_runner=turn_runner,
@@ -1660,9 +1650,7 @@ async def start_gateway_server(
     attach_runtime = getattr(svc.session_manager, "attach_task_runtime", None)
     if callable(attach_runtime):
         attach_runtime(task_runtime)
-    from opensquilla.tools.builtin.sessions import set_task_runtime
-
-    set_task_runtime(task_runtime)
+    configure_tool_services(task_runtime=task_runtime)
 
     # Resolve HEARTBEAT.md path; instantiate Runner + Watcher;
     # start Watcher BEFORE the Loop so the first tick already sees any

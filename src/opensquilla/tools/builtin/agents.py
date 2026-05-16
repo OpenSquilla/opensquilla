@@ -7,8 +7,15 @@ from typing import Any
 
 import structlog
 
-from opensquilla.tools.builtin.sessions import _get_session_manager, _get_task_runtime
 from opensquilla.tools.registry import tool
+from opensquilla.tools.services import (
+    get_agent_registry,
+    get_session_manager,
+    get_task_runtime,
+)
+from opensquilla.tools.services import (
+    set_agent_registry as _set_tool_agent_registry,
+)
 from opensquilla.tools.types import ToolError, current_tool_context
 
 _VALID_SUBAGENT_ACTIONS = ("list", "kill", "steer")
@@ -16,19 +23,21 @@ _TERMINAL_STATUSES = ("done", "failed", "killed", "timeout")
 
 log = structlog.get_logger(__name__)
 
-_agent_registry: object | None = None
-
-
 def set_agent_registry(registry: object | None) -> None:
     """Inject the AgentRegistry instance (called from gateway boot)."""
-    global _agent_registry
-    _agent_registry = registry
+    _set_tool_agent_registry(registry)
 
 
 def _get_agent_registry() -> object:
-    if _agent_registry is None:
-        raise ToolError("Agent registry not available")
-    return _agent_registry
+    return get_agent_registry()
+
+
+def _get_session_manager() -> Any:
+    return get_session_manager()
+
+
+def _get_task_runtime() -> Any:
+    return get_task_runtime()
 
 
 def _manager_unavailable() -> ToolError:
