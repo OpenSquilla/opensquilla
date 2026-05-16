@@ -41,6 +41,13 @@ from .source_paths import (
     is_raw_fallback_save_path,
     private_archive_error,
 )
+from .source_rpc import (
+    MemoryManagerResolver,
+    MemorySourceUnavailableError,
+    memory_source_list_rpc_payload,
+    memory_source_search_rpc_payload,
+    memory_source_show_rpc_payload,
+)
 from .source_search import (
     MEMORY_SOURCE_SEARCH_DEFAULT_RESULTS,
     MEMORY_SOURCE_SEARCH_MAX_RESULTS,
@@ -112,6 +119,11 @@ __all__ = [
     "MemorySourceSearchRow",
     "memory_source_search_row",
     "search_memory_sources",
+    "MemoryManagerResolver",
+    "MemorySourceUnavailableError",
+    "memory_source_list_rpc_payload",
+    "memory_source_search_rpc_payload",
+    "memory_source_show_rpc_payload",
     # source inspection
     "MEMORY_SOURCE_MAX_SHOW_CHARS",
     "MEMORY_SOURCE_MAX_SHOW_FILE_BYTES",
