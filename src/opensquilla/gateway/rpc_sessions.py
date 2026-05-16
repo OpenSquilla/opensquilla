@@ -968,8 +968,8 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
                 return
 
             from opensquilla.agents.scope import resolve_agent_workspace_dir
-            from opensquilla.engine.stream_wrappers import wrap_stream
             from opensquilla.gateway.routing import tool_context_from_envelope
+            from opensquilla.runtime.stream_wrappers import wrap_stream
 
             workspace_dir = resolve_agent_workspace_dir(agent_id, ctx.config)
             workspace_strict = getattr(ctx.config, "workspace_strict", None)

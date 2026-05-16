@@ -130,7 +130,7 @@ def _optional_positive_config_float(config_source: Any, attr: str, default: floa
 
 
 def _wrap_cli_turn_stream(stream: Any, config_source: Any) -> Any:
-    from opensquilla.engine.stream_wrappers import wrap_stream
+    from opensquilla.runtime.stream_wrappers import wrap_stream
 
     return wrap_stream(
         stream,
