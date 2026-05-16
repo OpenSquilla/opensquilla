@@ -27,6 +27,7 @@ from opensquilla.session.compaction import (
     call_compact_with_optional_config,
 )
 from opensquilla.session.keys import canonicalize_session_key, normalize_agent_id
+from opensquilla.session.rpc_payload import session_list_row, task_state_summary
 from opensquilla.session.terminal_reply import build_terminal_reply
 
 _d = get_dispatcher()
@@ -297,10 +298,6 @@ def _resolve_compaction_provider(ctx: RpcContext, session: Any | None) -> Any | 
         return None
 
 
-def _enum_value(value: Any) -> Any:
-    return getattr(value, "value", value)
-
-
 def _model_value(value: Any) -> str | None:
     if value is None:
         return None
@@ -349,34 +346,6 @@ def _session_turn_model(ctx: RpcContext, session: Any | None, agent_id: str) -> 
     return _model_value(getattr(session, "model", None)) or _agent_registry_model(ctx, agent_id)
 
 
-def _task_summary(row: Any) -> dict[str, Any]:
-    summary = {
-        "task_id": getattr(row, "task_id", None),
-        "status": _enum_value(getattr(row, "status", None)),
-        "queue_mode": _enum_value(getattr(row, "queue_mode", None)),
-        "run_kind": getattr(row, "run_kind", None),
-        "source_kind": getattr(row, "source_kind", None),
-        "created_at": getattr(row, "created_at", None),
-        "started_at": getattr(row, "started_at", None),
-    }
-    finished_at = getattr(row, "finished_at", None)
-    if finished_at is not None:
-        summary["finished_at"] = finished_at
-    terminal_reason = getattr(row, "terminal_reason", None)
-    if terminal_reason is not None:
-        summary["terminal_reason"] = terminal_reason
-    if summary.get("status") in {"failed", "timeout", "abandoned", "cancelled"}:
-        summary["terminal_message"] = build_terminal_reply(
-            {
-                "status": summary.get("status"),
-                "terminal_reason": terminal_reason,
-                "error_class": getattr(row, "error_class", None),
-                "error_message": getattr(row, "error_message", None),
-            }
-        )
-    return summary
-
-
 def _normalize_terminal_event_payload(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     if event_name != "session.event.error":
         return payload
@@ -403,50 +372,6 @@ def _normalize_terminal_event_payload(event_name: str, payload: dict[str, Any]) 
         "terminal_message": terminal_message,
         "terminal_reason": terminal_payload["terminal_reason"],
         "error_message": raw_text,
-    }
-
-
-def _sorted_task_rows(rows: list[Any]) -> list[Any]:
-    return sorted(rows, key=lambda row: getattr(row, "created_at", 0) or 0, reverse=True)
-
-
-def _active_task_summary(rows: list[Any]) -> dict[str, Any] | None:
-    active = [
-        row for row in rows if _enum_value(getattr(row, "status", None)) in {"queued", "running"}
-    ]
-    if not active:
-        return None
-    return _task_summary(_sorted_task_rows(active)[0])
-
-
-def _last_task_summary(rows: list[Any]) -> dict[str, Any] | None:
-    if not rows:
-        return None
-    return _task_summary(_sorted_task_rows(rows)[0])
-
-
-def _task_run_status(active_task: dict[str, Any] | None, last_task: dict[str, Any] | None) -> str:
-    if active_task is not None:
-        status = active_task.get("status")
-        return str(status or "running")
-    if last_task is None:
-        return "idle"
-    status = str(last_task.get("status") or "")
-    if status == "abandoned":
-        return "interrupted"
-    if status in {"failed", "timeout", "cancelled"}:
-        return status
-    return "idle"
-
-
-def _task_state_summary(rows: list[Any]) -> dict[str, Any]:
-    active_task = _active_task_summary(rows)
-    last_task = _last_task_summary(rows)
-    return {
-        "tasks": [_task_summary(row) for row in _sorted_task_rows(rows)],
-        "active_task": active_task,
-        "last_task": last_task,
-        "run_status": _task_run_status(active_task, last_task),
     }
 
 
@@ -503,38 +428,6 @@ def _create_session_key(agent_id: str, kind: object = None) -> str:
     return f"agent:{agent_id}:{short_id}"
 
 
-def _derive_source_metadata(session: Any) -> dict[str, Any]:
-    key = str(getattr(session, "session_key", "") or "")
-    origin = getattr(session, "origin", None)
-    origin_kind = origin.get("kind") if isinstance(origin, dict) else None
-    last_channel = getattr(session, "last_channel", None)
-    channel = getattr(session, "channel", None)
-    source_kind = origin_kind
-    channel_kind = last_channel or channel
-    if ":webchat:" in key:
-        source_kind = source_kind or "webui"
-        channel_kind = channel_kind or "webchat"
-    elif ":cli:" in key or ":standalone:" in key:
-        source_kind = source_kind or "cli"
-        channel_kind = channel_kind or "cli"
-    elif ":subagent:" in key:
-        source_kind = source_kind or "subagent"
-        channel_kind = channel_kind or "subagent"
-    elif key.startswith("cron:") or ":cron:" in key:
-        source_kind = source_kind or "cron"
-        channel_kind = channel_kind or "cron"
-    elif last_channel:
-        source_kind = source_kind or "channel"
-    return {
-        "source_kind": source_kind,
-        "sourceKind": source_kind,
-        "channel_kind": channel_kind,
-        "channelKind": channel_kind,
-        "channel_id": getattr(session, "last_to", None),
-        "channelId": getattr(session, "last_to", None),
-    }
-
-
 async def _resolve_session_node(storage: Any, key: str) -> Any:
     session = await storage.get_session(key)
     if session is not None:
@@ -589,45 +482,15 @@ async def _handle_sessions_list(params: dict | None, ctx: RpcContext) -> dict:
         except Exception:
             pass
 
-        row = {
-            "key": s.session_key,
-            "agent_id": getattr(s, "agent_id", None),
-            "agentId": getattr(s, "agent_id", None),
-            "status": getattr(s, "status", "unknown"),
-            "model": getattr(s, "model", None),
-            "updated_at": getattr(s, "updated_at", now_ms),
-            "updatedAt": getattr(s, "updated_at", now_ms),
-            "display_name": getattr(s, "display_name", None),
-            "displayName": getattr(s, "display_name", None),
-            "channel": getattr(s, "channel", None),
-            "chat_type": getattr(s, "chat_type", None),
-            "chatType": getattr(s, "chat_type", None),
-            "group_id": getattr(s, "group_id", None),
-            "groupId": getattr(s, "group_id", None),
-            "subject": getattr(s, "subject", None),
-            "last_channel": getattr(s, "last_channel", None),
-            "lastChannel": getattr(s, "last_channel", None),
-            "last_to": getattr(s, "last_to", None),
-            "lastTo": getattr(s, "last_to", None),
-            "last_account_id": getattr(s, "last_account_id", None),
-            "lastAccountId": getattr(s, "last_account_id", None),
-            "last_thread_id": getattr(s, "last_thread_id", None),
-            "lastThreadId": getattr(s, "last_thread_id", None),
-            "delivery_context": getattr(s, "delivery_context", None),
-            "deliveryContext": getattr(s, "delivery_context", None),
-            "parent_session_key": getattr(s, "parent_session_key", None),
-            "parentSessionKey": getattr(s, "parent_session_key", None),
-            "spawned_by": getattr(s, "spawned_by", None),
-            "spawnedBy": getattr(s, "spawned_by", None),
-            "origin": getattr(s, "origin", None),
-            "message_count": entry_count,
-            "entry_count": entry_count,
-            "size_bytes": None,
-        }
-        row.update(_derive_source_metadata(s))
         task_rows = task_rows_by_session.get(canonicalize_session_key(s.session_key), [])
-        row.update(_task_state_summary(task_rows))
-        result.append(row)
+        result.append(
+            session_list_row(
+                s,
+                entry_count=entry_count,
+                task_rows=task_rows,
+                now_ms=now_ms,
+            )
+        )
 
     return {"sessions": result, "count": len(result), "ts": now_ms}
 
@@ -1700,7 +1563,7 @@ async def _handle_sessions_messages_subscribe(params: dict | None, ctx: RpcConte
 
     storage = get_session_storage(getattr(ctx, "session_manager", None))
     task_rows = await _list_task_rows(ctx, storage, key)
-    task_state = _task_state_summary(task_rows)
+    task_state = task_state_summary(task_rows)
 
     return {
         "subscribed": subscription_mgr is not None,

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -14,6 +16,7 @@ import pytest
 
 from opensquilla.agents.registry import AgentRegistry
 from opensquilla.engine.types import DoneEvent
+from opensquilla.gateway import rpc_sessions
 from opensquilla.gateway.agent_tasks import get_agent_task_registry
 from opensquilla.gateway.attachment_ingest import (
     MAX_STAGED_PDF_BYTES,
@@ -596,6 +599,27 @@ class TestSessionsList:
             (one.session_key, two.session_key)
         ]
         assert manager._storage.list_agent_tasks_calls == []
+
+    def test_gateway_sessions_list_delegates_payload_rows_to_session_boundary(self):
+        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        top_level_functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        assert ("opensquilla.session.rpc_payload", "session_list_row") in imports
+        assert ("opensquilla.session.rpc_payload", "task_state_summary") in imports
+        assert "_task_summary" not in top_level_functions
+        assert "_task_state_summary" not in top_level_functions
+        assert "_derive_source_metadata" not in top_level_functions
 
 
 class TestSessionsSend:
