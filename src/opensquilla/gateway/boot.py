@@ -226,7 +226,7 @@ class ServiceContainer:
     WARNING: build_services() mutates module-level state:
     - provider.image_generation_runtime (configure_image_generation)
     - tools.builtin.memory_tools (create_memory_tools)
-    - tools.builtin.skill_tools (create_skill_tools)
+    - skills.runtime (configure_skill_loader via create_skill_tools)
     - tools.services (configure_tool_services)
     - search.runtime (configure_search)
     Do not call build_services() twice in the same process without

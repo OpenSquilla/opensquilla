@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from opensquilla.skills.runtime import configure_skill_loader, current_skill_loader
 from opensquilla.skills.types import SkillInstallSpec, SkillLayer
 from opensquilla.tools.registry import tool
 from opensquilla.tools.types import ToolError
@@ -22,9 +23,6 @@ if TYPE_CHECKING:
     from opensquilla.skills.loader import SkillLoader
 
 logger = structlog.get_logger(__name__)
-
-# Module-level reference set at boot
-_loader: SkillLoader | None = None
 
 # Layers that user may mutate — workspace only
 _MUTABLE_LAYERS = frozenset({SkillLayer.WORKSPACE})
@@ -38,6 +36,10 @@ _BREW_FORMULA_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/_@.+-]*$")
 _NODE_PACKAGE_RE = re.compile(r"^(?:@[A-Za-z0-9][A-Za-z0-9._-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$")
 _GO_MODULE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~/-]*(?:@[A-Za-z0-9][A-Za-z0-9._~+-]*)?$")
 _UV_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?$")
+
+
+def _get_loader() -> SkillLoader | None:
+    return current_skill_loader()
 
 
 def _sanitize_yaml_value(value: str) -> str:
@@ -123,10 +125,11 @@ def _argv_for_install_spec(spec: SkillInstallSpec) -> list[str]:
 def _find_install_spec(skill_name: str, install_id: str) -> SkillInstallSpec:
     if install_id.startswith("-"):
         raise ToolError(f"Unsafe install value for install_id: {install_id}")
-    if _loader is None:
+    loader = _get_loader()
+    if loader is None:
         raise ToolError("Skill loader not available")
 
-    skill = _loader.get_by_name(skill_name)
+    skill = loader.get_by_name(skill_name)
     if skill is None:
         raise ToolError(f"Skill not found: {skill_name}")
     if skill.metadata is None or not skill.metadata.install:
@@ -164,17 +167,17 @@ async def _run_install_argv(argv: list[str]) -> tuple[int, str, str, bool]:
 
 def create_skill_tools(loader: SkillLoader) -> None:
     """Register skill tools (list, view, create, edit, delete) with the global registry."""
-    global _loader
-    _loader = loader
+    configure_skill_loader(loader)
 
     @tool(
         name="skill_list",
         description="List all available skills with name, description, and eligibility.",
     )
     async def skill_list() -> str:
-        if _loader is None:
+        loader = _get_loader()
+        if loader is None:
             return "No skill loader available."
-        skills = _loader.load_all()
+        skills = loader.load_all()
         if not skills:
             return "No skills installed."
 
@@ -219,9 +222,10 @@ def create_skill_tools(loader: SkillLoader) -> None:
         required=["name"],
     )
     async def skill_view(name: str, file_path: str | None = None) -> str:
-        if _loader is None:
+        loader = _get_loader()
+        if loader is None:
             return "No skill loader available."
-        skill = _loader.get_by_name(name)
+        skill = loader.get_by_name(name)
         if skill is None:
             return f"Skill not found: {name}"
 
@@ -337,7 +341,8 @@ def create_skill_tools(loader: SkillLoader) -> None:
         content: str,
         triggers: list[str] | None = None,
     ) -> str:
-        if _loader is None:
+        loader = _get_loader()
+        if loader is None:
             raise ToolError("Skill loader not available")
 
         if not _SKILL_NAME_RE.match(name):
@@ -353,7 +358,7 @@ def create_skill_tools(loader: SkillLoader) -> None:
             raise ToolError("Content must not be empty")
 
         # Check for name collision
-        existing = _loader.get_by_name(name)
+        existing = loader.get_by_name(name)
         if existing is not None:
             raise ToolError(
                 f"Skill '{name}' already exists in layer '{existing.layer.value}'. "
@@ -361,7 +366,7 @@ def create_skill_tools(loader: SkillLoader) -> None:
             )
 
         # Write to workspace layer
-        workspace_dir = _loader.workspace_dir
+        workspace_dir = loader.workspace_dir
         if workspace_dir is None:
             raise ToolError("No workspace skill directory configured")
 
@@ -373,7 +378,7 @@ def create_skill_tools(loader: SkillLoader) -> None:
         skill_file.write_text(skill_md, encoding="utf-8")
 
         # Invalidate loader cache so new skill is discoverable
-        _loader.invalidate_cache()
+        loader.invalidate_cache()
 
         logger.info("skill_create.success", name=name)
         return f"Skill '{name}' created at {skill_file}"
@@ -411,10 +416,11 @@ def create_skill_tools(loader: SkillLoader) -> None:
         description: str | None = None,
         triggers: list[str] | None = None,
     ) -> str:
-        if _loader is None:
+        loader = _get_loader()
+        if loader is None:
             raise ToolError("Skill loader not available")
 
-        existing = _loader.get_by_name(name)
+        existing = loader.get_by_name(name)
         if existing is None:
             raise ToolError(f"Skill not found: {name}")
 
@@ -440,7 +446,7 @@ def create_skill_tools(loader: SkillLoader) -> None:
         skill_md = _render_skill_md(name, new_description, new_content, new_triggers or None)
         skill_file.write_text(skill_md, encoding="utf-8")
 
-        _loader.invalidate_cache()
+        loader.invalidate_cache()
 
         logger.info("skill_edit.success", name=name)
         return f"Skill '{name}' updated"
@@ -461,10 +467,11 @@ def create_skill_tools(loader: SkillLoader) -> None:
     async def skill_delete(name: str) -> str:
         import shutil
 
-        if _loader is None:
+        loader = _get_loader()
+        if loader is None:
             raise ToolError("Skill loader not available")
 
-        existing = _loader.get_by_name(name)
+        existing = loader.get_by_name(name)
         if existing is None:
             raise ToolError(f"Skill not found: {name}")
 
@@ -479,7 +486,7 @@ def create_skill_tools(loader: SkillLoader) -> None:
             raise ToolError(f"Skill directory missing: {skill_dir}")
 
         shutil.rmtree(skill_dir)
-        _loader.invalidate_cache()
+        loader.invalidate_cache()
 
         logger.info("skill_delete.success", name=name)
         return f"Skill '{name}' deleted from workspace layer"
