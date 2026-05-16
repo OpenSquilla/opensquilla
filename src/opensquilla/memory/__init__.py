@@ -23,6 +23,17 @@ from .runtime import (
     reset_memory_tools_runtime,
     resolve_memory_agent,
 )
+from .source_inspection import (
+    MEMORY_SOURCE_MAX_SHOW_CHARS,
+    MEMORY_SOURCE_MAX_SHOW_FILE_BYTES,
+    MEMORY_SOURCE_MAX_SHOW_LINES,
+    MemorySourceContent,
+    MemorySourceInspectionError,
+    MemorySourceNotFoundError,
+    MemorySourceRow,
+    list_memory_source_rows,
+    read_memory_source_content,
+)
 from .source_paths import (
     is_memory_archive_path,
     is_memory_save_path,
@@ -88,6 +99,16 @@ __all__ = [
     "is_memory_source_path",
     "is_raw_fallback_save_path",
     "private_archive_error",
+    # source inspection
+    "MEMORY_SOURCE_MAX_SHOW_CHARS",
+    "MEMORY_SOURCE_MAX_SHOW_FILE_BYTES",
+    "MEMORY_SOURCE_MAX_SHOW_LINES",
+    "MemorySourceContent",
+    "MemorySourceInspectionError",
+    "MemorySourceNotFoundError",
+    "MemorySourceRow",
+    "list_memory_source_rows",
+    "read_memory_source_content",
     # tool sources
     "MemorySourceError",
     "delete_memory_source",

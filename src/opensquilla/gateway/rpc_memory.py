@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from opensquilla.gateway.rpc import RpcContext, RpcUnavailableError, get_dispatcher
-from opensquilla.memory.source_paths import (
-    is_memory_archive_path,
-    is_memory_source_path,
+from opensquilla.memory.source_inspection import (
+    MEMORY_SOURCE_MAX_SHOW_LINES,
+    MemorySourceContent,
+    MemorySourceRow,
+    list_memory_source_rows,
+    read_memory_source_content,
 )
 from opensquilla.memory.types import MemorySearchOpts, SearchIntent
 from opensquilla.session.keys import normalize_agent_id
 
 _d = get_dispatcher()
-
-_MAX_MEMORY_SHOW_CHARS = 8000
-_MAX_MEMORY_SHOW_LINES = 500
-_MAX_MEMORY_SHOW_FILE_BYTES = 1024 * 1024
 
 
 def _require_memory_manager(ctx: RpcContext, agent_id: str | None) -> tuple[str, Any]:
@@ -70,39 +68,24 @@ def _result_to_wire(result: Any) -> dict[str, Any]:
     }
 
 
-def _memory_source_rows(root: Path) -> list[dict[str, Any]]:
-    resolved_root = root.resolve()
-    candidates: list[Path] = []
-    memory_md = resolved_root / "MEMORY.md"
-    if memory_md.is_file():
-        candidates.append(memory_md)
-    memory_dir = resolved_root / "memory"
-    if memory_dir.is_dir():
-        candidates.extend(path for path in memory_dir.rglob("*.md") if path.is_file())
+def _memory_source_row_to_wire(row: MemorySourceRow) -> dict[str, Any]:
+    return {
+        "path": row.path,
+        "sizeBytes": row.size_bytes,
+        "modifiedAt": row.modified_at,
+        "lineCount": row.line_count,
+    }
 
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for file_path in candidates:
-        try:
-            resolved_file = file_path.resolve()
-            rel = resolved_file.relative_to(resolved_root).as_posix()
-        except ValueError:
-            continue
-        if rel in seen or not is_memory_source_path(rel, allow_archive=False):
-            continue
-        stat = resolved_file.stat()
-        with resolved_file.open("r", encoding="utf-8", errors="replace") as handle:
-            line_count = sum(1 for _ in handle)
-        seen.add(rel)
-        rows.append(
-            {
-                "path": rel,
-                "sizeBytes": stat.st_size,
-                "modifiedAt": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
-                "lineCount": line_count,
-            }
-        )
-    return sorted(rows, key=lambda row: str(row["path"]))
+
+def _memory_source_content_to_wire(agent_id: str, content: MemorySourceContent) -> dict[str, Any]:
+    return {
+        "agentId": agent_id,
+        "path": content.path,
+        "fromLine": content.from_line,
+        "lineCount": content.line_count,
+        "truncated": content.truncated,
+        "content": content.content,
+    }
 
 
 @_d.method("memory.list", scope="operator.read")
@@ -111,7 +94,7 @@ async def _handle_memory_list(params: dict | None, ctx: RpcContext) -> dict[str,
         raise ValueError("params must be an object")
     agent_id, manager = _require_memory_manager(ctx, (params or {}).get("agentId"))
     root = _memory_root(manager)
-    rows = _memory_source_rows(root)
+    rows = [_memory_source_row_to_wire(row) for row in list_memory_source_rows(root)]
     return {"agentId": agent_id, "count": len(rows), "files": rows}
 
 
@@ -142,63 +125,6 @@ def _memory_root(manager: Any) -> Path:
     return Path(root)
 
 
-def _validate_memory_path(path: str, *, allow_archive: bool) -> None:
-    if not path.strip():
-        raise ValueError("params.path is required")
-    if is_memory_archive_path(path) and not allow_archive:
-        raise ValueError("memory archive is private turn-capture storage")
-    if not is_memory_source_path(path, allow_archive=allow_archive):
-        raise ValueError("params.path must be MEMORY.md or memory/*.md")
-
-
-def _read_memory_content(
-    file_path: Path,
-    *,
-    from_line: int | None,
-    lines: int | None,
-) -> tuple[str, int, bool]:
-    if from_line is None and lines is None:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-        return (
-            content[:_MAX_MEMORY_SHOW_CHARS],
-            len(content.splitlines()),
-            len(content) > _MAX_MEMORY_SHOW_CHARS,
-        )
-
-    start_line = int(from_line or 1)
-    max_lines = int(lines) if lines is not None else None
-    parts: list[str] = []
-    char_count = 0
-    selected_line_count = 0
-    truncated = False
-
-    with file_path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line_no, line in enumerate(handle, start=1):
-            if line_no < start_line:
-                continue
-            if max_lines is not None and selected_line_count >= max_lines:
-                break
-            if char_count >= _MAX_MEMORY_SHOW_CHARS:
-                truncated = True
-                break
-
-            text = line.rstrip("\r\n")
-            piece = text if selected_line_count == 0 else f"\n{text}"
-            remaining = _MAX_MEMORY_SHOW_CHARS - char_count
-            if len(piece) > remaining:
-                if remaining > 0:
-                    parts.append(piece[:remaining])
-                    selected_line_count += 1
-                truncated = True
-                break
-
-            parts.append(piece)
-            char_count += len(piece)
-            selected_line_count += 1
-
-    return "".join(parts), selected_line_count, truncated
-
-
 @_d.method("memory.show", scope="operator.read")
 async def _handle_memory_show(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     if not isinstance(params, dict):
@@ -208,42 +134,25 @@ async def _handle_memory_show(params: dict | None, ctx: RpcContext) -> dict[str,
 
     memory_config = getattr(manager, "memory_config", None)
     allow_archive = bool(memory_config and getattr(memory_config, "index_captured_turns", False))
-    _validate_memory_path(raw_path, allow_archive=allow_archive)
 
     from_line = params.get("fromLine")
     if from_line is not None:
         from_line = _int_param(params, "fromLine", 1, minimum=1, maximum=1_000_000)
     lines = params.get("lines")
     if lines is not None:
-        lines = _int_param(params, "lines", 1, minimum=1, maximum=_MAX_MEMORY_SHOW_LINES)
+        lines = _int_param(
+            params,
+            "lines",
+            1,
+            minimum=1,
+            maximum=MEMORY_SOURCE_MAX_SHOW_LINES,
+        )
 
-    root = _memory_root(manager).resolve()
-    file_path = (root / raw_path).resolve()
-    try:
-        file_path.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("path traversal is not allowed") from exc
-    if not file_path.is_file():
-        raise KeyError(f"Memory source not found: {raw_path}")
-
-    if (
-        from_line is None
-        and lines is None
-        and file_path.stat().st_size > _MAX_MEMORY_SHOW_FILE_BYTES
-    ):
-        raise ValueError("memory source is too large; request a line slice")
-
-    content, selected_line_count, truncated = _read_memory_content(
-        file_path,
+    content = read_memory_source_content(
+        _memory_root(manager),
+        raw_path,
         from_line=from_line,
         lines=lines,
+        allow_archive=allow_archive,
     )
-
-    return {
-        "agentId": agent_id,
-        "path": raw_path,
-        "fromLine": int(from_line or 1),
-        "lineCount": selected_line_count,
-        "truncated": truncated,
-        "content": content,
-    }
+    return _memory_source_content_to_wire(agent_id, content)
