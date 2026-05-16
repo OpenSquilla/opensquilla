@@ -13,7 +13,6 @@ from opensquilla.skills.hub.deps import (
     install_loaded_skill_dependency,
     skill_deps_install_request,
 )
-from opensquilla.skills.hub.lockfile import installed_skill_names
 from opensquilla.skills.hub.operations import (
     install_skill,
     skill_install_request,
@@ -22,6 +21,7 @@ from opensquilla.skills.hub.operations import (
     uninstall_skill,
     update_skills,
 )
+from opensquilla.skills.hub.search import search_skills, skill_search_request
 from opensquilla.skills.rpc_payload import (
     skill_deps_install_result_rpc_payload,
     skill_get_rpc_payload,
@@ -73,25 +73,13 @@ async def _handle_skills_get(params: dict | None, ctx: RpcContext) -> dict[str, 
 @_d.method("skills.search", scope="operator.read")
 async def _handle_skills_search(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Search for skills across Community sources."""
-    if not isinstance(params, dict) or "query" not in params:
-        raise ValueError("params.query is required")
-
     router = getattr(ctx, "_skill_router", None)
     if router is None:
         router = _get_default_router()
-    if router is None:
+    outcome = await search_skills(router, skill_search_request(params))
+    if outcome.unavailable:
         return skills_search_unavailable_rpc_payload()
-
-    query = params["query"]
-    try:
-        limit = min(int(params.get("limit", 20)), 100)
-    except (TypeError, ValueError):
-        limit = 20
-    source_id = params.get("source")
-    if source_id is not None and not isinstance(source_id, str):
-        source_id = None
-    results = await router.search(query, limit=limit, source_id=source_id)
-    return skills_search_rpc_payload(results, installed_skill_names())
+    return skills_search_rpc_payload(outcome.results, outcome.installed_names)
 
 
 def _invalidate_loader(ctx: RpcContext) -> None:
