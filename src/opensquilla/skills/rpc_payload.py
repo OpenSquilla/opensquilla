@@ -124,6 +124,37 @@ def skills_list_rpc_payload(loader: Any | None) -> dict[str, Any]:
     return {"skills": skills_status_rpc_payload(loader)}
 
 
+def skill_search_result_rpc_payload(result: Any, installed_names: set[str]) -> dict[str, Any]:
+    """Build one Community skill search result row."""
+
+    return {
+        "name": result.name,
+        "description": result.description,
+        "version": result.version,
+        "author": result.author,
+        "source": result.source_id,
+        "trust_level": result.trust_level,
+        "identifier": result.identifier,
+        "installed": result.identifier in installed_names or result.name in installed_names,
+    }
+
+
+def skills_search_rpc_payload(results: list[Any], installed_names: set[str]) -> dict[str, Any]:
+    """Build the RPC wire payload for ``skills.search`` results."""
+
+    return {
+        "results": [
+            skill_search_result_rpc_payload(result, installed_names) for result in results
+        ]
+    }
+
+
+def skills_search_unavailable_rpc_payload() -> dict[str, Any]:
+    """Build the empty ``skills.search`` payload when no sources are configured."""
+
+    return {"results": [], "message": "No skill sources configured"}
+
+
 def skill_get_rpc_payload(params: Mapping[str, Any] | None, loader: Any | None) -> dict[str, Any]:
     """Build the RPC wire payload for ``skills.get``."""
 
@@ -172,11 +203,14 @@ def skill_missing_requirements_rpc_payload(skill: Any) -> dict[str, list[str]]:
 
 __all__ = [
     "skill_get_rpc_payload",
+    "skill_search_result_rpc_payload",
     "skill_missing_requirements_rpc_payload",
     "skill_status_detail",
     "skill_status_from_report",
     "skill_to_rpc_payload",
     "skills_list_rpc_payload",
+    "skills_search_rpc_payload",
+    "skills_search_unavailable_rpc_payload",
     "skills_status_rpc_payload",
     "validate_skill_install_supported",
 ]
