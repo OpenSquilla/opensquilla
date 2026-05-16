@@ -14,6 +14,8 @@ from opensquilla.skills.rpc_payload import (
     skill_status_from_report,
     skill_to_rpc_payload,
     skills_list_rpc_payload,
+    skills_search_rpc_payload,
+    skills_search_unavailable_rpc_payload,
     skills_status_rpc_payload,
 )
 from opensquilla.skills.types import (
@@ -161,6 +163,58 @@ def test_skills_list_status_and_get_payloads_handle_loader_boundary() -> None:
         skill_get_rpc_payload({"name": "missing"}, loader)
 
 
+def test_skills_search_payloads_preserve_wire_shape_and_installed_aliases() -> None:
+    results = [
+        SimpleNamespace(
+            name="Display Planner",
+            description="Plan work",
+            version="1.2.3",
+            author="Tests",
+            source_id="clawhub",
+            trust_level="community",
+            identifier="planner",
+        ),
+        SimpleNamespace(
+            name="installed-by-name",
+            description="Installed via name",
+            version="0.1.0",
+            author="Tests",
+            source_id="github",
+            trust_level="community",
+            identifier="acme/repo@main:skills/installed/SKILL.md",
+        ),
+    ]
+
+    assert skills_search_unavailable_rpc_payload() == {
+        "results": [],
+        "message": "No skill sources configured",
+    }
+    assert skills_search_rpc_payload(results, {"planner", "installed-by-name"}) == {
+        "results": [
+            {
+                "name": "Display Planner",
+                "description": "Plan work",
+                "version": "1.2.3",
+                "author": "Tests",
+                "source": "clawhub",
+                "trust_level": "community",
+                "identifier": "planner",
+                "installed": True,
+            },
+            {
+                "name": "installed-by-name",
+                "description": "Installed via name",
+                "version": "0.1.0",
+                "author": "Tests",
+                "source": "github",
+                "trust_level": "community",
+                "identifier": "acme/repo@main:skills/installed/SKILL.md",
+                "installed": True,
+            },
+        ]
+    }
+
+
 @pytest.mark.asyncio
 async def test_gateway_delegates_skill_rpc_payloads_to_skills_boundary(
     monkeypatch: pytest.MonkeyPatch,
@@ -183,6 +237,11 @@ async def test_gateway_delegates_skill_rpc_payloads_to_skills_boundary(
         "skill_get_rpc_payload",
         lambda params, actual_loader: {"name": params["name"], "loader": actual_loader is loader},
     )
+    monkeypatch.setattr(
+        rpc_skills,
+        "skills_search_unavailable_rpc_payload",
+        lambda: {"results": [], "delegated": True},
+    )
 
     assert await rpc_skills._handle_skills_status(None, ctx) == [
         {"name": "status", "loader": True}
@@ -194,6 +253,11 @@ async def test_gateway_delegates_skill_rpc_payloads_to_skills_boundary(
         "name": "planner",
         "loader": True,
     }
+    monkeypatch.setattr(rpc_skills, "_get_default_router", lambda: None)
+    assert await rpc_skills._handle_skills_search({"query": "planner"}, ctx) == {
+        "results": [],
+        "delegated": True,
+    }
 
 
 def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> None:
@@ -203,11 +267,54 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     imported_modules = {
         node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
     }
+    imported_helpers = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "opensquilla.skills.rpc_payload"
+        for alias in node.names
+    }
     top_level_functions = {
         node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
+    handlers = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_skills_search"
+    }
+    handler_names = {
+        node.id
+        for handler in handlers.values()
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Name)
+    }
+    direct_key_sets = {
+        tuple(key.value for key in node.keys if isinstance(key, ast.Constant))
+        for handler in handlers.values()
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Dict)
+    }
 
     assert "opensquilla.skills.eligibility" not in imported_modules
+    assert {
+        "skills_search_rpc_payload",
+        "skills_search_unavailable_rpc_payload",
+    }.issubset(imported_helpers)
+    assert {
+        "skills_search_rpc_payload",
+        "skills_search_unavailable_rpc_payload",
+    }.issubset(handler_names)
     assert "_skill_to_dict" not in top_level_functions
     assert "_status_from_report" not in top_level_functions
     assert "_status_detail" not in top_level_functions
+    assert ("results", "message") not in direct_key_sets
+    assert ("results",) not in direct_key_sets
+    assert (
+        "name",
+        "description",
+        "version",
+        "author",
+        "source",
+        "trust_level",
+        "identifier",
+        "installed",
+    ) not in direct_key_sets

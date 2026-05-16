@@ -14,6 +14,8 @@ from opensquilla.skills.rpc_payload import (
     skill_get_rpc_payload,
     skill_missing_requirements_rpc_payload,
     skills_list_rpc_payload,
+    skills_search_rpc_payload,
+    skills_search_unavailable_rpc_payload,
     skills_status_rpc_payload,
     validate_skill_install_supported,
 )
@@ -104,7 +106,7 @@ async def _handle_skills_search(params: dict | None, ctx: RpcContext) -> dict[st
     if router is None:
         router = _get_default_router()
     if router is None:
-        return {"results": [], "message": "No skill sources configured"}
+        return skills_search_unavailable_rpc_payload()
 
     query = params["query"]
     try:
@@ -121,21 +123,7 @@ async def _handle_skills_search(params: dict | None, ctx: RpcContext) -> dict[st
     # source may return as ``SkillMeta.name``. Check both so we catch
     # either convention; a future source that matches on name directly
     # still works.
-    return {
-        "results": [
-            {
-                "name": r.name,
-                "description": r.description,
-                "version": r.version,
-                "author": r.author,
-                "source": r.source_id,
-                "trust_level": r.trust_level,
-                "identifier": r.identifier,
-                "installed": r.identifier in installed or r.name in installed,
-            }
-            for r in results
-        ]
-    }
+    return skills_search_rpc_payload(results, installed)
 
 
 def _invalidate_loader(ctx: RpcContext) -> None:
