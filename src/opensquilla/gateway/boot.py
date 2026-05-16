@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from opensquilla.engine.usage import UsageTracker
@@ -622,7 +622,7 @@ async def _emit_task_runtime_stream_events(
     """Emit turn events and fail the task if the stream reports an error."""
     from dataclasses import asdict, is_dataclass
 
-    from opensquilla.engine.stream_wrappers import wrap_stream
+    from opensquilla.runtime.stream_wrappers import wrap_stream
 
     error_message: str | None = None
     async for event in wrap_stream(
@@ -643,8 +643,8 @@ async def _emit_task_runtime_stream_events(
                     event_kind=getattr(event, "kind", event.__class__.__name__),
                     exc_info=True,
                 )
-        if is_dataclass(event):
-            event_dict = asdict(event)
+        if is_dataclass(event) and not isinstance(event, type):
+            event_dict = asdict(cast(Any, event))
         else:
             event_dict = {
                 key: value
