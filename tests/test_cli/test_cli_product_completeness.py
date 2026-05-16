@@ -419,6 +419,95 @@ def test_cli_skills_does_not_import_hub_defaults() -> None:
     assert "opensquilla.skills.hub.defaults" not in imported_modules
 
 
+def test_skills_tap_commands_delegate_to_hub_tap_operations(monkeypatch):
+    from opensquilla.cli import skills_cmd
+
+    manager = object()
+    calls: list[tuple[str, object]] = []
+
+    def fake_taps_manager_factory() -> object:
+        calls.append(("factory", None))
+        return manager
+
+    def fake_add_tap(actual_manager: object, request: object) -> SimpleNamespace:
+        assert actual_manager is manager
+        calls.append(("add", request))
+        return SimpleNamespace(full_name="acme/tap", url="https://example.test/acme/tap")
+
+    def fake_list_taps(actual_manager: object) -> list[SimpleNamespace]:
+        assert actual_manager is manager
+        calls.append(("list", None))
+        return [
+            SimpleNamespace(
+                full_name="acme/tap",
+                url="https://example.test/acme/tap",
+                added_at="2026-05-17T00:00:00Z",
+            )
+        ]
+
+    def fake_remove_tap(actual_manager: object, request: object) -> bool:
+        assert actual_manager is manager
+        calls.append(("remove", request))
+        return True
+
+    monkeypatch.setattr(
+        skills_cmd,
+        "default_taps_manager_factory",
+        fake_taps_manager_factory,
+    )
+    monkeypatch.setattr(skills_cmd, "add_tap", fake_add_tap)
+    monkeypatch.setattr(skills_cmd, "list_taps", fake_list_taps)
+    monkeypatch.setattr(skills_cmd, "remove_tap", fake_remove_tap)
+    monkeypatch.setattr(
+        skills_cmd,
+        "tap_add_request",
+        lambda params: ("add", params),
+    )
+    monkeypatch.setattr(
+        skills_cmd,
+        "tap_remove_request",
+        lambda params: ("remove", params),
+    )
+
+    add = runner.invoke(app, ["skills", "tap", "add", "acme/tap"])
+    listed = runner.invoke(app, ["skills", "tap", "list"])
+    removed = runner.invoke(app, ["skills", "tap", "remove", "acme/tap"])
+
+    assert add.exit_code == 0, add.stdout
+    assert listed.exit_code == 0, listed.stdout
+    assert removed.exit_code == 0, removed.stdout
+    assert "acme/tap" in add.stdout
+    assert "acme/tap" in listed.stdout
+    assert "Removed" in removed.stdout
+    assert calls == [
+        ("factory", None),
+        ("add", ("add", {"owner_repo": "acme/tap"})),
+        ("factory", None),
+        ("list", None),
+        ("factory", None),
+        ("remove", ("remove", {"owner_repo": "acme/tap"})),
+    ]
+
+
+def test_cli_skills_tap_does_not_construct_taps_manager() -> None:
+    from opensquilla.cli import skills_cmd
+
+    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    tap_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.skills.hub.taps"
+        for alias in node.names
+    }
+
+    assert "TapsManager" not in tap_imports
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "TapsManager"
+        for node in ast.walk(tree)
+    )
+
+
 def test_skills_install_fallback_exposes_github_source_without_token(monkeypatch):
     _install_fake_gateway(monkeypatch, FailingConnectGatewayClient)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)

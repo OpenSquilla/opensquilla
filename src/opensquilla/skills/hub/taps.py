@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -26,6 +28,20 @@ class Tap:
     @property
     def full_name(self) -> str:
         return f"{self.owner}/{self.repo}"
+
+
+@dataclass(frozen=True)
+class TapAddRequest:
+    """Validated request to register a Community skill tap."""
+
+    owner_repo: Any
+
+
+@dataclass(frozen=True)
+class TapRemoveRequest:
+    """Validated request to remove a Community skill tap."""
+
+    owner_repo: Any
 
 
 def _default_taps_path() -> Path:
@@ -119,3 +135,43 @@ class TapsManager:
 
     def get(self, owner_repo: str) -> Tap | None:
         return self._taps.get(owner_repo)
+
+
+def default_taps_manager_factory() -> TapsManager:
+    """Return the default Community tap manager."""
+
+    return TapsManager()
+
+
+def tap_add_request(params: Mapping[str, Any] | None) -> TapAddRequest:
+    """Build a tap-add operation request from command or RPC params."""
+
+    if not isinstance(params, Mapping) or "owner_repo" not in params:
+        raise ValueError("params.owner_repo is required")
+    return TapAddRequest(owner_repo=params["owner_repo"])
+
+
+def tap_remove_request(params: Mapping[str, Any] | None) -> TapRemoveRequest:
+    """Build a tap-remove operation request from command or RPC params."""
+
+    if not isinstance(params, Mapping) or "owner_repo" not in params:
+        raise ValueError("params.owner_repo is required")
+    return TapRemoveRequest(owner_repo=params["owner_repo"])
+
+
+def add_tap(manager: TapsManager, request: TapAddRequest) -> Tap:
+    """Register a Community skill tap from a validated operation request."""
+
+    return manager.add(request.owner_repo)
+
+
+def list_taps(manager: TapsManager) -> list[Tap]:
+    """List registered Community skill taps."""
+
+    return manager.list()
+
+
+def remove_tap(manager: TapsManager, request: TapRemoveRequest) -> bool:
+    """Remove a Community skill tap from a validated operation request."""
+
+    return manager.remove(request.owner_repo)

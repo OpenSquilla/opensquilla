@@ -25,6 +25,14 @@ from opensquilla.skills.hub.operations import (
     uninstall_skill,
 )
 from opensquilla.skills.hub.search import search_skills, skill_search_request
+from opensquilla.skills.hub.taps import (
+    add_tap,
+    default_taps_manager_factory,
+    list_taps,
+    remove_tap,
+    tap_add_request,
+    tap_remove_request,
+)
 
 skills_app = typer.Typer(help="Skill management - list, search, install, uninstall.")
 
@@ -421,11 +429,9 @@ skills_app.add_typer(tap_app, name="tap")
 @tap_app.command("add")
 def tap_add(owner_repo: str = typer.Argument(..., help="GitHub owner/repo")) -> None:
     """Add a custom skill source tap."""
-    from opensquilla.skills.hub.taps import TapsManager
-
     try:
-        mgr = TapsManager()
-        tap = mgr.add(owner_repo)
+        manager = default_taps_manager_factory()
+        tap = add_tap(manager, tap_add_request({"owner_repo": owner_repo}))
         console.print(f"[green]Added tap:[/] {tap.full_name} ({tap.url})")
     except ValueError as e:
         console.print(f"[red]Error:[/] {e}")
@@ -434,10 +440,8 @@ def tap_add(owner_repo: str = typer.Argument(..., help="GitHub owner/repo")) -> 
 @tap_app.command("list")
 def tap_list() -> None:
     """List registered taps."""
-    from opensquilla.skills.hub.taps import TapsManager
-
-    mgr = TapsManager()
-    taps = mgr.list()
+    manager = default_taps_manager_factory()
+    taps = list_taps(manager)
     if not taps:
         console.print("[dim]No taps registered.[/]")
         return
@@ -448,10 +452,8 @@ def tap_list() -> None:
 @tap_app.command("remove")
 def tap_remove(owner_repo: str = typer.Argument(..., help="GitHub owner/repo")) -> None:
     """Remove a tap."""
-    from opensquilla.skills.hub.taps import TapsManager
-
-    mgr = TapsManager()
-    if mgr.remove(owner_repo):
+    manager = default_taps_manager_factory()
+    if remove_tap(manager, tap_remove_request({"owner_repo": owner_repo})):
         console.print(f"[green]Removed:[/] {owner_repo}")
     else:
         console.print(f"[yellow]Not found:[/] {owner_repo}")
