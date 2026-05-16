@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from opensquilla.agents.registry import AgentRegistry
+from opensquilla.gateway import rpc_agents
 from opensquilla.gateway.config import GatewayConfig
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
 
@@ -271,3 +275,23 @@ async def test_agents_files_rpc_falls_back_to_workspace_when_registry_unavailabl
     memory_entry = next(row for row in list_result.payload["files"] if row["name"] == "MEMORY.md")
     assert memory_entry["status"] == "present"
     assert memory_entry["size"] == 5
+
+
+def test_gateway_rpc_agents_delegates_file_payloads_to_agents_boundary() -> None:
+    source = Path(rpc_agents.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    imports = {
+        (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+        for alias in node.names
+    }
+
+    assert ("opensquilla.agents.files_rpc", "agent_files_list_rpc_payload") in imports
+    assert ("opensquilla.agents.files_rpc", "agent_files_get_rpc_payload") in imports
+    assert ("opensquilla.agents.files_rpc", "agent_files_set_rpc_payload") in imports
+    assert "workspace_file_root_for_config" not in source
+    assert "list_workspace_agent_files" not in source
+    assert "read_workspace_agent_file" not in source
+    assert "write_workspace_agent_file" not in source
