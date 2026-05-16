@@ -518,6 +518,80 @@ async def test_gateway_delegates_skill_rpc_payloads_to_skills_boundary(
     }
 
 
+@pytest.mark.asyncio
+async def test_gateway_delegates_skill_operations_to_hub_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalidated = 0
+
+    class FakeLoader:
+        def invalidate_cache(self) -> None:
+            nonlocal invalidated
+            invalidated += 1
+
+    installer = object()
+    ctx = SimpleNamespace(skill_loader=FakeLoader())
+    calls: list[tuple[str, object]] = []
+
+    async def fake_install_skill(actual_installer: object, request: object) -> SimpleNamespace:
+        assert actual_installer is installer
+        calls.append(("install", request))
+        return SimpleNamespace(
+            success=True,
+            name="planner",
+            message="installed",
+            scan=None,
+        )
+
+    async def fake_update_skills(actual_installer: object, request: object) -> SimpleNamespace:
+        assert actual_installer is installer
+        calls.append(("update", request))
+        return SimpleNamespace(
+            results=[SimpleNamespace(success=True, name="planner", message="updated")],
+            unavailable_message="",
+        )
+
+    async def fake_uninstall_skill(actual_installer: object, request: object) -> SimpleNamespace:
+        assert actual_installer is installer
+        calls.append(("uninstall", request))
+        return SimpleNamespace(success=True, name="planner", message="removed")
+
+    monkeypatch.setattr(rpc_skills, "_get_default_installer", lambda: installer)
+    monkeypatch.setattr(rpc_skills, "skill_install_request", lambda params: ("install", params))
+    monkeypatch.setattr(rpc_skills, "skills_update_request", lambda params: ("update", params))
+    monkeypatch.setattr(
+        rpc_skills,
+        "skill_uninstall_request",
+        lambda params: ("uninstall", params),
+    )
+    monkeypatch.setattr(rpc_skills, "install_skill", fake_install_skill)
+    monkeypatch.setattr(rpc_skills, "update_skills", fake_update_skills)
+    monkeypatch.setattr(rpc_skills, "uninstall_skill", fake_uninstall_skill)
+
+    assert await rpc_skills._handle_skills_install(
+        {"identifier": "planner"},
+        ctx,
+    ) == {
+        "success": True,
+        "name": "planner",
+        "message": "installed",
+    }
+    assert await rpc_skills._handle_skills_update({"name": "planner"}, ctx) == {
+        "results": [{"success": True, "name": "planner", "message": "updated"}]
+    }
+    assert await rpc_skills._handle_skills_uninstall({"name": "planner"}, ctx) == {
+        "success": True,
+        "name": "planner",
+        "message": "removed",
+    }
+    assert calls == [
+        ("install", ("install", {"identifier": "planner"})),
+        ("update", ("update", {"name": "planner"})),
+        ("uninstall", ("uninstall", {"name": "planner"})),
+    ]
+    assert invalidated == 3
+
+
 def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> None:
     source = Path(rpc_skills.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -568,6 +642,7 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     assert "opensquilla.skills.eligibility" not in imported_modules
     assert "opensquilla.paths" not in imported_modules
     assert "opensquilla.skills.hub.deps" in imported_modules
+    assert "opensquilla.skills.hub.operations" in imported_modules
     assert "opensquilla.skills.hub.clawhub" not in imported_modules
     assert "opensquilla.skills.hub.github" not in imported_modules
     assert "opensquilla.skills.hub.installer" not in imported_modules
@@ -634,10 +709,21 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
         for node in ast.walk(handler)
         if isinstance(node, ast.Dict)
     }
+    install_handler_constants = {
+        node.value
+        for handler in install_handler.values()
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Constant)
+    }
     assert {
+        "install_skill",
+        "skill_install_request",
         "skill_install_result_rpc_payload",
         "skill_install_unavailable_rpc_payload",
     }.issubset(install_handler_names)
+    assert "identifier" not in install_handler_constants
+    assert "source" not in install_handler_constants
+    assert "force" not in install_handler_constants
     update_handler = {
         node.name: node
         for node in tree.body
@@ -655,11 +741,21 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
         for node in ast.walk(handler)
         if isinstance(node, ast.Dict)
     }
+    update_handler_constants = {
+        node.value
+        for handler in update_handler.values()
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Constant)
+    }
     assert {
+        "skills_update_request",
         "skills_update_empty_results_rpc_payload",
         "skills_update_results_rpc_payload",
         "skills_update_unavailable_rpc_payload",
+        "update_skills",
     }.issubset(update_handler_names)
+    assert "name" not in update_handler_constants
+    assert "OSError" not in update_handler_names
     uninstall_handler = {
         node.name: node
         for node in tree.body
@@ -677,10 +773,19 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
         for node in ast.walk(handler)
         if isinstance(node, ast.Dict)
     }
+    uninstall_handler_constants = {
+        node.value
+        for handler in uninstall_handler.values()
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Constant)
+    }
     assert {
+        "skill_uninstall_request",
         "skill_uninstall_result_rpc_payload",
         "skill_uninstall_unavailable_rpc_payload",
+        "uninstall_skill",
     }.issubset(uninstall_handler_names)
+    assert "name" not in uninstall_handler_constants
     deps_install_handler = {
         node.name: node
         for node in tree.body
