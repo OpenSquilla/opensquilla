@@ -418,6 +418,7 @@ def test_cli_skills_does_not_import_hub_defaults() -> None:
     }
 
     assert "opensquilla.skills.hub.defaults" not in imported_modules
+    assert "opensquilla.skills.hub.search" not in imported_modules
 
 
 def test_skills_tap_commands_delegate_to_hub_tap_operations(monkeypatch):
