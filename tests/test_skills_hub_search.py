@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from opensquilla.skills.hub import search as hub_search
+from opensquilla.skills.hub import operations as hub_operations
 from opensquilla.skills.hub.search import search_skills, skill_search_request
 
 
@@ -59,7 +59,7 @@ async def test_search_skills_delegates_to_router_and_reads_installed_names(
             assert source_id == "github"
             return [SimpleNamespace(identifier="planner")]
 
-    monkeypatch.setattr(hub_search, "installed_skill_names", lambda: {"planner"})
+    monkeypatch.setattr(hub_operations, "installed_skill_names", lambda: {"planner"})
 
     outcome = await search_skills(
         FakeRouter(),
@@ -88,7 +88,7 @@ async def test_search_skills_uses_default_router_when_context_router_missing(
             assert source_id is None
             return [SimpleNamespace(identifier="planner")]
 
-    monkeypatch.setattr(hub_search, "installed_skill_names", lambda: {"planner"})
+    monkeypatch.setattr(hub_operations, "installed_skill_names", lambda: {"planner"})
 
     outcome = await search_skills(
         None,

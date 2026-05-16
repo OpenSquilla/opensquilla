@@ -727,7 +727,7 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     assert "opensquilla.skills.hub.router" not in imported_modules
     assert "opensquilla.skills.hub.defaults" not in imported_modules
     assert "opensquilla.skills.hub.lockfile" not in imported_modules
-    assert "opensquilla.skills.hub.search" in imported_modules
+    assert "opensquilla.skills.hub.search" not in imported_modules
     assert "opensquilla.skills.loader" not in imported_modules
     assert "asyncio" not in imported_names
     assert "shutil" not in imported_names

@@ -13,11 +13,12 @@ from opensquilla.skills.hub.operations import (
     run_skill_install_operation,
     run_skill_uninstall_operation,
     run_skills_update_operation,
+    search_skills,
     skill_install_request,
+    skill_search_request,
     skill_uninstall_request,
     skills_update_request,
 )
-from opensquilla.skills.hub.search import search_skills, skill_search_request
 from opensquilla.skills.rpc_payload import (
     skill_deps_install_result_rpc_payload,
     skill_get_rpc_payload,
