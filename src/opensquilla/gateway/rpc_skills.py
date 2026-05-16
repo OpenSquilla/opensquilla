@@ -11,6 +11,14 @@ from opensquilla.skills.hub.defaults import (
 )
 from opensquilla.skills.hub.deps import install_skill_dependency
 from opensquilla.skills.hub.lockfile import installed_skill_names
+from opensquilla.skills.hub.operations import (
+    install_skill,
+    skill_install_request,
+    skill_uninstall_request,
+    skills_update_request,
+    uninstall_skill,
+    update_skills,
+)
 from opensquilla.skills.loader import SkillLoader
 from opensquilla.skills.rpc_payload import (
     skill_deps_install_result_rpc_payload,
@@ -100,8 +108,7 @@ def _invalidate_loader(ctx: RpcContext) -> None:
 @_d.method("skills.install", scope="operator.admin")
 async def _handle_skills_install(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Install a skill from a Community source."""
-    if not isinstance(params, dict) or "identifier" not in params:
-        raise ValueError("params.identifier is required")
+    request = skill_install_request(params)
     if _get_loader(ctx) is None:
         return skill_install_unavailable_rpc_payload("No skill loader configured")
 
@@ -109,10 +116,7 @@ async def _handle_skills_install(params: dict | None, ctx: RpcContext) -> dict[s
     if installer is None:
         return skill_install_unavailable_rpc_payload("No skill installer configured")
 
-    identifier = params["identifier"]
-    source_id = params.get("source", "clawhub")
-    force = params.get("force", False)
-    result = await installer.install(identifier, source_id, force=force)
+    result = await install_skill(installer, request)
     if result.success:
         _invalidate_loader(ctx)
     return skill_install_result_rpc_payload(result)
@@ -127,27 +131,24 @@ async def _handle_skills_update(params: dict | None, ctx: RpcContext) -> dict[st
     if installer is None:
         return skills_update_unavailable_rpc_payload("No skill installer configured")
 
-    name = (params or {}).get("name")
-    try:
-        results = await installer.update(name)
-    except OSError as exc:
-        return skills_update_empty_results_rpc_payload(f"Skill update unavailable: {exc}")
-    if any(r.success for r in results):
+    outcome = await update_skills(installer, skills_update_request(params))
+    if outcome.unavailable_message:
+        return skills_update_empty_results_rpc_payload(outcome.unavailable_message)
+    if any(r.success for r in outcome.results):
         _invalidate_loader(ctx)
-    return skills_update_results_rpc_payload(results)
+    return skills_update_results_rpc_payload(outcome.results)
 
 
 @_d.method("skills.uninstall", scope="operator.admin")
 async def _handle_skills_uninstall(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Uninstall a managed skill."""
-    if not isinstance(params, dict) or "name" not in params:
-        raise ValueError("params.name is required")
+    request = skill_uninstall_request(params)
 
     installer = _get_default_installer()
     if installer is None:
         return skill_uninstall_unavailable_rpc_payload("No skill installer configured")
 
-    result = await installer.uninstall(params["name"])
+    result = await uninstall_skill(installer, request)
     if result.success:
         _invalidate_loader(ctx)
     return skill_uninstall_result_rpc_payload(result)
