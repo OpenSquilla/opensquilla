@@ -796,11 +796,9 @@ _MAX_STAGED_ATTACHMENT_BYTES = 30 * 1024 * 1024
 _PDF_ATTACHMENT_TEXT_LIMIT = 200_000
 _TEXT_ATTACHMENT_TEXT_LIMIT = 200_000
 
-# Image, PDF, and text-family allow-list. Mirrors
-# gateway.rpc_sessions._ALLOWED_MEDIA_TYPES; intentionally duplicated to avoid
-# an engine -> gateway import cycle. Provider-facing conversion is more
-# conservative: images become image blocks; text-family and PDFs become text
-# file-context blocks after local decoding/extraction.
+# Image, PDF, and text-family allow-list used by provider-facing conversion:
+# images become image blocks; text-family and PDFs become text file-context
+# blocks after local decoding/extraction.
 _ALLOWED_ENGINE_MEDIA_TYPES: frozenset[str] = frozenset(
     {
         "image/png",
@@ -1010,6 +1008,7 @@ class TurnRunner:
         turn_capture_services: dict[str, Any] | None = None,
         session_flush_service: SessionFlushService | None = None,
         session_lock_provider: Callable[[str], asyncio.Lock] | None = None,
+        config_persist: Callable[[Any], None] | None = None,
         diagnostics_state: Any | None = None,
     ) -> None:
         self._provider_selector = provider_selector
@@ -1023,6 +1022,7 @@ class TurnRunner:
         self._memory_retrievers = memory_retrievers
         self._turn_capture_services = turn_capture_services
         self._session_flush_service = session_flush_service
+        self._config_persist = config_persist
         self._diagnostics_state = diagnostics_state
         # Per-session lock provider.
         # Gateway path: task_runtime._get_session_lock_for_turn (wired in boot.py).
@@ -2374,10 +2374,11 @@ class TurnRunner:
             if hasattr(self._session_manager, "get_session"):
                 node = await self._session_manager.get_session(session_key)
             else:
-                from opensquilla.gateway.session_services import get_session_storage
-
-                storage = get_session_storage(self._session_manager)
-                node = await storage.get_session(session_key) if storage is not None else None
+                storage = getattr(self._session_manager, "storage", None)
+                if storage is None:
+                    storage = getattr(self._session_manager, "_storage", None)
+                get_session = getattr(storage, "get_session", None)
+                node = await get_session(session_key) if callable(get_session) else None
         except Exception:
             return None
         session_id = getattr(node, "session_id", None)
@@ -2457,16 +2458,16 @@ class TurnRunner:
                 )
 
         if disabled and cfg is not None:
-            try:
-                from opensquilla.gateway.rpc_config import _persist_config
-
-                _persist_config(cfg)
-            except Exception as exc:  # noqa: BLE001 - runtime config already disabled
-                log.warning(
-                    "tool_result_summary_disable_persist_failed",
-                    model=model_label,
-                    error=str(exc),
-                )
+            persist_config = self._config_persist
+            if callable(persist_config):
+                try:
+                    persist_config(cfg)
+                except Exception as exc:  # noqa: BLE001 - runtime config already disabled
+                    log.warning(
+                        "tool_result_summary_disable_persist_failed",
+                        model=model_label,
+                        error=str(exc),
+                    )
 
         base_message = event.message.strip() if event.message else (
             f"Tool result summarization failed for model {model_label!r}."
