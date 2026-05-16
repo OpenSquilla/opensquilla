@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from opensquilla.session.rpc_payload import (
     messages_subscribe_response,
     normalize_terminal_event_payload,
+    session_abort_response,
     session_compact_response,
     session_context_compact_response,
     session_create_response,
@@ -379,4 +380,15 @@ def test_session_compact_response_includes_flush_receipt_when_available() -> Non
         "before_count": 10,
         "after_count": 3,
         "flush_receipt": {"mode": "summary", "message_count": 10},
+    }
+
+
+def test_session_abort_response_owns_wire_shape() -> None:
+    assert session_abort_response("agent:main:webchat:abc123", aborted=True) == {
+        "aborted": True,
+        "key": "agent:main:webchat:abc123",
+    }
+    assert session_abort_response("agent:main:webchat:abc123", aborted=False) == {
+        "aborted": False,
+        "key": "agent:main:webchat:abc123",
     }
