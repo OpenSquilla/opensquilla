@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
@@ -35,14 +34,10 @@ from opensquilla.memory.runtime import (
     current_memory_tools_runtime,
     resolve_memory_agent,
 )
-from opensquilla.memory.source_paths import (
-    is_memory_archive_path as _is_memory_archive_path,
-)
-from opensquilla.memory.source_paths import (
-    is_memory_source_path as _is_memory_source_path,
-)
-from opensquilla.memory.source_paths import (
-    private_archive_error,
+from opensquilla.memory.tool_sources import (
+    MemorySourceError,
+    delete_memory_source,
+    read_memory_source,
 )
 from opensquilla.memory.tool_writes import (
     MemoryWriteError,
@@ -397,36 +392,16 @@ def create_memory_tools(
                 return "Error: from must be an integer."
             from_line = from_arg
 
-        r = _resolve()
-        if not r.workspace_dir:
-            return "Error: workspace directory not configured."
-
-        workspace_dir = Path(r.workspace_dir)
-        file_path = workspace_dir / path
         try:
-            file_path.resolve().relative_to(workspace_dir.resolve())
-        except ValueError:
-            return "Error: path traversal not allowed."
-
-        allow_archive = _allow_archive_memory_source()
-        if _is_memory_archive_path(path) and not allow_archive:
-            return private_archive_error()
-        if not _is_memory_source_path(path, allow_archive=allow_archive):
-            return "Error: path is not a memory source file. Use MEMORY.md or memory/*.md."
-
-        if not file_path.exists():
-            return f"Error: {path} not found."
-
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-        if from_line is not None or lines is not None:
-            all_lines = content.splitlines()
-            start = max(0, (from_line - 1)) if from_line else 0
-            end = (start + lines) if lines else len(all_lines)
-            content = "\n".join(all_lines[start:end])
-        full_len = len(content)
-        if full_len > 8000:
-            return content[:8000] + f"\n\n... (truncated: showing 8000/{full_len} chars)"
-        return content
+            return read_memory_source(
+                _resolve(),
+                path,
+                from_line=from_line,
+                lines=lines,
+                allow_archive=_allow_archive_memory_source(),
+            )
+        except MemorySourceError as exc:
+            return str(exc)
 
     @tool(
         name="memory_delete",
@@ -445,32 +420,14 @@ def create_memory_tools(
         registry=registry,
     )
     async def memory_delete(path: str) -> str:
-        r = _resolve()
-        if not r.workspace_dir:
-            return "Error: workspace directory not configured."
-
-        workspace_dir = Path(r.workspace_dir)
-        file_path = workspace_dir / path
         try:
-            file_path.resolve().relative_to(workspace_dir.resolve())
-        except ValueError:
-            return "Error: path traversal not allowed."
-
-        allow_archive = _allow_archive_memory_source()
-        if _is_memory_archive_path(path) and not allow_archive:
-            return private_archive_error()
-        if not _is_memory_source_path(path, allow_archive=allow_archive):
-            return "Error: path is not a memory source file. Use MEMORY.md or memory/*.md."
-
-        if not file_path.exists():
-            return f"Error: {path} not found."
-
-        # Remove from disk
-        file_path.unlink()
-
-        # Remove from index (workspace-relative path)
-        index_path = file_path.resolve().relative_to(workspace_dir.resolve()).as_posix()
-        await r.store.remove_file(index_path)
+            await delete_memory_source(
+                _resolve(),
+                path,
+                allow_archive=_allow_archive_memory_source(),
+            )
+        except MemorySourceError as exc:
+            return str(exc)
 
         logger.info("memory_delete.ok", path=path)
         return f"Deleted {path} and removed from index."

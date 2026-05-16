@@ -33,6 +33,11 @@ from .source_paths import (
 from .store import LongTermMemoryStore
 from .sync_manager import MemorySyncManager, SessionDeltaTracker
 from .sync_manager import MemorySyncManager as MemoryFileWatcher
+from .tool_sources import (
+    MemorySourceError,
+    delete_memory_source,
+    read_memory_source,
+)
 from .tool_writes import (
     MemoryWriteError,
     PlannedMemoryWrite,
@@ -74,6 +79,10 @@ __all__ = [
     "is_memory_source_path",
     "is_raw_fallback_save_path",
     "private_archive_error",
+    # tool sources
+    "MemorySourceError",
+    "delete_memory_source",
+    "read_memory_source",
     # tool writes
     "MemoryWriteError",
     "PlannedMemoryWrite",
