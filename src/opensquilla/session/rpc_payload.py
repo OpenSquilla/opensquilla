@@ -337,12 +337,17 @@ def session_compact_response(
     return payload
 
 
+def session_abort_response(key: str, *, aborted: bool) -> dict[str, Any]:
+    return {"aborted": aborted, "key": key}
+
+
 __all__ = [
     "active_task_summary",
     "enum_value",
     "last_task_summary",
     "messages_subscribe_response",
     "normalize_terminal_event_payload",
+    "session_abort_response",
     "session_compact_response",
     "session_context_compact_response",
     "session_create_response",

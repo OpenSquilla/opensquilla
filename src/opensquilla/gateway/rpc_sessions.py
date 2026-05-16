@@ -30,6 +30,7 @@ from opensquilla.session.keys import canonicalize_session_key, normalize_agent_i
 from opensquilla.session.rpc_payload import (
     messages_subscribe_response,
     normalize_terminal_event_payload,
+    session_abort_response,
     session_compact_response,
     session_context_compact_response,
     session_create_response,
@@ -965,7 +966,7 @@ async def _handle_sessions_abort(params: dict | None, ctx: RpcContext) -> dict:
     key = _require_key(params)
 
     if ctx.session_manager is None:
-        return {"aborted": False, "key": key}
+        return session_abort_response(key, aborted=False)
 
     storage = get_session_storage(ctx.session_manager)
     if storage:
@@ -976,7 +977,7 @@ async def _handle_sessions_abort(params: dict | None, ctx: RpcContext) -> dict:
     task_runtime = getattr(ctx, "task_runtime", None)
     if task_runtime is not None:
         cancelled_count = await task_runtime.cancel(session_key=key)
-        return {"aborted": cancelled_count > 0, "key": key}
+        return session_abort_response(key, aborted=cancelled_count > 0)
 
     # Cancel running agent task via registry
     registry = get_agent_task_registry()
@@ -992,7 +993,7 @@ async def _handle_sessions_abort(params: dict | None, ctx: RpcContext) -> dict:
         setattr(task, "_opensquilla_terminal_emitted", True)
         await _emit_to_subscribers(ctx, key, "session.event.done", {"reason": "aborted"})
 
-    return {"aborted": cancelled, "key": key}
+    return session_abort_response(key, aborted=cancelled)
 
 
 @_d.method("sessions.patch", scope="operator.admin")
