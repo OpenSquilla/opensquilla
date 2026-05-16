@@ -5,9 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
-from opensquilla.skills.hub.defaults import (
-    get_default_skill_installer,
-)
 from opensquilla.skills.hub.deps import (
     install_loaded_skill_dependency,
     skill_deps_install_request,
@@ -84,7 +81,6 @@ async def _handle_skills_install(params: dict | None, ctx: RpcContext) -> dict[s
     """Install a skill from a Community source."""
     outcome = await run_skill_install_operation(
         _get_loader(ctx),
-        _get_default_installer,
         skill_install_request(params),
     )
     if outcome.result is None:
@@ -98,7 +94,6 @@ async def _handle_skills_update(params: dict | None, ctx: RpcContext) -> dict[st
     """Update installed skills from lockfile."""
     outcome = await run_skills_update_operation(
         _get_loader(ctx),
-        _get_default_installer,
         skills_update_request(params),
     )
     if outcome.unavailable_message:
@@ -113,7 +108,6 @@ async def _handle_skills_uninstall(params: dict | None, ctx: RpcContext) -> dict
     """Uninstall a managed skill."""
     outcome = await run_skill_uninstall_operation(
         _get_loader(ctx),
-        _get_default_installer,
         skill_uninstall_request(params),
     )
     if outcome.result is None:
@@ -135,7 +129,3 @@ async def _handle_skills_deps_install(params: dict | None, ctx: RpcContext) -> d
         skill_deps_install_request(params),
     )
     return skill_deps_install_result_rpc_payload(outcome.result, outcome.missing_still)
-
-
-def _get_default_installer():
-    return get_default_skill_installer()

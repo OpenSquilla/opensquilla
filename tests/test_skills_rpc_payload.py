@@ -509,7 +509,44 @@ async def test_gateway_delegates_skill_rpc_payloads_to_skills_boundary(
         "missing_still": {"bins": [], "env": []},
         "delegated": True,
     }
-    monkeypatch.setattr(rpc_skills, "_get_default_installer", lambda: None)
+
+    async def fake_unavailable_update_operation(
+        actual_loader: object | None,
+        request: object,
+    ) -> SimpleNamespace:
+        if actual_loader is None:
+            return SimpleNamespace(
+                results=[],
+                unavailable_message="No skill loader configured",
+                unavailable_payload="empty_results",
+            )
+        assert actual_loader is loader
+        return SimpleNamespace(
+            results=[],
+            unavailable_message="No skill installer configured",
+            unavailable_payload="unavailable",
+        )
+
+    async def fake_unavailable_uninstall_operation(
+        actual_loader: object | None,
+        request: object,
+    ) -> SimpleNamespace:
+        assert actual_loader is loader
+        return SimpleNamespace(
+            result=None,
+            unavailable_message="No skill installer configured",
+        )
+
+    monkeypatch.setattr(
+        rpc_skills,
+        "run_skills_update_operation",
+        fake_unavailable_update_operation,
+    )
+    monkeypatch.setattr(
+        rpc_skills,
+        "run_skill_uninstall_operation",
+        fake_unavailable_uninstall_operation,
+    )
     assert await rpc_skills._handle_skills_update(None, object()) == {
         "results": [],
         "success": False,
@@ -533,17 +570,14 @@ async def test_gateway_delegates_skill_operations_to_hub_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     loader = object()
-    installer = object()
     ctx = SimpleNamespace(skill_loader=loader)
     calls: list[tuple[str, object]] = []
 
     async def fake_run_skill_install_operation(
         actual_loader: object,
-        actual_installer_factory: object,
         request: object,
     ) -> SimpleNamespace:
         assert actual_loader is loader
-        assert actual_installer_factory() is installer
         calls.append(("install", request))
         return SimpleNamespace(
             result=SimpleNamespace(
@@ -557,11 +591,9 @@ async def test_gateway_delegates_skill_operations_to_hub_boundary(
 
     async def fake_run_skills_update_operation(
         actual_loader: object,
-        actual_installer_factory: object,
         request: object,
     ) -> SimpleNamespace:
         assert actual_loader is loader
-        assert actual_installer_factory() is installer
         calls.append(("update", request))
         return SimpleNamespace(
             results=[SimpleNamespace(success=True, name="planner", message="updated")],
@@ -571,18 +603,15 @@ async def test_gateway_delegates_skill_operations_to_hub_boundary(
 
     async def fake_run_skill_uninstall_operation(
         actual_loader: object,
-        actual_installer_factory: object,
         request: object,
     ) -> SimpleNamespace:
         assert actual_loader is loader
-        assert actual_installer_factory() is installer
         calls.append(("uninstall", request))
         return SimpleNamespace(
             result=SimpleNamespace(success=True, name="planner", message="removed"),
             unavailable_message="",
         )
 
-    monkeypatch.setattr(rpc_skills, "_get_default_installer", lambda: installer)
     monkeypatch.setattr(rpc_skills, "skill_install_request", lambda params: ("install", params))
     monkeypatch.setattr(rpc_skills, "skills_update_request", lambda params: ("update", params))
     monkeypatch.setattr(
@@ -696,7 +725,7 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     assert "opensquilla.skills.hub.github" not in imported_modules
     assert "opensquilla.skills.hub.installer" not in imported_modules
     assert "opensquilla.skills.hub.router" not in imported_modules
-    assert "opensquilla.skills.hub.defaults" in imported_modules
+    assert "opensquilla.skills.hub.defaults" not in imported_modules
     assert "opensquilla.skills.hub.lockfile" not in imported_modules
     assert "opensquilla.skills.hub.search" in imported_modules
     assert "opensquilla.skills.loader" not in imported_modules
@@ -707,6 +736,7 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     assert "_installed_names" not in top_level_functions
     assert "_invalidate_loader" not in top_level_functions
     assert "_get_default_router" not in top_level_functions
+    assert "_get_default_installer" not in top_level_functions
     assert "_deps_locks" not in top_level_assigns
     assert "_default_router" not in top_level_assigns
     assert "_default_installer" not in top_level_assigns
@@ -790,6 +820,7 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     assert "identifier" not in install_handler_constants
     assert "source" not in install_handler_constants
     assert "force" not in install_handler_constants
+    assert "get_default_skill_installer" not in install_handler_names
     assert "invalidate_cache" not in install_handler_attrs
     update_handler = {
         node.name: node
@@ -830,6 +861,7 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     assert "name" not in update_handler_constants
     assert "No skill loader configured" not in update_handler_constants
     assert "No skill installer configured" not in update_handler_constants
+    assert "get_default_skill_installer" not in update_handler_names
     assert "invalidate_cache" not in update_handler_attrs
     assert "OSError" not in update_handler_names
     uninstall_handler = {
@@ -869,6 +901,7 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
     }.issubset(uninstall_handler_names)
     assert "name" not in uninstall_handler_constants
     assert "No skill installer configured" not in uninstall_handler_constants
+    assert "get_default_skill_installer" not in uninstall_handler_names
     assert "invalidate_cache" not in uninstall_handler_attrs
     deps_install_handler = {
         node.name: node

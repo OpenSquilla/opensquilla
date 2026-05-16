@@ -111,46 +111,51 @@ async def test_update_skills_maps_os_errors_to_unavailable_message() -> None:
 async def test_skill_management_workflows_handle_availability_and_invalidation() -> None:
     loader = FakeLoader()
     installer = FakeInstaller()
+    factory_calls: list[str] = []
+
+    def unexpected_factory() -> FakeInstaller:
+        factory_calls.append("called")
+        return installer
 
     missing_loader = await run_skill_install_operation(
         None,
-        lambda: installer,
         skill_install_request({"identifier": "planner"}),
+        installer_factory=unexpected_factory,
     )
     missing_installer = await run_skill_install_operation(
         loader,
-        lambda: None,
         skill_install_request({"identifier": "planner"}),
+        installer_factory=lambda: None,
     )
     install_outcome = await run_skill_install_operation(
         loader,
-        lambda: installer,
         skill_install_request({"identifier": "planner"}),
+        installer_factory=lambda: installer,
     )
     update_outcome = await run_skills_update_operation(
         loader,
-        lambda: installer,
         skills_update_request({"name": "planner"}),
+        installer_factory=lambda: installer,
     )
     uninstall_outcome = await run_skill_uninstall_operation(
         loader,
-        lambda: installer,
         skill_uninstall_request({"name": "planner"}),
+        installer_factory=lambda: installer,
     )
     update_missing_loader = await run_skills_update_operation(
         None,
-        lambda: installer,
         skills_update_request(None),
+        installer_factory=unexpected_factory,
     )
     update_missing_installer = await run_skills_update_operation(
         loader,
-        lambda: None,
         skills_update_request(None),
+        installer_factory=lambda: None,
     )
     uninstall_missing_installer = await run_skill_uninstall_operation(
         loader,
-        lambda: None,
         skill_uninstall_request({"name": "planner"}),
+        installer_factory=lambda: None,
     )
 
     assert missing_loader.unavailable_message == "No skill loader configured"
@@ -166,4 +171,5 @@ async def test_skill_management_workflows_handle_availability_and_invalidation()
         uninstall_missing_installer.unavailable_message
         == "No skill installer configured"
     )
+    assert factory_calls == []
     assert loader.invalidations == 3
