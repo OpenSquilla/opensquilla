@@ -12,6 +12,7 @@ from opensquilla.gateway.context_overflow import apply_context_overflow_policy
 from opensquilla.gateway.rpc import RpcContext, RpcUnavailableError, get_dispatcher
 from opensquilla.session.compaction import build_compaction_config_from_provider
 from opensquilla.session.keys import build_webchat_key, canonicalize_session_key
+from opensquilla.session.rpc_payload import chat_history_response
 
 _d = get_dispatcher()
 log = structlog.get_logger(__name__)
@@ -247,65 +248,7 @@ async def _handle_chat_history(params: dict | None, ctx: RpcContext) -> dict:
     mgr = _require_chat_session_manager(ctx)
 
     transcript = await mgr.get_transcript(session_key)
-    if not transcript:
-        return {"messages": []}
-
-    import json as _json
-
-    messages = []
-    for entry in transcript[-limit:]:
-        content = getattr(entry, "content", "") or ""
-        attachments = None
-        artifacts = None
-        # Parse JSON-encoded content with attachments
-        if content and content.startswith("{"):
-            try:
-                parsed = _json.loads(content)
-                if isinstance(parsed, dict) and "text" in parsed:
-                    content = parsed["text"]
-                    attachments = parsed.get("attachments")
-                    parsed_artifacts = parsed.get("artifacts")
-                    if isinstance(parsed_artifacts, list):
-                        artifacts = [
-                            artifact_payload(item)
-                            for item in parsed_artifacts
-                            if isinstance(item, dict)
-                        ]
-            except (ValueError, KeyError):
-                pass
-        # Recover from corrupted Python repr of content blocks (old compaction bug).
-        # Extract text from ContentBlockText entries; skip pure tool-only messages.
-        if content and content.lstrip().startswith("[ContentBlock"):
-            import re
-
-            texts = re.findall(
-                r"ContentBlockText\(type='text', text='(.*?)'\)",
-                content,
-            )
-            content = "\n".join(t.replace("\\n", "\n") for t in texts) if texts else ""
-            if not content.strip():
-                continue
-        msg = {
-            "id": getattr(entry, "message_id", None),
-            "message_id": getattr(entry, "message_id", None),
-            "role": getattr(entry, "role", "unknown"),
-            "text": content,
-            "timestamp": getattr(entry, "created_at", None),
-            "provenance_kind": getattr(entry, "provenance_kind", None),
-            "provenance_source_session_key": getattr(
-                entry, "provenance_source_session_key", None
-            ),
-            "provenance_source_tool": getattr(entry, "provenance_source_tool", None),
-        }
-        if attachments:
-            msg["attachments"] = attachments
-        if artifacts:
-            msg["artifacts"] = artifacts
-        tc = getattr(entry, "tool_calls", None)
-        if tc:
-            msg["tool_calls"] = tc
-        messages.append(msg)
-    return {"messages": messages}
+    return chat_history_response(transcript, limit=limit, artifact_payload_fn=artifact_payload)
 
 
 @_d.method("chat.inject", scope="operator.admin")

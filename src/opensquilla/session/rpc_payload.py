@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Callable
 from typing import Any
 
 from opensquilla.session.terminal_reply import build_terminal_reply
+
+ArtifactPayloadBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def enum_value(value: Any) -> Any:
@@ -103,6 +108,87 @@ def messages_subscribe_response(
         "replayed_count": replayed_count,
         **task_state_summary(task_rows),
     }
+
+
+def chat_history_message(
+    entry: Any,
+    *,
+    artifact_payload_fn: ArtifactPayloadBuilder | None = None,
+) -> dict[str, Any] | None:
+    content = getattr(entry, "content", "") or ""
+    attachments = None
+    artifacts = None
+    if isinstance(content, str) and content.startswith("{"):
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict) and "text" in parsed:
+                content = parsed["text"]
+                attachments = parsed.get("attachments")
+                parsed_artifacts = parsed.get("artifacts")
+                if isinstance(parsed_artifacts, list):
+                    artifacts = [
+                        (
+                            artifact_payload_fn(item)
+                            if artifact_payload_fn is not None
+                            else dict(item)
+                        )
+                        for item in parsed_artifacts
+                        if isinstance(item, dict)
+                    ]
+        except (ValueError, KeyError):
+            pass
+
+    if isinstance(content, str) and content and content.lstrip().startswith("[ContentBlock"):
+        texts = re.findall(
+            r"ContentBlockText\(type='text', text='(.*?)'\)",
+            content,
+        )
+        content = "\n".join(t.replace("\\n", "\n") for t in texts) if texts else ""
+        if not content.strip():
+            return None
+
+    message = {
+        "id": getattr(entry, "message_id", None),
+        "message_id": getattr(entry, "message_id", None),
+        "role": getattr(entry, "role", "unknown"),
+        "text": content,
+        "timestamp": getattr(entry, "created_at", None),
+        "provenance_kind": getattr(entry, "provenance_kind", None),
+        "provenance_source_session_key": getattr(
+            entry,
+            "provenance_source_session_key",
+            None,
+        ),
+        "provenance_source_tool": getattr(entry, "provenance_source_tool", None),
+    }
+    if attachments:
+        message["attachments"] = attachments
+    if artifacts:
+        message["artifacts"] = artifacts
+    tool_calls = getattr(entry, "tool_calls", None)
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return message
+
+
+def chat_history_response(
+    entries: list[Any],
+    *,
+    limit: Any = 50,
+    artifact_payload_fn: ArtifactPayloadBuilder | None = None,
+) -> dict[str, Any]:
+    messages = [
+        message
+        for entry in entries[-limit:]
+        if (
+            message := chat_history_message(
+                entry,
+                artifact_payload_fn=artifact_payload_fn,
+            )
+        )
+        is not None
+    ]
+    return {"messages": messages}
 
 
 def normalize_terminal_event_payload(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -415,6 +501,8 @@ def session_abort_response(key: str, *, aborted: bool) -> dict[str, Any]:
 
 __all__ = [
     "active_task_summary",
+    "chat_history_message",
+    "chat_history_response",
     "enum_value",
     "last_task_summary",
     "messages_subscribe_response",

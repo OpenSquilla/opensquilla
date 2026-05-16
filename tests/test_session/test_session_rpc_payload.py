@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from opensquilla.session.rpc_payload import (
+    chat_history_message,
+    chat_history_response,
     messages_subscribe_response,
     normalize_terminal_event_payload,
     session_abort_response,
@@ -152,6 +154,84 @@ def test_messages_subscribe_response_merges_replay_and_task_state() -> None:
     assert payload["replayed_count"] == 3
     assert payload["last_task"]["task_id"] == "task-abandoned"
     assert payload["run_status"] == "interrupted"
+
+
+def test_chat_history_response_owns_transcript_wire_shape() -> None:
+    entry = SimpleNamespace(
+        message_id="msg-1",
+        role="assistant",
+        content="done",
+        created_at=1234,
+        provenance_kind="internal_system",
+        provenance_source_session_key="agent:main:subagent:child",
+        provenance_source_tool="subagent_completion",
+        tool_calls=[{"name": "lookup"}],
+    )
+
+    assert chat_history_response([entry]) == {
+        "messages": [
+            {
+                "id": "msg-1",
+                "message_id": "msg-1",
+                "role": "assistant",
+                "text": "done",
+                "timestamp": 1234,
+                "provenance_kind": "internal_system",
+                "provenance_source_session_key": "agent:main:subagent:child",
+                "provenance_source_tool": "subagent_completion",
+                "tool_calls": [{"name": "lookup"}],
+            }
+        ]
+    }
+    assert chat_history_response([]) == {"messages": []}
+
+
+def test_chat_history_response_normalizes_embedded_artifacts() -> None:
+    entry = SimpleNamespace(
+        message_id="msg-1",
+        role="assistant",
+        content=(
+            '{"text":"done","attachments":[{"name":"input.txt"}],'
+            '"artifacts":[{"id":"art-1","session_key":"agent:main:webchat:test"}]}'
+        ),
+        created_at=1234,
+        provenance_kind=None,
+        provenance_source_session_key=None,
+        provenance_source_tool=None,
+    )
+
+    payload = chat_history_response(
+        [entry],
+        artifact_payload_fn=lambda item: {"id": item["id"]},
+    )
+
+    assert payload["messages"][0]["text"] == "done"
+    assert payload["messages"][0]["attachments"] == [{"name": "input.txt"}]
+    assert payload["messages"][0]["artifacts"] == [{"id": "art-1"}]
+
+
+def test_chat_history_message_recovers_content_block_text_and_skips_tool_only() -> None:
+    text_entry = SimpleNamespace(
+        message_id="msg-1",
+        role="assistant",
+        content="[ContentBlockText(type='text', text='hello\\nworld')]",
+        created_at=1234,
+        provenance_kind=None,
+        provenance_source_session_key=None,
+        provenance_source_tool=None,
+    )
+    tool_entry = SimpleNamespace(
+        message_id="msg-2",
+        role="assistant",
+        content="[ContentBlockToolUse(type='tool_use', name='lookup')]",
+        created_at=1235,
+        provenance_kind=None,
+        provenance_source_session_key=None,
+        provenance_source_tool=None,
+    )
+
+    assert chat_history_message(text_entry)["text"] == "hello\nworld"
+    assert chat_history_message(tool_entry) is None
 
 
 def test_normalize_terminal_event_payload_preserves_non_error_events() -> None:
