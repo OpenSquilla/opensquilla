@@ -615,7 +615,6 @@ class TestSessionsList:
         }
 
         assert ("opensquilla.session.rpc_payload", "session_list_row") in imports
-        assert ("opensquilla.session.rpc_payload", "task_state_summary") in imports
         assert "_task_summary" not in top_level_functions
         assert "_task_state_summary" not in top_level_functions
         assert "_derive_source_metadata" not in top_level_functions
@@ -1337,6 +1336,33 @@ class TestSessionsMessagesSubscribe:
         assert res.payload["replay_gap_reason"] == "stream_buffer_reset"
         assert res.payload["last_task"]["task_id"] == "task-abandoned"
         assert res.payload["run_status"] == "interrupted"
+
+    def test_gateway_messages_subscribe_delegates_response_to_session_boundary(self):
+        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_handle_sessions_messages_subscribe"
+        )
+        handler_constants = {
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "messages_subscribe_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "messages_subscribe_response"
+            for node in ast.walk(handler)
+        )
+        assert "replay_complete" not in handler_constants
+        assert "replayed_count" not in handler_constants
 
     @pytest.mark.asyncio
     async def test_messages_subscribe_missing_key(self, dispatcher, ctx_with_sessions):
