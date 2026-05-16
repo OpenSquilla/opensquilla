@@ -1,20 +1,25 @@
+import ast
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from opensquilla.gateway import rpc_cron
 from opensquilla.gateway.rpc import RpcContext
 from opensquilla.gateway.rpc_cron import (
-    _build_payload,
     _handle_cron_add,
     _handle_cron_update,
-    _resolve_origin_session_key,
-    _resolve_session_target,
-    _resolve_target_session_key,
 )
 from opensquilla.scheduler.delivery import DeliveryChain
 from opensquilla.scheduler.handlers import _resolve_session_key, make_agent_run_handler
 from opensquilla.scheduler.payloads import AGENT_TURN_KIND, SYSTEM_EVENT_KIND
+from opensquilla.scheduler.rpc_payload import (
+    build_cron_payload,
+    resolve_origin_session_key,
+    resolve_session_target,
+    resolve_target_session_key,
+)
 from opensquilla.scheduler.types import CronJob, DeliveryConfig, DeliveryMode, SessionTarget
 
 SESSION_KEY = "agent:main:webchat:abc123"
@@ -104,12 +109,12 @@ def test_rpc_current_session_params_bind_target_and_origin_session() -> None:
         "agentId": "main",
     }
 
-    session_target = _resolve_session_target(params)
-    kind, payload = _build_payload(params, session_target)
+    session_target = resolve_session_target(params)
+    kind, payload = build_cron_payload(params, session_target)
 
     assert session_target == SessionTarget.CURRENT
-    assert _resolve_target_session_key(params, session_target) == SESSION_KEY
-    assert _resolve_origin_session_key(params, session_target) == SESSION_KEY
+    assert resolve_target_session_key(params, session_target) == SESSION_KEY
+    assert resolve_origin_session_key(params, session_target) == SESSION_KEY
     assert kind == AGENT_TURN_KIND
     assert payload == {
         "kind": AGENT_TURN_KIND,
@@ -249,7 +254,7 @@ def test_rpc_keeps_system_event_main_only() -> None:
     }
 
     with pytest.raises(ValueError, match="system_event.*main"):
-        _build_payload(params, SessionTarget.CURRENT)
+        build_cron_payload(params, SessionTarget.CURRENT)
 
 
 def test_rpc_rejects_agent_turn_on_main_session() -> None:
@@ -260,7 +265,28 @@ def test_rpc_rejects_agent_turn_on_main_session() -> None:
     }
 
     with pytest.raises(ValueError, match="agent_turn.*main"):
-        _build_payload(params, SessionTarget.MAIN)
+        build_cron_payload(params, SessionTarget.MAIN)
+
+
+def test_gateway_rpc_cron_delegates_wire_payloads_to_scheduler_boundary() -> None:
+    source = Path(rpc_cron.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imports = {
+        (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+        for alias in node.names
+    }
+
+    assert ("opensquilla.scheduler.rpc_payload", "cron_job_to_wire") in imports
+    assert ("opensquilla.scheduler.rpc_payload", "manual_run_to_wire") in imports
+    assert ("opensquilla.scheduler.rpc_payload", "cron_run_to_wire") in imports
+    top_level_functions = {
+        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "_job_to_wire" not in top_level_functions
+    assert "_manual_run_to_wire" not in top_level_functions
+    assert "_tool_policy_to_wire" not in top_level_functions
 
 
 def test_scheduler_current_session_resolves_bound_session_key() -> None:
