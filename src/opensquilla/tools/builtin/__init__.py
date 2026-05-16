@@ -2,36 +2,17 @@
 
 from __future__ import annotations
 
-from importlib import import_module
+from opensquilla.tools.builtin.loader import (
+    BUILTIN_TOOL_MODULE_NAMES,
+    import_builtin_tool_modules,
+    load_builtin_tools,
+)
 
-import structlog
+globals().update(import_builtin_tool_modules())
 
-_FATAL_MODULES = frozenset({"shell", "patch", "filesystem"})
-_NAMES = [
-    "admin",
-    "agents",
-    "artifacts",
-    "code_exec",
-    "filesystem",
-    "git",
-    "media",
-    "messaging",
-    "patch",
-    "sessions",
-    "shell",
-    "web",
-    "web_fetch",
+__all__ = [
+    *BUILTIN_TOOL_MODULE_NAMES,
+    "BUILTIN_TOOL_MODULE_NAMES",
+    "import_builtin_tool_modules",
+    "load_builtin_tools",
 ]
-
-log = structlog.get_logger(__name__)
-
-for _name in _NAMES:
-    try:
-        globals()[_name] = import_module(f"{__name__}.{_name}")
-    except Exception as exc:
-        if _name in _FATAL_MODULES:
-            raise
-        log.warning("builtin_tool.import_failed", module=_name, error=str(exc))
-        continue
-
-__all__ = _NAMES
