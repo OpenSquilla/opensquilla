@@ -5,13 +5,11 @@ from __future__ import annotations
 import re
 from typing import cast
 
-from opensquilla.agents.workspace_files import (
-    list_workspace_agent_files,
-    read_workspace_agent_file,
-    validate_workspace_file_extension,
-    validate_workspace_file_name,
-    workspace_file_root_for_config,
-    write_workspace_agent_file,
+from opensquilla.agents.files_rpc import (
+    AgentFilesUnavailableError,
+    agent_files_get_rpc_payload,
+    agent_files_list_rpc_payload,
+    agent_files_set_rpc_payload,
 )
 from opensquilla.gateway.rpc import (
     RpcContext,
@@ -168,73 +166,38 @@ async def _handle_agents_delete(params: dict | None, ctx: RpcContext) -> None:
 
 @_d.method("agents.files.list", scope="operator.read")
 async def _handle_agents_files_list(params: dict | None, ctx: RpcContext) -> dict:
-    if not isinstance(params, dict) or "agentId" not in params:
-        raise ValueError("params.agentId is required")
-
-    agent_id = normalize_agent_id(params["agentId"])
-
-    agent_registry = getattr(ctx, "agent_registry", None)
-    if agent_registry is None:
-        root = workspace_file_root_for_config(getattr(ctx, "config", None), agent_id)
-        if root is None:
-            raise RpcUnavailableError("Agent registry not available")
-        return {"files": list_workspace_agent_files(root)}
-    files = await agent_registry.list_agent_files(agent_id)
-    return {"files": files}
+    try:
+        return await agent_files_list_rpc_payload(
+            params,
+            agent_registry=getattr(ctx, "agent_registry", None),
+            config=getattr(ctx, "config", None),
+        )
+    except AgentFilesUnavailableError as exc:
+        raise RpcUnavailableError(str(exc)) from exc
 
 
 @_d.method("agents.files.get", scope="operator.read")
 async def _handle_agents_files_get(params: dict | None, ctx: RpcContext) -> dict:
-    if not isinstance(params, dict):
-        raise ValueError("params required: agentId, name")
-    if "agentId" not in params:
-        raise ValueError("params.agentId is required")
-    if "name" not in params:
-        raise ValueError("params.name is required")
-
-    agent_id = normalize_agent_id(params["agentId"])
-    name = validate_workspace_file_name(params["name"])
-
-    agent_registry = getattr(ctx, "agent_registry", None)
-    if agent_registry is None:
-        root = workspace_file_root_for_config(getattr(ctx, "config", None), agent_id)
-        if root is None:
-            raise RpcUnavailableError("Agent registry not available")
-        safe_name, content = read_workspace_agent_file(root, name)
-        return {"name": safe_name, "content": content}
-    content = await agent_registry.get_agent_file(agent_id, name)
-    return cast(dict, content)
+    try:
+        return await agent_files_get_rpc_payload(
+            params,
+            agent_registry=getattr(ctx, "agent_registry", None),
+            config=getattr(ctx, "config", None),
+        )
+    except AgentFilesUnavailableError as exc:
+        raise RpcUnavailableError(str(exc)) from exc
 
 
 @_d.method("agents.files.set", scope="operator.admin")
 async def _handle_agents_files_set(params: dict | None, ctx: RpcContext) -> dict:
-    if not isinstance(params, dict):
-        raise ValueError("params required: agentId, name, content")
-    if "agentId" not in params:
-        raise ValueError("params.agentId is required")
-    if "name" not in params:
-        raise ValueError("params.name is required")
-    if "content" not in params:
-        raise ValueError("params.content is required")
-
-    name = validate_workspace_file_name(params["name"])
-    validate_workspace_file_extension(name)
-
-    content = params["content"]
-
-    agent_registry = getattr(ctx, "agent_registry", None)
-    if agent_registry is None:
-        agent_id = normalize_agent_id(params["agentId"])
-        root = workspace_file_root_for_config(getattr(ctx, "config", None), agent_id)
-        if root is None:
-            raise RpcUnavailableError("Agent registry not available")
-        return write_workspace_agent_file(root, name, content)
-    result = await agent_registry.set_agent_file(
-        normalize_agent_id(params["agentId"]),
-        name,
-        content,
-    )
-    return cast(dict, result)
+    try:
+        return await agent_files_set_rpc_payload(
+            params,
+            agent_registry=getattr(ctx, "agent_registry", None),
+            config=getattr(ctx, "config", None),
+        )
+    except AgentFilesUnavailableError as exc:
+        raise RpcUnavailableError(str(exc)) from exc
 
 
 @_d.method("agent.identity.get", scope="operator.read")
