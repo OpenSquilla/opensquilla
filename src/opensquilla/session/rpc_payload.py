@@ -86,6 +86,35 @@ def task_state_summary(rows: list[Any]) -> dict[str, Any]:
     }
 
 
+def normalize_terminal_event_payload(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if event_name != "session.event.error":
+        return payload
+
+    message = payload.get("message")
+    error_message = payload.get("error_message")
+    raw_message = error_message if isinstance(error_message, str) and error_message else message
+    raw_text = raw_message if isinstance(raw_message, str) and raw_message else "Agent error"
+    code = payload.get("code")
+    code_text = str(code or "").lower()
+    is_timeout = "timeout" in code_text or "stream idle" in raw_text.lower()
+    terminal_payload = {
+        "status": "timeout" if is_timeout else "failed",
+        "terminal_reason": payload.get("terminal_reason")
+        or ("timeout" if is_timeout else "error"),
+        "error_class": code,
+        "error_message": raw_text,
+        **payload,
+    }
+    terminal_message = build_terminal_reply(terminal_payload)
+    return {
+        **payload,
+        "message": terminal_message,
+        "terminal_message": terminal_message,
+        "terminal_reason": terminal_payload["terminal_reason"],
+        "error_message": raw_text,
+    }
+
+
 def session_source_metadata(session: Any) -> dict[str, Any]:
     key = str(getattr(session, "session_key", "") or "")
     origin = getattr(session, "origin", None)
@@ -197,6 +226,7 @@ __all__ = [
     "active_task_summary",
     "enum_value",
     "last_task_summary",
+    "normalize_terminal_event_payload",
     "session_list_row",
     "session_preview_last_message",
     "session_preview_row",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from opensquilla.session.rpc_payload import (
+    normalize_terminal_event_payload,
     session_list_row,
     session_preview_last_message,
     session_preview_row,
@@ -79,6 +80,44 @@ def test_task_state_summary_maps_abandoned_terminal_task_to_interrupted() -> Non
     assert payload["last_task"]["terminal_reason"] == "runtime-restart"
     assert payload["last_task"]["terminal_message"]
     assert payload["run_status"] == "interrupted"
+
+
+def test_normalize_terminal_event_payload_preserves_non_error_events() -> None:
+    payload = {"message": "ok"}
+
+    assert normalize_terminal_event_payload("session.event.done", payload) is payload
+
+
+def test_normalize_terminal_event_payload_maps_legacy_timeout_errors() -> None:
+    payload = normalize_terminal_event_payload(
+        "session.event.error",
+        {
+            "message": "Session event stream idle before terminal event",
+            "code": "stream_idle_timeout",
+        },
+    )
+
+    assert payload["message"] == "The task timed out before it could finish."
+    assert payload["terminal_message"] == "The task timed out before it could finish."
+    assert payload["terminal_reason"] == "timeout"
+    assert payload["error_message"] == "Session event stream idle before terminal event"
+
+
+def test_normalize_terminal_event_payload_prefers_error_message_and_reason() -> None:
+    payload = normalize_terminal_event_payload(
+        "session.event.error",
+        {
+            "message": "outer",
+            "error_message": "inner failure",
+            "terminal_reason": "model_error",
+            "code": "provider_error",
+        },
+    )
+
+    assert payload["message"] == "The task failed before it could finish."
+    assert payload["terminal_message"] == "The task failed before it could finish."
+    assert payload["terminal_reason"] == "model_error"
+    assert payload["error_message"] == "inner failure"
 
 
 def test_session_preview_row_uses_display_title_and_last_chat_message() -> None:
