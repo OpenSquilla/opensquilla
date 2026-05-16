@@ -472,15 +472,24 @@ async def test_gateway_delegates_skill_rpc_payloads_to_skills_boundary(
         skill_loader=SimpleNamespace(get_by_name=lambda _name: deps_skill)
     )
 
-    async def fake_install_deps(_specs: list[object]) -> list[SimpleNamespace]:
-        return [SimpleNamespace(success=True, kind="brew", message="installed")]
+    async def fake_install_skill_dependency(
+        actual_skill: object,
+        *,
+        name: str,
+        install_id: str,
+    ) -> SimpleNamespace:
+        assert actual_skill is deps_skill
+        assert name == "planner"
+        assert install_id == "brew"
+        return SimpleNamespace(
+            result=SimpleNamespace(success=True, kind="brew", message="installed"),
+            missing_still={"bins": [], "env": []},
+        )
 
-    monkeypatch.setattr(rpc_skills, "install_deps", fake_install_deps)
-    monkeypatch.setattr(rpc_skills, "validate_skill_install_supported", lambda *_args: None)
     monkeypatch.setattr(
         rpc_skills,
-        "skill_missing_requirements_rpc_payload",
-        lambda _skill: {"bins": [], "env": []},
+        "install_skill_dependency",
+        fake_install_skill_dependency,
     )
     assert await rpc_skills._handle_skills_deps_install(
         {"name": "planner", "install_id": "brew"},
@@ -558,14 +567,19 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
 
     assert "opensquilla.skills.eligibility" not in imported_modules
     assert "opensquilla.paths" not in imported_modules
+    assert "opensquilla.skills.hub.deps" in imported_modules
     assert "opensquilla.skills.hub.clawhub" not in imported_modules
     assert "opensquilla.skills.hub.github" not in imported_modules
     assert "opensquilla.skills.hub.installer" not in imported_modules
     assert "opensquilla.skills.hub.router" not in imported_modules
     assert "opensquilla.skills.hub.defaults" in imported_modules
     assert "opensquilla.skills.hub.lockfile" in imported_modules
+    assert "asyncio" not in imported_names
     assert "shutil" not in imported_names
+    assert "weakref" not in imported_names
+    assert "_deps_lock_for" not in top_level_functions
     assert "_installed_names" not in top_level_functions
+    assert "_deps_locks" not in top_level_assigns
     assert "_default_router" not in top_level_assigns
     assert "_default_installer" not in top_level_assigns
     assert {
@@ -684,9 +698,13 @@ def test_gateway_rpc_skills_keeps_payload_logic_out_of_gateway_boundary() -> Non
         for node in ast.walk(handler)
         if isinstance(node, ast.Dict)
     }
-    assert {"skill_deps_install_result_rpc_payload"}.issubset(
-        deps_install_handler_names
-    )
+    assert {
+        "install_skill_dependency",
+        "skill_deps_install_result_rpc_payload",
+    }.issubset(deps_install_handler_names)
+    assert "install_deps" not in deps_install_handler_names
+    assert "validate_skill_install_supported" not in deps_install_handler_names
+    assert "skill_missing_requirements_rpc_payload" not in deps_install_handler_names
     assert "_skill_to_dict" not in top_level_functions
     assert "_status_from_report" not in top_level_functions
     assert "_status_detail" not in top_level_functions

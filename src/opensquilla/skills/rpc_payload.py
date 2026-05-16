@@ -271,27 +271,6 @@ def skill_get_rpc_payload(params: Mapping[str, Any] | None, loader: Any | None) 
     return payload
 
 
-def validate_skill_install_supported(spec: Any, install_id: str) -> None:
-    """Validate that an install spec is supported on the current OS."""
-
-    ctx_eligible = EligibilityContext.auto()
-    if spec.os and ctx_eligible.os_name and ctx_eligible.os_name not in spec.os:
-        raise ValueError(
-            f"Install spec {install_id!r} not supported on "
-            f"{ctx_eligible.os_name} (requires: {', '.join(spec.os)})"
-        )
-
-
-def skill_missing_requirements_rpc_payload(skill: Any) -> dict[str, list[str]]:
-    """Build the post-install missing dependency payload for a skill."""
-
-    report = diagnose_eligibility(skill, EligibilityContext.auto())
-    return {
-        "bins": list(report.missing_bins),
-        "env": list(report.missing_env),
-    }
-
-
 __all__ = [
     "skill_deps_install_result_rpc_payload",
     "skill_get_rpc_payload",
@@ -300,7 +279,6 @@ __all__ = [
     "skill_uninstall_result_rpc_payload",
     "skill_uninstall_unavailable_rpc_payload",
     "skill_search_result_rpc_payload",
-    "skill_missing_requirements_rpc_payload",
     "skill_status_detail",
     "skill_status_from_report",
     "skill_to_rpc_payload",
@@ -312,5 +290,4 @@ __all__ = [
     "skills_update_empty_results_rpc_payload",
     "skills_update_results_rpc_payload",
     "skills_update_unavailable_rpc_payload",
-    "validate_skill_install_supported",
 ]
