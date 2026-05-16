@@ -2,101 +2,27 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
-from .anthropic import AnthropicProvider
-from .ollama import OllamaProvider
-from .openai import OpenAIProvider
+from .config import ProviderBuildError, ProviderConfig, SelectorConfig
+from .factory import (
+    DEFAULT_PROVIDER_FACTORY,
+    ProviderFactoryPort,
+    build_provider_from_config,
+)
 from .protocol import LLMProvider, ProviderPlugin, resolve_failover_chain
-from .registry import UnknownProviderError, get_provider_spec
 
-
-@dataclass
-class ProviderConfig:
-    """Runtime configuration for a single provider."""
-
-    provider: str  # "anthropic" | "openai" | "ollama"
-    model: str
-    api_key: str = ""
-    base_url: str = ""
-    org_id: str = ""
-    proxy: str = ""  # explicit HTTP proxy URL
-    provider_routing: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass
-class SelectorConfig:
-    """Full model selection config: primary + ordered fallback chain."""
-
-    primary: ProviderConfig
-    fallbacks: list[ProviderConfig] = field(default_factory=list)
-
-
-class ProviderBuildError(Exception):
-    """Raised when a provider cannot be instantiated."""
-
-
-def _unsupported_runtime_message(provider: str) -> str:
-    return (
-        f"Provider '{provider}' is registered but runtime support "
-        "is not enabled in this wave"
-    )
-
-
-def _missing_base_url_message(provider: str) -> str:
-    return f"Provider '{provider}' requires an explicit base_url"
+__all__ = [
+    "ModelSelector",
+    "ProviderBuildError",
+    "ProviderConfig",
+    "SelectorConfig",
+    "_build_provider",
+    "build_provider",
+]
 
 
 def _build_provider(cfg: ProviderConfig) -> LLMProvider:
-    """Instantiate the correct provider class from a ProviderConfig."""
-    try:
-        spec = get_provider_spec(cfg.provider)
-    except UnknownProviderError as exc:
-        raise ProviderBuildError(str(exc)) from exc
-
-    if not spec.runtime_supported:
-        raise ProviderBuildError(_unsupported_runtime_message(cfg.provider))
-
-    base_url = cfg.base_url or spec.default_base_url
-
-    if not base_url and spec.provider_id in {"azure", "vllm"}:
-        raise ProviderBuildError(_missing_base_url_message(cfg.provider))
-
-    match spec.backend:
-        case "anthropic":
-            kwargs: dict = {"api_key": cfg.api_key, "model": cfg.model}
-            if base_url:
-                kwargs["base_url"] = base_url
-            if cfg.proxy:
-                kwargs["proxy"] = cfg.proxy
-            return AnthropicProvider(**kwargs)
-
-        case "openai_compat":
-            kwargs = {
-                "api_key": cfg.api_key,
-                "model": cfg.model,
-                "provider_kind": spec.provider_kind,
-            }
-            if base_url:
-                kwargs["base_url"] = base_url
-            if cfg.org_id:
-                kwargs["org_id"] = cfg.org_id
-            if cfg.proxy:
-                kwargs["proxy"] = cfg.proxy
-            if cfg.provider_routing:
-                kwargs["provider_routing"] = cfg.provider_routing
-            return OpenAIProvider(**kwargs)
-
-        case "ollama":
-            kwargs = {"model": cfg.model}
-            if base_url:
-                kwargs["base_url"] = base_url
-            if cfg.proxy:
-                kwargs["proxy"] = cfg.proxy
-            return OllamaProvider(**kwargs)
-
-        case _:
-            raise ProviderBuildError(_unsupported_runtime_message(cfg.provider))
+    """Compatibility wrapper for the historical private factory helper."""
+    return build_provider_from_config(cfg)
 
 
 class ModelSelector:
@@ -116,15 +42,17 @@ class ModelSelector:
         self,
         config: SelectorConfig,
         plugin: ProviderPlugin | None = None,
+        provider_factory: ProviderFactoryPort | None = None,
     ) -> None:
         self._config = config
         self._chain: list[ProviderConfig] = [config.primary, *config.fallbacks]
         self._index = 0
         self._plugin = plugin
+        self._provider_factory = provider_factory or DEFAULT_PROVIDER_FACTORY
 
     def resolve(self) -> LLMProvider:
         """Return the current provider (primary on first call)."""
-        return _build_provider(self._chain[self._index])
+        return self._provider_factory.build(self._chain[self._index])
 
     def has_fallback(self) -> bool:
         """True if there is at least one more fallback available."""
@@ -138,7 +66,7 @@ class ModelSelector:
         if not self.has_fallback():
             raise IndexError("No more provider fallbacks available")
         self._index += 1
-        return _build_provider(self._chain[self._index])
+        return self._provider_factory.build(self._chain[self._index])
 
     def next_fallback_after_failure(self, primary_failure: Exception) -> LLMProvider:
         """Advance to the next fallback, consulting ``plugin.failover_hook``.
@@ -152,7 +80,7 @@ class ModelSelector:
             raise IndexError("No fallback chain available")
         self._chain = [self._chain[0], *chain]
         self._index = 1
-        return _build_provider(self._chain[self._index])
+        return self._provider_factory.build(self._chain[self._index])
 
     def override_model(self, model: str) -> None:
         """Update the model on the primary provider config (for runtime switching)."""
@@ -183,14 +111,18 @@ class ModelSelector:
         The clone starts at index 0 with its own chain list, so mutations
         (override_model, next_fallback) don't affect the original.
         """
-        return ModelSelector(self._config, plugin=self._plugin)
+        return ModelSelector(
+            self._config,
+            plugin=self._plugin,
+            provider_factory=self._provider_factory,
+        )
 
     async def list_models(self) -> list[dict]:
         """Aggregate models from all configured providers in the chain."""
         models: list[dict] = []
         for cfg in self._chain:
             try:
-                provider = _build_provider(cfg)
+                provider = self._provider_factory.build(cfg)
                 provider_models = await provider.list_models()
                 models.extend(m.model_dump() for m in provider_models)
             except Exception:
