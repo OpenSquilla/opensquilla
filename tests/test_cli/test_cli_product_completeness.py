@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -335,6 +336,87 @@ def test_skills_install_and_uninstall_fall_back_when_gateway_unavailable(monkeyp
     assert json.loads(install.stdout)["path"] == "/tmp/skill"
     assert uninstall.exit_code == 1
     assert json.loads(uninstall.stdout)["message"] == "missing"
+
+
+def test_skills_install_and_uninstall_fallback_delegates_to_hub_operations(
+    monkeypatch,
+):
+    _install_fake_gateway(monkeypatch, FailingConnectGatewayClient)
+    from opensquilla.cli import skills_cmd
+
+    @dataclass(frozen=True)
+    class LocalResult:
+        success: bool
+        name: str
+        message: str
+        path: str | None = None
+        scan: object | None = None
+
+    installer = object()
+    calls: list[tuple[str, object]] = []
+
+    def fake_installer_factory() -> object:
+        calls.append(("factory", None))
+        return installer
+
+    async def fake_install_skill(actual_installer: object, request: object) -> LocalResult:
+        assert actual_installer is installer
+        calls.append(("install", request))
+        return LocalResult(True, "planner", "installed", "/tmp/planner")
+
+    async def fake_uninstall_skill(actual_installer: object, request: object) -> LocalResult:
+        assert actual_installer is installer
+        calls.append(("uninstall", request))
+        return LocalResult(True, "planner", "removed")
+
+    monkeypatch.setattr(
+        skills_cmd,
+        "default_skill_installer_factory",
+        fake_installer_factory,
+    )
+    monkeypatch.setattr(skills_cmd, "install_skill", fake_install_skill)
+    monkeypatch.setattr(skills_cmd, "uninstall_skill", fake_uninstall_skill)
+    monkeypatch.setattr(
+        skills_cmd,
+        "skill_install_request",
+        lambda params: ("install", params),
+    )
+    monkeypatch.setattr(
+        skills_cmd,
+        "skill_uninstall_request",
+        lambda params: ("uninstall", params),
+    )
+
+    install = runner.invoke(
+        app,
+        ["skills", "install", "planner", "--source", "github", "--force", "--json"],
+    )
+    uninstall = runner.invoke(app, ["skills", "uninstall", "planner", "--json"])
+
+    assert install.exit_code == 0, install.stdout
+    assert json.loads(install.stdout)["path"] == "/tmp/planner"
+    assert uninstall.exit_code == 0, uninstall.stdout
+    assert json.loads(uninstall.stdout)["message"] == "removed"
+    assert calls == [
+        ("factory", None),
+        (
+            "install",
+            ("install", {"identifier": "planner", "source": "github", "force": True}),
+        ),
+        ("factory", None),
+        ("uninstall", ("uninstall", {"name": "planner"})),
+    ]
+
+
+def test_cli_skills_does_not_import_hub_defaults() -> None:
+    from opensquilla.cli import skills_cmd
+
+    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    }
+
+    assert "opensquilla.skills.hub.defaults" not in imported_modules
 
 
 def test_skills_install_fallback_exposes_github_source_without_token(monkeypatch):
