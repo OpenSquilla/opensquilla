@@ -17,7 +17,13 @@ from opensquilla.cli.gateway_rpc import (
 )
 from opensquilla.cli.output import emit_error, print_json
 from opensquilla.cli.ui import console
-from opensquilla.skills.hub.defaults import build_default_skill_installer
+from opensquilla.skills.hub.operations import (
+    default_skill_installer_factory,
+    install_skill,
+    skill_install_request,
+    skill_uninstall_request,
+    uninstall_skill,
+)
 from opensquilla.skills.hub.search import search_skills, skill_search_request
 
 skills_app = typer.Typer(help="Skill management - list, search, install, uninstall.")
@@ -315,11 +321,24 @@ def skills_install(
             )
             return
 
-        installer = build_default_skill_installer()
+        installer = default_skill_installer_factory()
+        if installer is None:
+            _emit_skill_mutation_result(
+                {"success": False, "message": "No skill installer configured"},
+                json_output=json_output,
+                success_label="Installed",
+                fallback_name=identifier,
+            )
+            return
 
         if not json_output:
             console.print(f"Installing '{identifier}' from {source}...")
-        result = await installer.install(identifier, source, force=force)
+        result = await install_skill(
+            installer,
+            skill_install_request(
+                {"identifier": identifier, "source": source, "force": force}
+            ),
+        )
 
         if json_output:
             print_json(_install_result_payload(result))
@@ -363,8 +382,20 @@ def skills_uninstall(
             )
             return
 
-        installer = build_default_skill_installer()
-        result = await installer.uninstall(name)
+        installer = default_skill_installer_factory()
+        if installer is None:
+            _emit_skill_mutation_result(
+                {"success": False, "message": "No skill installer configured"},
+                json_output=json_output,
+                success_label="Uninstalled",
+                fallback_name=name,
+            )
+            return
+
+        result = await uninstall_skill(
+            installer,
+            skill_uninstall_request({"name": name}),
+        )
 
         if json_output:
             print_json(_install_result_payload(result))
