@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import weakref
 from typing import Any
 
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
@@ -11,7 +9,7 @@ from opensquilla.skills.hub.defaults import (
     get_default_skill_installer,
     get_default_skill_router,
 )
-from opensquilla.skills.hub.deps import install_deps
+from opensquilla.skills.hub.deps import install_skill_dependency
 from opensquilla.skills.hub.lockfile import installed_skill_names
 from opensquilla.skills.loader import SkillLoader
 from opensquilla.skills.rpc_payload import (
@@ -19,7 +17,6 @@ from opensquilla.skills.rpc_payload import (
     skill_get_rpc_payload,
     skill_install_result_rpc_payload,
     skill_install_unavailable_rpc_payload,
-    skill_missing_requirements_rpc_payload,
     skill_uninstall_result_rpc_payload,
     skill_uninstall_unavailable_rpc_payload,
     skills_bins_rpc_payload,
@@ -30,25 +27,9 @@ from opensquilla.skills.rpc_payload import (
     skills_update_empty_results_rpc_payload,
     skills_update_results_rpc_payload,
     skills_update_unavailable_rpc_payload,
-    validate_skill_install_supported,
 )
 
 _d = get_dispatcher()
-
-# Per-(name, install_id) install serialization. WeakValueDictionary prevents
-# unbounded growth: once all coroutines release a lock it gets GC'd.
-_deps_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
-    weakref.WeakValueDictionary()
-)
-
-
-def _deps_lock_for(name: str, install_id: str) -> asyncio.Lock:
-    key = (name, install_id)
-    lock = _deps_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _deps_locks[key] = lock
-    return lock
 
 
 def _get_loader(ctx: RpcContext) -> SkillLoader | None:
@@ -176,12 +157,8 @@ async def _handle_skills_uninstall(params: dict | None, ctx: RpcContext) -> dict
 async def _handle_skills_deps_install(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Install runtime dependencies for an already-loaded skill.
 
-    Looks up the skill by name, finds the matching SkillInstallSpec by id in
-    `metadata.install`, runs it via `install_deps`, then re-runs
-    `diagnose_eligibility` and returns `missing_still` reflecting post-install state.
-
-    Note: `kind == "download"` is non-idempotent — re-running re-downloads.
-    Callers should consult `missing_still` before retrying.
+    The skills boundary owns install-spec lookup, platform validation, per-spec
+    serialization, and post-install missing-requirement reporting.
     """
     if not isinstance(params, dict):
         raise ValueError("params must be a dict")
@@ -199,19 +176,8 @@ async def _handle_skills_deps_install(params: dict | None, ctx: RpcContext) -> d
     if skill is None:
         raise KeyError(f"Skill not found: {name}")
 
-    specs = skill.metadata.install if skill.metadata else []
-    spec = next((s for s in specs if s.id == install_id), None)
-    if spec is None:
-        raise KeyError(f"Install spec not found: {install_id}")
-
-    validate_skill_install_supported(spec, install_id)
-
-    async with _deps_lock_for(name, install_id):
-        results = await install_deps([spec])
-        r = results[0]
-        missing_still = skill_missing_requirements_rpc_payload(skill)
-
-    return skill_deps_install_result_rpc_payload(r, missing_still)
+    outcome = await install_skill_dependency(skill, name=name, install_id=install_id)
+    return skill_deps_install_result_rpc_payload(outcome.result, outcome.missing_still)
 
 
 def _get_default_router():

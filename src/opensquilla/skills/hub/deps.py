@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+import weakref
 from dataclasses import dataclass
+from typing import Any, cast
 
 import structlog
 
+from opensquilla.skills.eligibility import EligibilityContext, diagnose_eligibility
 from opensquilla.skills.types import SkillInstallSpec
 
 log = structlog.get_logger(__name__)
@@ -26,6 +29,28 @@ class DepResult:
     identifier: str
     success: bool
     message: str = ""
+
+
+@dataclass
+class SkillDepsInstallOutcome:
+    """Result of installing one dependency spec for a loaded skill."""
+
+    result: DepResult
+    missing_still: dict[str, list[str]]
+
+
+_deps_locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _deps_lock_for(name: str, install_id: str) -> asyncio.Lock:
+    key = (name, install_id)
+    lock = _deps_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _deps_locks[key] = lock
+    return lock
 
 
 async def _run(cmd: list[str], timeout: float = 120.0) -> tuple[int, str, str]:
@@ -144,3 +169,57 @@ async def install_deps(specs: list[SkillInstallSpec]) -> list[DepResult]:
         results.append(result)
         log.info("deps.install", kind=spec.kind, id=spec.id, success=result.success)
     return results
+
+
+def skill_install_spec(skill: Any, install_id: str) -> SkillInstallSpec:
+    """Return the install spec for a loaded skill."""
+
+    metadata = getattr(skill, "metadata", None)
+    specs = cast(
+        "list[SkillInstallSpec]",
+        metadata.install if metadata is not None else [],
+    )
+    spec = next((candidate for candidate in specs if candidate.id == install_id), None)
+    if spec is None:
+        raise KeyError(f"Install spec not found: {install_id}")
+    return spec
+
+
+def validate_skill_install_supported(spec: SkillInstallSpec, install_id: str) -> None:
+    """Validate that an install spec is supported on the current OS."""
+
+    ctx_eligible = EligibilityContext.auto()
+    if spec.os and ctx_eligible.os_name and ctx_eligible.os_name not in spec.os:
+        raise ValueError(
+            f"Install spec {install_id!r} not supported on "
+            f"{ctx_eligible.os_name} (requires: {', '.join(spec.os)})"
+        )
+
+
+def skill_missing_requirements(skill: Any) -> dict[str, list[str]]:
+    """Return the current missing runtime requirements for a loaded skill."""
+
+    report = diagnose_eligibility(skill, EligibilityContext.auto())
+    return {
+        "bins": list(report.missing_bins),
+        "env": list(report.missing_env),
+    }
+
+
+async def install_skill_dependency(
+    skill: Any,
+    *,
+    name: str,
+    install_id: str,
+) -> SkillDepsInstallOutcome:
+    """Install one dependency spec for a loaded skill and report remaining gaps."""
+
+    spec = skill_install_spec(skill, install_id)
+    validate_skill_install_supported(spec, install_id)
+
+    async with _deps_lock_for(name, install_id):
+        results = await install_deps([spec])
+        return SkillDepsInstallOutcome(
+            result=results[0],
+            missing_still=skill_missing_requirements(skill),
+        )
