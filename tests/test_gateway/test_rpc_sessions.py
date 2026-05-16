@@ -630,7 +630,7 @@ class TestSessionsList:
         ]
         assert manager._storage.list_agent_tasks_calls == []
 
-    def test_gateway_sessions_list_delegates_payload_rows_to_session_boundary(self):
+    def test_gateway_sessions_list_delegates_payload_to_session_boundary(self):
         source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
@@ -645,7 +645,30 @@ class TestSessionsList:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_handle_sessions_list"
+        )
+        constants = {
+            node.value
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "session_list_response") in imports
         assert ("opensquilla.session.rpc_payload", "session_list_row") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_list_response"
+            for node in ast.walk(handler)
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_list_row"
+            for node in ast.walk(handler)
+        )
+        assert "sessions" not in constants
+        assert "count" not in constants
         assert "_task_summary" not in top_level_functions
         assert "_task_state_summary" not in top_level_functions
         assert "_derive_source_metadata" not in top_level_functions

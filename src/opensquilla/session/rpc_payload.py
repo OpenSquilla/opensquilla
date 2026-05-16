@@ -213,6 +213,10 @@ def session_list_row(
     return row
 
 
+def session_list_response(now_ms: int, session_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"sessions": session_rows, "count": len(session_rows), "ts": now_ms}
+
+
 def session_preview_last_message(entries: list[Any], *, max_chars: int = 120) -> str:
     for entry in reversed(entries):
         if enum_value(getattr(entry, "role", None)) in ("user", "assistant"):
@@ -357,6 +361,7 @@ __all__ = [
     "session_create_response",
     "session_create_stub_response",
     "session_delete_response",
+    "session_list_response",
     "session_list_row",
     "session_patch_response",
     "session_preview_last_message",

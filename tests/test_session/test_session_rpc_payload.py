@@ -11,6 +11,7 @@ from opensquilla.session.rpc_payload import (
     session_create_response,
     session_create_stub_response,
     session_delete_response,
+    session_list_response,
     session_list_row,
     session_patch_response,
     session_preview_last_message,
@@ -67,6 +68,21 @@ def test_session_list_row_preserves_source_metadata_and_task_state() -> None:
     assert row["active_task"]["task_id"] == "task-1"
     assert row["last_task"]["task_id"] == "task-1"
     assert row["run_status"] == "running"
+
+
+def test_session_list_response_owns_container_wire_shape() -> None:
+    session_rows = [{"key": "agent:main:webchat:abc123"}]
+
+    assert session_list_response(123456, session_rows) == {
+        "sessions": session_rows,
+        "count": 1,
+        "ts": 123456,
+    }
+    assert session_list_response(123456, []) == {
+        "sessions": [],
+        "count": 0,
+        "ts": 123456,
+    }
 
 
 def test_task_state_summary_maps_abandoned_terminal_task_to_interrupted() -> None:

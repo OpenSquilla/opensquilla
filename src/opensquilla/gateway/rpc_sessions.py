@@ -36,6 +36,7 @@ from opensquilla.session.rpc_payload import (
     session_create_response,
     session_create_stub_response,
     session_delete_response,
+    session_list_response,
     session_list_row,
     session_patch_response,
     session_preview_response,
@@ -444,11 +445,11 @@ async def _handle_sessions_list(params: dict | None, ctx: RpcContext) -> dict:
     now_ms = int(time.time() * 1000)
 
     if ctx.session_manager is None:
-        return {"sessions": [], "count": 0, "ts": now_ms}
+        return session_list_response(now_ms, [])
 
     storage = get_session_storage(ctx.session_manager)
     if storage is None:
-        return {"sessions": [], "count": 0, "ts": now_ms}
+        return session_list_response(now_ms, [])
 
     limit = (params or {}).get("limit", 50)
     sessions = await storage.list_sessions(limit=limit)
@@ -477,7 +478,7 @@ async def _handle_sessions_list(params: dict | None, ctx: RpcContext) -> dict:
             )
         )
 
-    return {"sessions": result, "count": len(result), "ts": now_ms}
+    return session_list_response(now_ms, result)
 
 
 @_d.method("sessions.create", scope="operator.write")
