@@ -25,7 +25,6 @@ from opensquilla.gateway.attachment_ingest import (
 from opensquilla.gateway.auth import Principal
 from opensquilla.gateway.config import AgentEntryConfig, GatewayConfig
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
-from opensquilla.gateway.rpc_sessions import _normalize_terminal_event_payload
 from opensquilla.gateway.session_streams import get_session_streams
 from opensquilla.gateway.uploads import set_upload_store
 from opensquilla.gateway.websocket import SubscriptionManager, get_registry
@@ -636,19 +635,24 @@ class TestSessionsSend:
             (session.session_key, "continue")
         ]
 
-    def test_legacy_session_error_payload_is_terminal_message_normalized(self):
-        payload = _normalize_terminal_event_payload(
-            "session.event.error",
-            {
-                "message": "Session event stream idle before terminal event",
-                "code": "stream_idle_timeout",
-            },
-        )
+    def test_gateway_sessions_send_delegates_terminal_payloads_to_session_boundary(self):
+        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        top_level_functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
 
-        assert payload["message"] == "The task timed out before it could finish."
-        assert payload["terminal_message"] == "The task timed out before it could finish."
-        assert payload["terminal_reason"] == "timeout"
-        assert payload["error_message"] == "Session event stream idle before terminal event"
+        assert ("opensquilla.session.rpc_payload", "normalize_terminal_event_payload") in imports
+        assert "_normalize_terminal_event_payload" not in top_level_functions
+        assert ("opensquilla.session.terminal_reply", "build_terminal_reply") not in imports
 
     @pytest.mark.asyncio
     async def test_send_reset_same_key_intent_applies_before_append(

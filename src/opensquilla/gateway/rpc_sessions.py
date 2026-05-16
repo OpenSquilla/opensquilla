@@ -28,11 +28,11 @@ from opensquilla.session.compaction import (
 )
 from opensquilla.session.keys import canonicalize_session_key, normalize_agent_id
 from opensquilla.session.rpc_payload import (
+    normalize_terminal_event_payload,
     session_list_row,
     session_preview_row,
     task_state_summary,
 )
-from opensquilla.session.terminal_reply import build_terminal_reply
 
 _d = get_dispatcher()
 log = structlog.get_logger(__name__)
@@ -348,35 +348,6 @@ async def _agent_registry_has(ctx: RpcContext, agent_id: str) -> bool:
 
 def _session_turn_model(ctx: RpcContext, session: Any | None, agent_id: str) -> str | None:
     return _model_value(getattr(session, "model", None)) or _agent_registry_model(ctx, agent_id)
-
-
-def _normalize_terminal_event_payload(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if event_name != "session.event.error":
-        return payload
-
-    message = payload.get("message")
-    error_message = payload.get("error_message")
-    raw_message = error_message if isinstance(error_message, str) and error_message else message
-    raw_text = raw_message if isinstance(raw_message, str) and raw_message else "Agent error"
-    code = payload.get("code")
-    code_text = str(code or "").lower()
-    is_timeout = "timeout" in code_text or "stream idle" in raw_text.lower()
-    terminal_payload = {
-        "status": "timeout" if is_timeout else "failed",
-        "terminal_reason": payload.get("terminal_reason")
-        or ("timeout" if is_timeout else "error"),
-        "error_class": code,
-        "error_message": raw_text,
-        **payload,
-    }
-    terminal_message = build_terminal_reply(terminal_payload)
-    return {
-        **payload,
-        "message": terminal_message,
-        "terminal_message": terminal_message,
-        "terminal_reason": terminal_payload["terminal_reason"],
-        "error_message": raw_text,
-    }
 
 
 async def _list_task_rows(ctx: RpcContext, storage: Any | None, session_key: str) -> list[Any]:
@@ -809,7 +780,7 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
             _terminal_emitted = True
             if task is not None:
                 setattr(task, "_opensquilla_terminal_emitted", True)
-            payload = _normalize_terminal_event_payload(event_name, payload)
+            payload = normalize_terminal_event_payload(event_name, payload)
             await _emit_to_subscribers(ctx, key, event_name, payload)
 
         try:
