@@ -32,8 +32,6 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 if TYPE_CHECKING:
-    from opensquilla.gateway.config import GatewayConfig
-
     from .retrieval import MemoryRetriever
     from .store import LongTermMemoryStore
     from .sync_manager import MemorySyncManager
@@ -281,10 +279,10 @@ class MemoryManager:
 
 
 async def build_memory_managers(
-    config: GatewayConfig,
+    config: Any,
     agent_ids: list[str],
 ) -> dict[str, MemoryManager]:
-    """Construct per-agent ``MemoryManager`` instances from gateway config.
+    """Construct per-agent ``MemoryManager`` instances from runtime config.
 
     Mirrors the legacy inline logic from ``gateway/boot.py`` exactly:
 

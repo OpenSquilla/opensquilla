@@ -63,7 +63,6 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     ("memory", "agents"),
     ("memory", "compat"),
     ("memory", "engine"),
-    ("memory", "gateway"),
     ("memory", "identity"),
     ("memory", "provider"),
     ("memory", "tools"),
