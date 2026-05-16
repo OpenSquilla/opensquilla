@@ -86,6 +86,25 @@ def task_state_summary(rows: list[Any]) -> dict[str, Any]:
     }
 
 
+def messages_subscribe_response(
+    *,
+    key: str,
+    subscribed: bool,
+    replay: Any,
+    replayed_count: int,
+    task_rows: list[Any],
+) -> dict[str, Any]:
+    return {
+        "subscribed": subscribed,
+        "key": key,
+        "current_stream_seq": getattr(replay, "current_stream_seq"),
+        "replay_complete": getattr(replay, "replay_complete"),
+        "replay_gap_reason": getattr(replay, "gap_reason"),
+        "replayed_count": replayed_count,
+        **task_state_summary(task_rows),
+    }
+
+
 def normalize_terminal_event_payload(event_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     if event_name != "session.event.error":
         return payload
@@ -226,6 +245,7 @@ __all__ = [
     "active_task_summary",
     "enum_value",
     "last_task_summary",
+    "messages_subscribe_response",
     "normalize_terminal_event_payload",
     "session_list_row",
     "session_preview_last_message",

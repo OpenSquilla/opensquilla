@@ -28,10 +28,10 @@ from opensquilla.session.compaction import (
 )
 from opensquilla.session.keys import canonicalize_session_key, normalize_agent_id
 from opensquilla.session.rpc_payload import (
+    messages_subscribe_response,
     normalize_terminal_event_payload,
     session_list_row,
     session_preview_row,
-    task_state_summary,
 )
 
 _d = get_dispatcher()
@@ -1538,17 +1538,13 @@ async def _handle_sessions_messages_subscribe(params: dict | None, ctx: RpcConte
 
     storage = get_session_storage(getattr(ctx, "session_manager", None))
     task_rows = await _list_task_rows(ctx, storage, key)
-    task_state = task_state_summary(task_rows)
-
-    return {
-        "subscribed": subscription_mgr is not None,
-        "key": key,
-        "current_stream_seq": replay.current_stream_seq,
-        "replay_complete": replay.replay_complete,
-        "replay_gap_reason": replay.gap_reason,
-        "replayed_count": replayed_count,
-        **task_state,
-    }
+    return messages_subscribe_response(
+        key=key,
+        subscribed=subscription_mgr is not None,
+        replay=replay,
+        replayed_count=replayed_count,
+        task_rows=task_rows,
+    )
 
 
 @_d.method("sessions.messages.unsubscribe", scope="operator.read")

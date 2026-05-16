@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from opensquilla.session.rpc_payload import (
+    messages_subscribe_response,
     normalize_terminal_event_payload,
     session_list_row,
     session_preview_last_message,
@@ -79,6 +80,44 @@ def test_task_state_summary_maps_abandoned_terminal_task_to_interrupted() -> Non
     assert payload["last_task"]["task_id"] == "task-abandoned"
     assert payload["last_task"]["terminal_reason"] == "runtime-restart"
     assert payload["last_task"]["terminal_message"]
+    assert payload["run_status"] == "interrupted"
+
+
+def test_messages_subscribe_response_merges_replay_and_task_state() -> None:
+    replay = SimpleNamespace(
+        current_stream_seq=42,
+        replay_complete=False,
+        gap_reason="stream_buffer_reset",
+    )
+    task = SimpleNamespace(
+        task_id="task-abandoned",
+        status="abandoned",
+        queue_mode="followup",
+        run_kind="web_turn",
+        source_kind="webui",
+        created_at=100,
+        started_at=110,
+        finished_at=120,
+        terminal_reason="process_restart",
+        error_class=None,
+        error_message=None,
+    )
+
+    payload = messages_subscribe_response(
+        key="agent:main:webchat:restarted",
+        subscribed=True,
+        replay=replay,
+        replayed_count=3,
+        task_rows=[task],
+    )
+
+    assert payload["subscribed"] is True
+    assert payload["key"] == "agent:main:webchat:restarted"
+    assert payload["current_stream_seq"] == 42
+    assert payload["replay_complete"] is False
+    assert payload["replay_gap_reason"] == "stream_buffer_reset"
+    assert payload["replayed_count"] == 3
+    assert payload["last_task"]["task_id"] == "task-abandoned"
     assert payload["run_status"] == "interrupted"
 
 
