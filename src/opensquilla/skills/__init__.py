@@ -24,6 +24,12 @@ from opensquilla.skills.eligibility import (
 from opensquilla.skills.injector import SkillInjector
 from opensquilla.skills.loader import SkillLoader
 from opensquilla.skills.resources import SkillResources
+from opensquilla.skills.runtime import (
+    configure_skill_loader,
+    current_skill_loader,
+    reset_skill_runtime,
+    skill_loader_available,
+)
 from opensquilla.skills.types import (
     SkillInstallSpec,
     SkillLayer,
@@ -45,5 +51,9 @@ __all__ = [
     "SkillResources",
     "SkillSpec",
     "check_eligibility",
+    "configure_skill_loader",
+    "current_skill_loader",
     "diagnose_eligibility",
+    "reset_skill_runtime",
+    "skill_loader_available",
 ]
