@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from opensquilla.skills.hub.defaults import get_default_skill_installer
 from opensquilla.skills.hub.installer import InstallResult, SkillInstaller
 
 SkillInstallerFactory = Callable[[], SkillInstaller | None]
@@ -109,16 +110,29 @@ def invalidate_skill_loader(loader: Any | None) -> None:
         loader.invalidate_cache()
 
 
+def default_skill_installer_factory() -> SkillInstaller | None:
+    """Return the default Community skill installer."""
+
+    return get_default_skill_installer()
+
+
+def _resolve_installer_factory(
+    installer_factory: SkillInstallerFactory | None,
+) -> SkillInstallerFactory:
+    return default_skill_installer_factory if installer_factory is None else installer_factory
+
+
 async def run_skill_install_operation(
     loader: Any | None,
-    installer_factory: SkillInstallerFactory,
     request: SkillInstallRequest,
+    *,
+    installer_factory: SkillInstallerFactory | None = None,
 ) -> SkillInstallOutcome:
     """Run ``skills.install`` with availability checks and cache invalidation."""
 
     if loader is None:
         return SkillInstallOutcome(unavailable_message="No skill loader configured")
-    installer = installer_factory()
+    installer = _resolve_installer_factory(installer_factory)()
     if installer is None:
         return SkillInstallOutcome(unavailable_message="No skill installer configured")
 
@@ -145,8 +159,9 @@ async def update_skills(
 
 async def run_skills_update_operation(
     loader: Any | None,
-    installer_factory: SkillInstallerFactory,
     request: SkillUpdateRequest,
+    *,
+    installer_factory: SkillInstallerFactory | None = None,
 ) -> SkillUpdateOutcome:
     """Run ``skills.update`` with availability checks and cache invalidation."""
 
@@ -155,7 +170,7 @@ async def run_skills_update_operation(
             results=[],
             unavailable_message="No skill loader configured",
         )
-    installer = installer_factory()
+    installer = _resolve_installer_factory(installer_factory)()
     if installer is None:
         return SkillUpdateOutcome(
             results=[],
@@ -180,12 +195,13 @@ async def uninstall_skill(
 
 async def run_skill_uninstall_operation(
     loader: Any | None,
-    installer_factory: SkillInstallerFactory,
     request: SkillUninstallRequest,
+    *,
+    installer_factory: SkillInstallerFactory | None = None,
 ) -> SkillUninstallOutcome:
     """Run ``skills.uninstall`` with availability checks and cache invalidation."""
 
-    installer = installer_factory()
+    installer = _resolve_installer_factory(installer_factory)()
     if installer is None:
         return SkillUninstallOutcome(unavailable_message="No skill installer configured")
 
