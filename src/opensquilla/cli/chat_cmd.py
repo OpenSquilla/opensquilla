@@ -23,6 +23,7 @@ from rich.panel import Panel
 
 from opensquilla.cli import attachments as _cli_attachments
 from opensquilla.cli.chat_gateway_file_workflows import handle_gateway_file_command
+from opensquilla.cli.chat_gateway_forget_workflows import handle_gateway_forget_command
 from opensquilla.cli.chat_gateway_image_workflows import handle_gateway_image_command
 from opensquilla.cli.chat_gateway_path_workflows import handle_gateway_path_command
 from opensquilla.cli.chat_gateway_permissions_workflows import (
@@ -869,7 +870,11 @@ async def _handle_gateway_slash_command(
         return True
 
     if cmd == "/forget" or cmd.startswith("/forget "):
-        await _handle_forget_command(cmd, client)
+        await handle_gateway_forget_command(
+            cmd,
+            client=client,
+            forget_server_approvals=_forget_server_approvals,
+        )
         return True
 
     if cmd == "/approvals" or cmd.startswith("/approvals "):
@@ -1041,24 +1046,12 @@ async def _handle_approvals_command(cmd: str, client: object | None = None) -> N
 
 
 async def _handle_forget_command(cmd: str, client: object | None = None) -> None:
-    """Clear cached approvals. ``/forget`` wipes all; ``/forget <path>`` wipes one.
-
-    In gateway mode the RPC ``exec.approval.forget`` reaches the server's
-    intent cache. In standalone mode the in-process singleton is used.
-    """
-    parts = cmd.split(maxsplit=1)
-    if len(parts) < 2:
-        if await _forget_server_approvals(client):
-            console.print(
-                "[cyan]All cached approvals cleared.[/cyan] Future destructive "
-                "ops will prompt again."
-            )
-        return
-    target = parts[1].strip()
-    if await _forget_server_approvals(client, target):
-        console.print(
-            f"[cyan]Cached approval for[/cyan] {target} [cyan]cleared[/cyan] (if one existed)."
-        )
+    """Compatibility wrapper for approval-cache clearing."""
+    await handle_gateway_forget_command(
+        cmd,
+        client=client,
+        forget_server_approvals=_forget_server_approvals,
+    )
 
 
 async def _handle_elevated_command(
