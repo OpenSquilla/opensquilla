@@ -166,9 +166,9 @@ def configure_runtime(
 def _apply_host_compatibility(settings: SandboxSettings) -> SandboxSettings:
     """Adjust unsupported platform defaults before runtime selection.
 
-    Windows currently has no real sandbox backend in this package. Treating
-    the generated default ``sandbox=true, backend=auto`` as a hard boot
-    failure makes local CLI one-shots unusable on Windows, even for read-only
+    Some platforms currently have no executable sandbox backend in this
+    package. Treating the generated default ``sandbox=true, backend=auto`` as a
+    hard boot failure makes local CLI one-shots unusable, even for read-only
     file tools. Keep explicit backend choices fail-closed, but make the auto
     choice resolve to the same visible insecure mode an operator would get by
     setting ``sandbox=false``.
@@ -182,6 +182,21 @@ def _apply_host_compatibility(settings: SandboxSettings) -> SandboxSettings:
         log.warning(
             "sandbox.windows_auto_backend_unsupported: "
             "no Windows sandbox backend is available; disabling sandbox for this runtime"
+        )
+        return settings.model_copy(
+            update={
+                "sandbox": False,
+                "security_grading": False,
+            }
+        )
+    if (
+        sys.platform == "darwin"
+        and settings.sandbox
+        and settings.backend == "auto"
+    ):
+        log.warning(
+            "sandbox.macos_auto_backend_unsupported: "
+            "macOS Seatbelt execution is not implemented; disabling sandbox for this runtime"
         )
         return settings.model_copy(
             update={

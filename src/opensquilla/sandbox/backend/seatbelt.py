@@ -20,9 +20,6 @@ error message points at this file.
 
 from __future__ import annotations
 
-import shutil
-import sys
-
 from opensquilla.sandbox.backend.base import Backend
 from opensquilla.sandbox.types import (
     NetworkMode,
@@ -66,9 +63,9 @@ class SeatbeltBackend(Backend):
     name = "seatbelt"
 
     def available(self) -> bool:
-        if sys.platform != "darwin":
-            return False
-        return shutil.which(_SANDBOX_EXEC) is not None
+        # Backend.available() means "can execute SandboxRequest", not merely
+        # "can render a profile". Keep this false until run() is implemented.
+        return False
 
     async def run(self, request: SandboxRequest) -> SandboxResult:  # noqa: ARG002
         raise NotImplementedError(
