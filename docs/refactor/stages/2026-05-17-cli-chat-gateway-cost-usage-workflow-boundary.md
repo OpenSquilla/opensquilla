@@ -121,15 +121,15 @@ Move gateway `/cost` and `/usage` into a dedicated workflow module without chang
 - [x] Update `chat_cmd.py` gateway dispatch imports and calls.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -155,8 +155,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `03f51c3` (`Move gateway chat cost usage workflow behind boundary`)
+- Integration merge: `317fd5a` (`Merge CLI chat gateway cost usage workflow boundary`)
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-cli-chat-gateway-cost-usage-workflow-boundary` passed on branch `codex/refactor-cli-chat-gateway-cost-usage-workflow-boundary` at `1604ca3`.
   - Spawn fallback: `spawn_agent` availability check failed with `collab spawn failed: agent thread limit reached`; continued sequentially per root `AGENTS.md`.
@@ -165,5 +165,8 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_model_usage_workflows.py src/opensquilla/cli/chat_gateway_usage_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed, `212 passed in 1.64s`.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 469 source files; whitespace passed; pytest passed with `2376 passed, 8 skipped, 2 warnings in 51.52s`; gateway smoke start/status/stop passed on `127.0.0.1:60583`.
-- Residual risk:
-- Next recommended slice:
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `1604ca3`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-gateway-cost-usage-workflow-boundary` produced merge commit `317fd5a`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 469 source files; whitespace passed; pytest passed with `2378 passed, 6 skipped, 2 warnings in 26.40s`; gateway smoke start/status/stop passed on `127.0.0.1:60730`.
+- Residual risk: Low. The slice only moves gateway `/cost` and `/usage` responsibilities behind a focused workflow module, with behavior and boundary tests covering exact command matching and output/RPC delegation. No independent subagent review was possible because `spawn_agent` remained unavailable due to the current thread limit.
+- Next recommended slice: Continue reducing `_handle_gateway_slash_command` by splitting the generic `chat_slash_workflows.py` responsibilities for gateway `/models` and `/sessions` into focused gateway workflow modules, preserving exact prefix matching and list rendering behavior.
