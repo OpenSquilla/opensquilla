@@ -119,15 +119,15 @@ Extract gateway model route execution into a focused boundary without changing `
 - [x] Implement the smallest behavior-compatible change.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -153,8 +153,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit: pending
-- Integration merge:
+- Child commit: `14106ce` (`Move gateway chat model routes behind executor boundary`)
+- Integration merge: `5fb34db` (`Merge CLI chat gateway model route executor boundary`)
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-cli-chat-gateway-model-route-executor-boundary` passed on branch `codex/refactor-cli-chat-gateway-model-route-executor-boundary` at `b266a4f`.
   - Spawn fallback: `spawn_agent` availability check failed with `collab spawn failed: agent thread limit reached`; continued sequentially per root `AGENTS.md`.
@@ -163,6 +163,9 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_gateway_model_route_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed, `222 passed in 2.40s`.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 476 source files; whitespace passed; pytest passed with `2386 passed, 8 skipped, 2 warnings in 47.55s`; gateway smoke start/status/stop passed on `127.0.0.1:65398`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `b266a4f`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-gateway-model-route-executor-boundary` produced merge commit `5fb34db`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 476 source files; whitespace passed; pytest passed with `2388 passed, 6 skipped, 2 warnings in 26.34s`; gateway smoke start/status/stop passed on `127.0.0.1:49165`.
 - Residual risk:
   - Low. This slice only moves model route-family dispatch into a thin executor; existing model workflow modules still own behavior, and route matching remains unchanged.
 - Next recommended slice:
