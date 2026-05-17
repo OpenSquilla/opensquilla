@@ -9,50 +9,18 @@ import typer
 from opensquilla.cli.channels_workflows import (
     add_channel_for_cli,
     describe_channel_type_for_cli,
+    disable_channel_for_cli,
     edit_channel_for_cli,
+    enable_channel_for_cli,
     list_channel_types_for_cli,
     list_configured_channels_for_cli,
     logout_channel_for_cli,
+    remove_channel_for_cli,
     restart_channel_for_cli,
     show_channel_status_for_cli,
 )
-from opensquilla.onboarding.config_store import (
-    load_config,
-    persist_config,
-    resolve_config_path,
-)
-from opensquilla.onboarding.mutations import (
-    remove_channel,
-    set_channel_enabled,
-)
 
 channels_app = typer.Typer(help="Manage messaging channels.")
-
-
-def _print_restart_notice() -> None:
-    typer.secho(
-        "Restart the gateway PROCESS to apply (this is not the same as "
-        "'opensquilla channels restart <name>', which only restarts an "
-        "already-loaded adapter).",
-        fg=typer.colors.YELLOW,
-    )
-
-
-_SOURCE_LABEL = {
-    "explicit": "from --config",
-    "env": "from OPENSQUILLA_GATEWAY_CONFIG_PATH",
-    "cwd": "found in cwd",
-    "home": "default in $HOME",
-}
-
-
-def _resolve_and_announce(config_path: Path | None) -> Path:
-    target, source = resolve_config_path(config_path)
-    typer.secho(
-        f"Config: {target} ({_SOURCE_LABEL[source]})",
-        fg=typer.colors.CYAN,
-    )
-    return target
 
 
 @channels_app.command("list")
@@ -121,16 +89,7 @@ def channels_remove(
     name: str = typer.Argument(...),
     config_path: Path | None = typer.Option(None, "--config"),
 ) -> None:
-    target = _resolve_and_announce(config_path)
-    cfg = load_config(target)
-    try:
-        result = remove_channel(cfg, name=name)
-    except KeyError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=2) from exc
-    persist_config(result.config, path=target, restart_required=True)
-    typer.echo(f"Channel removed: {name}")
-    _print_restart_notice()
+    remove_channel_for_cli(name, config_path=config_path)
 
 
 @channels_app.command("enable")
@@ -138,16 +97,7 @@ def channels_enable(
     name: str = typer.Argument(...),
     config_path: Path | None = typer.Option(None, "--config"),
 ) -> None:
-    target = _resolve_and_announce(config_path)
-    cfg = load_config(target)
-    try:
-        result = set_channel_enabled(cfg, name=name, enabled=True)
-    except KeyError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=2) from exc
-    persist_config(result.config, path=target, restart_required=True)
-    typer.echo(f"Channel enabled: {name}")
-    _print_restart_notice()
+    enable_channel_for_cli(name, config_path=config_path)
 
 
 @channels_app.command("disable")
@@ -155,16 +105,7 @@ def channels_disable(
     name: str = typer.Argument(...),
     config_path: Path | None = typer.Option(None, "--config"),
 ) -> None:
-    target = _resolve_and_announce(config_path)
-    cfg = load_config(target)
-    try:
-        result = set_channel_enabled(cfg, name=name, enabled=False)
-    except KeyError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=2) from exc
-    persist_config(result.config, path=target, restart_required=True)
-    typer.echo(f"Channel disabled: {name}")
-    _print_restart_notice()
+    disable_channel_for_cli(name, config_path=config_path)
 
 
 @channels_app.command("edit")
