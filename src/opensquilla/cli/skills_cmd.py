@@ -7,11 +7,14 @@ from dataclasses import asdict
 from typing import Any
 
 import typer
-from rich.panel import Panel
 from rich.table import Table
 
 from opensquilla.cli.output import print_json
 from opensquilla.cli.skills_gateway_mutations import try_gateway_skill_mutation
+from opensquilla.cli.skills_gateway_presenters import (
+    emit_gateway_skill_update,
+    emit_gateway_skill_view,
+)
 from opensquilla.cli.skills_gateway_queries import (
     load_gateway_skill,
     update_gateway_skills,
@@ -139,30 +142,7 @@ def skills_view(
     """Inspect a single skill from the running gateway."""
 
     payload = load_gateway_skill(name, json_output=json_output)
-    if json_output:
-        print_json(payload)
-        return
-
-    table = Table(title=f"Skill: {payload.get('name', name)}")
-    table.add_column("Field", style="cyan")
-    table.add_column("Value")
-    for key in (
-        "name",
-        "layer",
-        "eligible",
-        "description",
-        "file_path",
-        "base_dir",
-        "homepage",
-    ):
-        value = payload.get(key)
-        if value not in (None, ""):
-            table.add_row(key, str(value))
-    console.print(table)
-    content = str(payload.get("content") or "")
-    if content:
-        preview = content if len(content) <= 1200 else content[:1200] + "\n..."
-        console.print(Panel(preview, title="Content", expand=False))
+    emit_gateway_skill_view(payload, fallback_name=name, json_output=json_output)
 
 
 @skills_app.command("update")
@@ -176,31 +156,7 @@ def skills_update(
         raise typer.BadParameter("provide exactly one of NAME or --all")
 
     payload = update_gateway_skills(name, all_skills=all_skills, json_output=json_output)
-    results = payload.get("results", []) if isinstance(payload, dict) else []
-    failures = [r for r in results if isinstance(r, dict) and not r.get("success", False)]
-    top_level_failure = isinstance(payload, dict) and payload.get("success") is False
-    if json_output:
-        print_json(payload)
-    else:
-        table = Table(title="Skill updates")
-        table.add_column("Name", style="cyan")
-        table.add_column("Status")
-        table.add_column("Message")
-        for row in results:
-            if not isinstance(row, dict):
-                continue
-            ok = bool(row.get("success", False))
-            table.add_row(
-                str(row.get("name") or ""),
-                "[green]ok[/]" if ok else "[red]failed[/]",
-                str(row.get("message") or ""),
-            )
-        console.print(table)
-        message = payload.get("message") if isinstance(payload, dict) else None
-        if message:
-            console.print(str(message))
-    if failures or top_level_failure:
-        raise typer.Exit(1)
+    emit_gateway_skill_update(payload, json_output=json_output)
 
 
 @skills_app.command("install")
