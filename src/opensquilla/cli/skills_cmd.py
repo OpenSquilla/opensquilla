@@ -10,9 +10,12 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from opensquilla.cli.gateway_rpc import run_gateway_sync
 from opensquilla.cli.output import print_json
 from opensquilla.cli.skills_gateway_mutations import try_gateway_skill_mutation
+from opensquilla.cli.skills_gateway_queries import (
+    load_gateway_skill,
+    update_gateway_skills,
+)
 from opensquilla.cli.skills_local_mutations import (
     run_local_skill_install,
     run_local_skill_uninstall,
@@ -135,10 +138,7 @@ def skills_view(
 ) -> None:
     """Inspect a single skill from the running gateway."""
 
-    async def _run(client):
-        return await client.call("skills.get", {"name": name})
-
-    payload = run_gateway_sync(_run, json_output=json_output)
+    payload = load_gateway_skill(name, json_output=json_output)
     if json_output:
         print_json(payload)
         return
@@ -175,11 +175,7 @@ def skills_update(
     if bool(name) == all_skills:
         raise typer.BadParameter("provide exactly one of NAME or --all")
 
-    async def _run(client):
-        params = {} if all_skills else {"name": name}
-        return await client.call("skills.update", params)
-
-    payload = run_gateway_sync(_run, json_output=json_output)
+    payload = update_gateway_skills(name, all_skills=all_skills, json_output=json_output)
     results = payload.get("results", []) if isinstance(payload, dict) else []
     failures = [r for r in results if isinstance(r, dict) and not r.get("success", False)]
     top_level_failure = isinstance(payload, dict) and payload.get("success") is False
