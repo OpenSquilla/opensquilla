@@ -126,15 +126,15 @@ Move standalone `/image` behind a dedicated workflow boundary without changing i
 - [x] Update `chat_cmd.py` standalone dispatch to delegate `/image`.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -160,8 +160,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `d8784cc`
+- Integration merge: `09f44f2`
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-cli-chat-standalone-image-workflow-boundary` passed on branch `codex/refactor-cli-chat-standalone-image-workflow-boundary` at `a38a7d4`.
   - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_standalone_image_slash_uses_workflow_boundary -q` failed as expected because `chat_standalone_image_workflows.py` did not exist.
@@ -169,6 +169,9 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_standalone_image_workflows.py tests/test_cli/test_chat_cmd.py` passed after `ruff check --fix` sorted the import block.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_chat_file_command.py tests/test_cli/test_cli_product_completeness.py -q` passed: 179 passed.
   - Child gate: `scripts/refactor_gate.sh` passed: ruff, mypy, whitespace, pytest 2334 passed / 8 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `a38a7d4`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-standalone-image-workflow-boundary` produced merge commit `09f44f2`.
+  - Integration gate: `scripts/refactor_gate.sh` passed: ruff, mypy, whitespace, pytest 2336 passed / 6 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
 - Residual risk:
   - Low. The slice only extracts standalone `/image` orchestration; gateway `/image` and image attachment construction remain in place.
 - Next recommended slice:
