@@ -14,7 +14,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from opensquilla.cli import chat_cmd, chat_transcript_exports
+from opensquilla.cli import chat_cmd, chat_presenters, chat_transcript_exports
 from opensquilla.cli.main import app
 from opensquilla.cli.repl.session_state import ChatSessionState
 from opensquilla.engine.types import ArtifactEvent, DoneEvent, TextDeltaEvent
@@ -877,6 +877,7 @@ class _FakeGatewayClient:
             "agent_token_saving.tool_result_compression_summary_model": "cheap/model",
         }
         self.list_models_calls = 0
+        self.list_sessions_calls: list[int] = []
         self.delete_result: dict[str, object] = {"deleted": [], "errors": []}
         self.resolved_payload: dict[str, object] = {
             "session_key": "agent:main:resolved",
@@ -920,6 +921,19 @@ class _FakeGatewayClient:
     async def list_models(self) -> list[dict[str, object]]:
         self.list_models_calls += 1
         return [{"id": "openai/test", "provider": "openai"}]
+
+    async def list_sessions(self, limit: int = 50) -> dict[str, object]:
+        self.list_sessions_calls.append(limit)
+        return {
+            "sessions": [
+                {
+                    "session_key": "agent:main:abc123",
+                    "status": "running",
+                    "model": "openai/test",
+                    "entry_count": 2,
+                }
+            ]
+        }
 
     async def abort_session(self, session_key: str) -> dict[str, object]:
         self.abort_calls.append(session_key)
@@ -1461,17 +1475,125 @@ def test_chat_save_transcript_uses_export_boundary() -> None:
     assert "messages_to_markdown" not in chat_identifiers
 
 
+def test_chat_slash_tables_use_presenter_boundary() -> None:
+    chat_tree = ast.parse(Path(chat_cmd.__file__).read_text(encoding="utf-8"))
+    presenter_path = Path(chat_cmd.__file__).with_name("chat_presenters.py")
+
+    assert presenter_path.exists()
+
+    presenter_tree = ast.parse(presenter_path.read_text(encoding="utf-8"))
+    chat_presenter_names = {
+        alias.name
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.chat_presenters"
+        for alias in node.names
+    }
+    chat_defs = {
+        node.name
+        for node in ast.walk(chat_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    chat_imported_modules = {
+        node.module
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    presenter_defs = {
+        node.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    presenter_imported_modules = {
+        node.module
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert chat_presenter_names == {"emit_chat_models_table", "emit_chat_sessions_table"}
+    assert "_print_sessions_table" not in chat_defs
+    assert "_print_models_table" not in chat_defs
+    assert "rich.table" not in chat_imported_modules
+    assert {"emit_chat_models_table", "emit_chat_sessions_table"} <= presenter_defs
+    assert "rich.table" in presenter_imported_modules
+
+
+def test_chat_session_presenter_renders_gateway_rows(monkeypatch) -> None:
+    buffer = io.StringIO()
+    monkeypatch.setattr(
+        chat_presenters,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    chat_presenters.emit_chat_sessions_table(
+        [
+            {
+                "session_key": "agent:main:abc123",
+                "status": "running",
+                "model": "openai/test",
+                "entry_count": 2,
+            }
+        ]
+    )
+
+    output = buffer.getvalue()
+    assert "Sessions" in output
+    assert "agent:main:abc123" in output
+    assert "running" in output
+    assert "openai/test" in output
+    assert "2" in output
+
+
+@pytest.mark.asyncio
+async def test_gateway_slash_sessions_uses_presenter_boundary(monkeypatch) -> None:
+    _FakeGatewayClient.instances.clear()
+    monkeypatch.setattr("opensquilla.cli.gateway_client.GatewayClient", _FakeGatewayClient)
+    fake = _FakeGatewayClient()
+    state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    rendered: list[list[dict[str, object]]] = []
+
+    def fake_emit(rows: list[dict[str, object]]) -> None:
+        rendered.append(rows)
+
+    monkeypatch.setattr(chat_cmd, "emit_chat_sessions_table", fake_emit)
+
+    handled = await chat_cmd._handle_gateway_slash_command(
+        "/sessions 3", state, fake, {"mode": None}
+    )
+
+    assert handled is True
+    assert fake.list_sessions_calls == [3]
+    assert rendered == [
+        [
+            {
+                "session_key": "agent:main:abc123",
+                "status": "running",
+                "model": "openai/test",
+                "entry_count": 2,
+            }
+        ]
+    ]
+
+
 @pytest.mark.asyncio
 async def test_gateway_slash_models_does_not_hit_model_prefix(monkeypatch) -> None:
     _FakeGatewayClient.instances.clear()
     monkeypatch.setattr("opensquilla.cli.gateway_client.GatewayClient", _FakeGatewayClient)
     fake = _FakeGatewayClient()
     state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    rendered: list[list[dict[str, object]]] = []
+
+    def fake_emit(rows: list[dict[str, object]]) -> None:
+        rendered.append(rows)
+
+    monkeypatch.setattr(chat_cmd, "emit_chat_models_table", fake_emit)
 
     handled = await chat_cmd._handle_gateway_slash_command("/models", state, fake, {"mode": None})
 
     assert handled is True
     assert fake.list_models_calls == 1
+    assert rendered == [[{"id": "openai/test", "provider": "openai"}]]
     assert state.model == "openai/test"
 
 
