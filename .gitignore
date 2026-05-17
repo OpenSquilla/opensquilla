@@ -51,6 +51,10 @@ plugins/
 crontab-*
 ~/
 /docs/
+!/docs/
+/docs/*
+!/docs/refactor/
+!/docs/refactor/**
 /reference-*
 /reference-mem
 /bench-mem
