@@ -129,15 +129,15 @@ Move gateway `/sessions` and `/models` read-only list workflows out of the gener
 - [x] Update focused behavior tests for `/sessions` and `/models`.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -163,8 +163,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `0f74606` (`Move gateway chat readonly workflows behind boundaries`)
+- Integration merge: `2ddafe8` (`Merge CLI chat gateway readonly workflow boundaries`)
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-cli-chat-gateway-readonly-workflows-boundary` passed on branch `codex/refactor-cli-chat-gateway-readonly-workflows-boundary` at `f48870c`.
   - Spawn fallback: `spawn_agent` availability check failed with `collab spawn failed: agent thread limit reached`; continued sequentially per root `AGENTS.md`.
@@ -173,5 +173,8 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_slash_workflows.py src/opensquilla/cli/chat_gateway_sessions_workflows.py src/opensquilla/cli/chat_gateway_models_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed, `212 passed in 2.33s`.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 471 source files; whitespace passed; pytest passed with `2376 passed, 8 skipped, 2 warnings in 50.99s`; gateway smoke start/status/stop passed on `127.0.0.1:61395`.
-- Residual risk:
-- Next recommended slice:
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `f48870c`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-gateway-readonly-workflows-boundary` produced merge commit `2ddafe8`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 471 source files; whitespace passed; pytest passed with `2378 passed, 6 skipped, 2 warnings in 26.39s`; gateway smoke start/status/stop passed on `127.0.0.1:61591`.
+- Residual risk: Low. The slice only moves gateway `/sessions` and `/models` read-only list responsibilities behind focused workflow modules, while preserving the legacy `chat_slash_workflows.py` import facade and existing presenter/RPC behavior. No independent subagent review was possible because `spawn_agent` remained unavailable due to the current thread limit.
+- Next recommended slice: Continue shrinking `_handle_gateway_slash_command` by extracting the gateway `/help` branch into a tiny focused workflow boundary, then reassess whether the remaining dispatcher can become a declarative routing table without changing exact command matching.
