@@ -20,9 +20,12 @@ from uuid import uuid4
 
 import typer
 from rich.panel import Panel
-from rich.table import Table
 
 from opensquilla.cli import attachments as _cli_attachments
+from opensquilla.cli.chat_presenters import (
+    emit_chat_models_table,
+    emit_chat_sessions_table,
+)
 from opensquilla.cli.chat_transcript_exports import (
     save_gateway_transcript_command,
     save_transcript_command,
@@ -813,7 +816,7 @@ async def _handle_gateway_slash_command(
                 console.print("[red]Usage: /sessions [limit][/red]")
                 return True
         payload = await client.list_sessions(limit=limit)
-        _print_sessions_table(payload.get("sessions", []))
+        emit_chat_sessions_table(payload.get("sessions", []))
         return True
 
     if parts := _slash_parts(cmd, "/resume"):
@@ -873,7 +876,7 @@ async def _handle_gateway_slash_command(
             console.print("[red]Usage: /models[/red]")
             return True
         models = await client.list_models()
-        _print_models_table(models)
+        emit_chat_models_table(models)
         return True
 
     if parts := _slash_parts(cmd, "/model"):
@@ -1052,38 +1055,6 @@ async def _handle_tool_compress_command(
 
     model_suffix = f" [dim]model={model}[/dim]" if resolved_mode == "summarize" and model else ""
     console.print(f"[cyan]tool result compression:[/cyan] {resolved_mode.upper()}{model_suffix}")
-
-
-def _print_sessions_table(rows: list[dict[str, Any]]) -> None:
-    table = Table(title="Sessions", show_header=True, header_style="bold cyan")
-    table.add_column("Key")
-    table.add_column("Status")
-    table.add_column("Model")
-    table.add_column("Messages", justify="right")
-    for row in rows:
-        table.add_row(
-            str(row.get("key") or row.get("session_key") or ""),
-            str(row.get("status") or ""),
-            str(row.get("model") or ""),
-            str(row.get("message_count") or row.get("entry_count") or 0),
-        )
-    console.print(table)
-
-
-def _print_models_table(rows: list[dict[str, Any]]) -> None:
-    table = Table(title="Models", show_header=True, header_style="bold cyan")
-    table.add_column("ID")
-    table.add_column("Provider")
-    table.add_column("Context", justify="right")
-    table.add_column("Capabilities")
-    for row in rows:
-        table.add_row(
-            str(row.get("id") or ""),
-            str(row.get("provider") or ""),
-            str(row.get("contextWindow") or ""),
-            ", ".join(str(v) for v in row.get("capabilities") or []),
-        )
-    console.print(table)
 
 
 def _image_prompt_from_command(command: str) -> str:
