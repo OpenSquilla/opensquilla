@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
-from typing import Any
 
 import typer
 
-from opensquilla.cli.output import print_json
 from opensquilla.cli.skills_catalog_presenters import (
     emit_skill_rows,
     emit_skill_search_results,
@@ -26,6 +23,14 @@ from opensquilla.cli.skills_local_mutations import (
     run_local_skill_install,
     run_local_skill_uninstall,
 )
+from opensquilla.cli.skills_mutation_presenters import (
+    emit_failed_skill_mutation,
+    emit_local_skill_install_result,
+    emit_local_skill_install_start,
+    emit_local_skill_uninstall_result,
+    emit_missing_skill_mutation_result,
+    emit_skill_mutation_payload,
+)
 from opensquilla.cli.skills_publish import publish_skill_for_cli
 from opensquilla.cli.skills_rows import load_skill_rows
 from opensquilla.cli.skills_search_rows import search_skill_rows
@@ -33,42 +38,6 @@ from opensquilla.cli.skills_taps import add_skill_tap, list_skill_taps, remove_s
 from opensquilla.cli.ui import console
 
 skills_app = typer.Typer(help="Skill management - list, search, install, uninstall.")
-
-
-def _install_result_payload(result: Any) -> dict[str, Any]:
-    payload = dict(result) if isinstance(result, dict) else asdict(result)
-    scan = payload.get("scan")
-    if scan is None:
-        payload.pop("scan", None)
-    return payload
-
-
-def _emit_skill_mutation_result(
-    payload: dict[str, Any],
-    *,
-    json_output: bool,
-    success_label: str,
-    fallback_name: str,
-) -> None:
-    success = bool(payload.get("success", False))
-    if json_output:
-        print_json(payload)
-        if not success:
-            raise typer.Exit(1)
-        return
-
-    name = str(payload.get("name") or fallback_name)
-    message = str(payload.get("message") or "")
-    if success:
-        path = payload.get("path")
-        suffix = f" -> {path}" if path else ""
-        console.print(f"[green]{success_label}:[/] {name}{suffix}")
-        if message:
-            console.print(message)
-        return
-
-    console.print(f"[red]Failed:[/] {message or name}")
-    raise typer.Exit(1)
 
 
 @skills_app.command("list")
@@ -143,7 +112,7 @@ def skills_install(
             json_output=json_output,
         )
         if payload is not None:
-            _emit_skill_mutation_result(
+            emit_skill_mutation_payload(
                 payload,
                 json_output=json_output,
                 success_label="Installed",
@@ -151,16 +120,15 @@ def skills_install(
             )
             return
 
-        if not json_output:
-            console.print(f"Installing '{identifier}' from {source}...")
+        emit_local_skill_install_start(identifier, source, json_output=json_output)
         outcome = await run_local_skill_install(
             identifier,
             source=source,
             force=force,
         )
         if outcome.unavailable_message:
-            _emit_skill_mutation_result(
-                {"success": False, "message": outcome.unavailable_message},
+            emit_failed_skill_mutation(
+                outcome.unavailable_message,
                 json_output=json_output,
                 success_label="Installed",
                 fallback_name=identifier,
@@ -169,30 +137,15 @@ def skills_install(
 
         result = outcome.result
         if result is None:
-            _emit_skill_mutation_result(
-                {"success": False, "message": "No skill install result returned"},
+            emit_missing_skill_mutation_result(
+                "install",
                 json_output=json_output,
                 success_label="Installed",
                 fallback_name=identifier,
             )
             return
 
-        if json_output:
-            print_json(_install_result_payload(result))
-            if not result.success:
-                raise typer.Exit(1)
-            return
-
-        if result.success:
-            console.print(f"[green]Installed:[/] {result.name} → {result.path}")
-            if result.scan and result.scan.verdict != "safe":
-                scan = result.scan
-                console.print(
-                    f"[yellow]Security: {scan.verdict} ({len(scan.findings)} findings)[/]"
-                )
-        else:
-            console.print(f"[red]Failed:[/] {result.message}")
-            raise typer.Exit(1)
+        emit_local_skill_install_result(result, json_output=json_output)
 
     asyncio.run(_install())
 
@@ -211,7 +164,7 @@ def skills_uninstall(
             json_output=json_output,
         )
         if payload is not None:
-            _emit_skill_mutation_result(
+            emit_skill_mutation_payload(
                 payload,
                 json_output=json_output,
                 success_label="Uninstalled",
@@ -221,8 +174,8 @@ def skills_uninstall(
 
         outcome = await run_local_skill_uninstall(name)
         if outcome.unavailable_message:
-            _emit_skill_mutation_result(
-                {"success": False, "message": outcome.unavailable_message},
+            emit_failed_skill_mutation(
+                outcome.unavailable_message,
                 json_output=json_output,
                 success_label="Uninstalled",
                 fallback_name=name,
@@ -231,25 +184,15 @@ def skills_uninstall(
 
         result = outcome.result
         if result is None:
-            _emit_skill_mutation_result(
-                {"success": False, "message": "No skill uninstall result returned"},
+            emit_missing_skill_mutation_result(
+                "uninstall",
                 json_output=json_output,
                 success_label="Uninstalled",
                 fallback_name=name,
             )
             return
 
-        if json_output:
-            print_json(_install_result_payload(result))
-            if not result.success:
-                raise typer.Exit(1)
-            return
-
-        if result.success:
-            console.print(f"[green]Uninstalled:[/] {result.name}")
-        else:
-            console.print(f"[red]Failed:[/] {result.message}")
-            raise typer.Exit(1)
+        emit_local_skill_uninstall_result(result, json_output=json_output)
 
     asyncio.run(_uninstall())
 

@@ -272,6 +272,47 @@ def test_cli_skill_catalog_presenters_emit_json(capsys):
     assert json.loads(output[1])[0]["description"] == "Plan work"
 
 
+def test_cli_skill_mutation_presenters_emit_local_json_without_empty_scan(capsys):
+    from opensquilla.cli.skills_mutation_presenters import (
+        emit_local_skill_install_result,
+        emit_local_skill_uninstall_result,
+    )
+
+    @dataclass(frozen=True)
+    class LocalResult:
+        success: bool
+        name: str
+        message: str
+        path: str | None = None
+        scan: object | None = None
+
+    install = LocalResult(
+        success=True,
+        name="planner",
+        message="installed",
+        path="/tmp/planner",
+        scan=None,
+    )
+    uninstall = LocalResult(
+        success=True,
+        name="planner",
+        message="removed",
+        path=None,
+        scan=None,
+    )
+
+    emit_local_skill_install_result(install, json_output=True)
+    emit_local_skill_uninstall_result(uninstall, json_output=True)
+
+    output = capsys.readouterr().out.strip().splitlines()
+    install_payload = json.loads(output[0])
+    uninstall_payload = json.loads(output[1])
+    assert install_payload["path"] == "/tmp/planner"
+    assert "scan" not in install_payload
+    assert uninstall_payload["message"] == "removed"
+    assert "scan" not in uninstall_payload
+
+
 def test_skills_search_delegates_to_cli_search_rows_boundary(monkeypatch):
     from opensquilla.cli import skills_cmd
 
@@ -927,6 +968,56 @@ def test_cli_skills_catalog_presenters_use_cli_boundary() -> None:
     assert "Skills (" not in constants
     assert "Search: " not in constants
     assert "No results for '" not in constants
+
+
+def test_cli_skills_mutation_presenters_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd
+
+    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    }
+    imported_output_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    imported_presenter_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_mutation_presenters"
+        for alias in node.names
+    }
+    identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    function_names = {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    } | {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)
+    }
+    constants = {
+        node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+    }
+
+    assert imported_presenter_names == {
+        "emit_failed_skill_mutation",
+        "emit_local_skill_install_result",
+        "emit_local_skill_install_start",
+        "emit_local_skill_uninstall_result",
+        "emit_missing_skill_mutation_result",
+        "emit_skill_mutation_payload",
+    }
+    assert "dataclasses" not in imported_modules
+    assert "asdict" not in identifiers
+    assert "print_json" not in imported_output_names
+    assert "print_json" not in identifiers
+    assert "_install_result_payload" not in function_names
+    assert "_emit_skill_mutation_result" not in function_names
+    assert "No skill install result returned" not in constants
+    assert "No skill uninstall result returned" not in constants
+    assert "Security: " not in constants
 
 
 def test_skills_tap_commands_delegate_to_cli_tap_boundary(monkeypatch):
