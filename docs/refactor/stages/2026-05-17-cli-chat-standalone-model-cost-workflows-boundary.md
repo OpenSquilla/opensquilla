@@ -120,15 +120,15 @@ Move standalone chat model and cost slash workflows behind a dedicated CLI workf
 - [x] Update `chat_cmd.py` standalone dispatch to delegate `/model` and `/cost`.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -154,15 +154,17 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `e1a58ce`
+- Integration merge: `a6f5175`
 - Verification evidence:
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `372015d`.
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-cli-chat-standalone-model-cost-workflows-boundary` passed on branch `codex/refactor-cli-chat-standalone-model-cost-workflows-boundary` at `372015d`.
   - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_standalone_model_cost_slashes_use_workflow_boundary -q` failed as expected because `chat_standalone_model_cost_workflows.py` did not exist.
   - Green: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_standalone_model_cost_slashes_use_workflow_boundary tests/test_cli/test_chat_cmd.py::test_standalone_model_cost_workflow_updates_state_and_emits_usage tests/test_cli/test_chat_cmd.py::test_standalone_model_command_updates_next_turn_model -q` passed: 3 passed.
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_standalone_model_cost_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed: 151 passed.
   - Child gate: `scripts/refactor_gate.sh` passed: ruff, mypy, whitespace, pytest 2315 passed / 8 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
+  - Integration gate: `scripts/refactor_gate.sh` passed after merge `a6f5175`: ruff, mypy, whitespace, pytest 2317 passed / 6 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
 - Residual risk:
   - Low. The slice preserves standalone `/model` local model propagation by returning the new model from the workflow and updating `_standalone_repl` only when a model argument is supplied.
 - Next recommended slice:
