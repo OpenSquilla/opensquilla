@@ -3284,6 +3284,115 @@ def test_cli_cost_uses_workflow_boundary() -> None:
     )
 
 
+def test_cli_diagnostics_commands_use_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        diagnostics_cmd,
+        diagnostics_gateway_queries,
+        diagnostics_presenters,
+        diagnostics_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(diagnostics_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(diagnostics_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(diagnostics_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(diagnostics_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.diagnostics_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.diagnostics_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.diagnostics_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    command_calls = {
+        node.func.id
+        for command_name in ("diagnostics_status", "diagnostics_on", "diagnostics_off")
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == command_name
+        for node in ast.walk(command)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id
+        for command_name in ("diagnostics_status", "diagnostics_on", "diagnostics_off")
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == command_name
+        for node in ast.walk(command)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {
+        "disable_diagnostics_for_cli",
+        "enable_diagnostics_for_cli",
+        "show_diagnostics_status_for_cli",
+    }
+    assert cmd_direct_modules == {"opensquilla.cli.diagnostics_workflows"}
+    assert workflow_query_names == {
+        "load_diagnostics_status",
+        "set_diagnostics_enabled",
+    }
+    assert workflow_presenter_names == {"emit_diagnostics_status"}
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert {
+        "disable_diagnostics_for_cli",
+        "enable_diagnostics_for_cli",
+        "show_diagnostics_status_for_cli",
+    } <= command_calls
+    assert not any(
+        isinstance(node, ast.AsyncFunctionDef)
+        for command_name in ("diagnostics_status", "diagnostics_on", "diagnostics_off")
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == command_name
+        for node in ast.walk(command)
+    )
+    assert not (
+        command_identifiers
+        & {"run_gateway_sync", "print_json", "console", "Table", "cast", "client"}
+    )
+
+
 def test_provider_and_search_diagnostics_use_gateway_rpcs(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.rpc_payloads = {
