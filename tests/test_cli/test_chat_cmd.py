@@ -2284,6 +2284,175 @@ async def test_gateway_permissions_command_updates_chat_state(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_gateway_forget_workflow_clears_all_and_prints_success(monkeypatch) -> None:
+    from opensquilla.cli import chat_gateway_forget_workflows
+
+    client = object()
+    calls: list[tuple[object | None, str | None]] = []
+    buffer = io.StringIO()
+
+    async def forget_server_approvals(
+        client_arg: object | None,
+        target: str | None = None,
+    ) -> bool:
+        calls.append((client_arg, target))
+        return True
+
+    monkeypatch.setattr(
+        chat_gateway_forget_workflows,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_gateway_forget_workflows.handle_gateway_forget_command(
+        "/forget",
+        client=client,
+        forget_server_approvals=forget_server_approvals,
+    )
+
+    assert handled is True
+    assert calls == [(client, None)]
+    output = buffer.getvalue()
+    assert "All cached approvals cleared." in output
+    assert "Future destructive ops will prompt again." in output
+
+
+@pytest.mark.asyncio
+async def test_gateway_forget_workflow_clears_target_and_prints_success(
+    monkeypatch,
+) -> None:
+    from opensquilla.cli import chat_gateway_forget_workflows
+
+    client = object()
+    calls: list[tuple[object | None, str | None]] = []
+    buffer = io.StringIO()
+
+    async def forget_server_approvals(
+        client_arg: object | None,
+        target: str | None = None,
+    ) -> bool:
+        calls.append((client_arg, target))
+        return True
+
+    monkeypatch.setattr(
+        chat_gateway_forget_workflows,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_gateway_forget_workflows.handle_gateway_forget_command(
+        "/forget /tmp/secrets.txt",
+        client=client,
+        forget_server_approvals=forget_server_approvals,
+    )
+
+    assert handled is True
+    assert calls == [(client, "/tmp/secrets.txt")]
+    output = buffer.getvalue()
+    assert "Cached approval for" in output
+    assert "/tmp/secrets.txt" in output
+    assert "cleared (if one existed)." in output
+
+
+@pytest.mark.asyncio
+async def test_gateway_forget_workflow_suppresses_success_when_clear_fails(
+    monkeypatch,
+) -> None:
+    from opensquilla.cli import chat_gateway_forget_workflows
+
+    client = object()
+    calls: list[tuple[object | None, str | None]] = []
+    buffer = io.StringIO()
+
+    async def forget_server_approvals(
+        client_arg: object | None,
+        target: str | None = None,
+    ) -> bool:
+        calls.append((client_arg, target))
+        return False
+
+    monkeypatch.setattr(
+        chat_gateway_forget_workflows,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_gateway_forget_workflows.handle_gateway_forget_command(
+        "/forget /tmp/secrets.txt",
+        client=client,
+        forget_server_approvals=forget_server_approvals,
+    )
+
+    assert handled is True
+    assert calls == [(client, "/tmp/secrets.txt")]
+    assert "Cached approval for" not in buffer.getvalue()
+    assert "All cached approvals cleared." not in buffer.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_gateway_forget_command_uses_forget_helper(monkeypatch) -> None:
+    from opensquilla.cli import chat_gateway_forget_workflows
+
+    _FakeGatewayClient.instances.clear()
+    monkeypatch.setattr("opensquilla.cli.gateway_client.GatewayClient", _FakeGatewayClient)
+    fake = _FakeGatewayClient()
+    state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    forget_calls: list[tuple[object | None, str | None]] = []
+
+    async def forget_server_approvals(
+        client: object | None,
+        target: str | None = None,
+    ) -> bool:
+        forget_calls.append((client, target))
+        return True
+
+    monkeypatch.setattr(chat_cmd, "_forget_server_approvals", forget_server_approvals)
+    monkeypatch.setattr(
+        chat_gateway_forget_workflows,
+        "console",
+        Console(file=io.StringIO(), force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_cmd._handle_gateway_slash_command(
+        "/forget /tmp/secrets.txt",
+        state,
+        fake,
+        {"mode": None},
+    )
+
+    assert handled is True
+    assert forget_calls == [(fake, "/tmp/secrets.txt")]
+
+
+@pytest.mark.asyncio
+async def test_gateway_forget_unknown_prefix_is_not_handled(monkeypatch) -> None:
+    _FakeGatewayClient.instances.clear()
+    monkeypatch.setattr("opensquilla.cli.gateway_client.GatewayClient", _FakeGatewayClient)
+    fake = _FakeGatewayClient()
+    state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    forget_calls: list[tuple[object | None, str | None]] = []
+
+    async def forget_server_approvals(
+        client: object | None,
+        target: str | None = None,
+    ) -> bool:
+        forget_calls.append((client, target))
+        return True
+
+    monkeypatch.setattr(chat_cmd, "_forget_server_approvals", forget_server_approvals)
+
+    handled = await chat_cmd._handle_gateway_slash_command(
+        "/forgetful",
+        state,
+        fake,
+        {"mode": None},
+    )
+
+    assert handled is False
+    assert forget_calls == []
+
+
+@pytest.mark.asyncio
 async def test_gateway_chat_does_not_forward_workspace_fields() -> None:
     from opensquilla.cli.gateway_client import GatewayClient
 
@@ -3768,6 +3937,49 @@ def test_chat_gateway_permissions_slash_uses_workflow_boundary() -> None:
     assert "Unknown permissions mode:" not in slash_literals
     assert "handle_gateway_permissions_command" in workflow_defs
     assert "handle_permissions_command" in workflow_defs
+
+
+def test_chat_gateway_forget_slash_uses_workflow_boundary() -> None:
+    chat_tree = ast.parse(Path(chat_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_path = Path(chat_cmd.__file__).with_name("chat_gateway_forget_workflows.py")
+
+    assert workflow_path.exists()
+
+    workflow_tree = ast.parse(workflow_path.read_text(encoding="utf-8"))
+    slash_handler = next(
+        node
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_gateway_slash_command"
+    )
+    chat_workflow_names = {
+        alias.name
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.chat_gateway_forget_workflows"
+        for alias in node.names
+    }
+    slash_name_calls = {
+        node.func.id
+        for node in ast.walk(slash_handler)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    slash_literals = {
+        node.value
+        for node in ast.walk(slash_handler)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    workflow_defs = {
+        node.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert chat_workflow_names == {"handle_gateway_forget_command"}
+    assert "handle_gateway_forget_command" in slash_name_calls
+    assert "_handle_forget_command" not in slash_name_calls
+    assert "All cached approvals cleared." not in slash_literals
+    assert "Cached approval for" not in slash_literals
+    assert "handle_gateway_forget_command" in workflow_defs
 
 
 def test_chat_session_presenter_renders_gateway_rows(monkeypatch) -> None:
