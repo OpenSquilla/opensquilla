@@ -123,15 +123,15 @@ Move standalone `/compact` behind the standalone session workflow boundary witho
 - [x] Update `chat_cmd.py` standalone dispatch to delegate `/compact`.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -157,15 +157,19 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `1356d5a`
+- Integration merge: `d619561`
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-cli-chat-standalone-compact-workflow-boundary` passed on branch `codex/refactor-cli-chat-standalone-compact-workflow-boundary` at `c0c0c53`.
   - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_standalone_compact_slash_uses_workflow_boundary -q` failed as expected because `handle_standalone_compact_command` was not imported/defined.
   - Green: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_standalone_compact_slash_uses_workflow_boundary tests/test_cli/test_chat_cmd.py::test_standalone_compact_workflow_compacts_with_provider_config tests/test_cli/test_chat_cmd.py::test_standalone_compact_workflow_warns_without_session_manager tests/test_cli/test_chat_cmd.py::test_standalone_slash_compact_passes_provider_config tests/test_cli/test_chat_cmd.py::test_standalone_compact_refuses_non_empty_transcript_without_flush_service tests/test_cli/test_chat_cmd.py::test_standalone_compact_flushes_before_compacting tests/test_cli/test_chat_cmd.py::test_standalone_compact_aborts_when_flush_fails tests/test_cli/test_chat_cmd.py::test_standalone_slash_compact_keeps_legacy_compact_manager_compatible -q` passed: 8 passed.
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_standalone_session_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed: 163 passed.
-  - Child gate: `scripts/refactor_gate.sh` passed: ruff, mypy, whitespace, pytest 2327 passed / 8 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
+  - Child gate: `scripts/refactor_gate.sh` passed after implementation and before child commit: ruff, mypy, whitespace, pytest 2327 passed / 8 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
+  - Child close: `scripts/refactor_stage_close.sh` passed at child commit `1356d5a`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed at `c0c0c53`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-standalone-compact-workflow-boundary` created merge commit `d619561`.
+  - Integration gate: `scripts/refactor_gate.sh` passed after merge: ruff, mypy, whitespace, pytest 2329 passed / 6 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
 - Residual risk:
   - Low. The slice only moves standalone compact mechanics and keeps provider resolution and flush safety injected from `chat_cmd.py`.
 - Next recommended slice:
