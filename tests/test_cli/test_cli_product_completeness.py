@@ -2390,6 +2390,127 @@ def test_sessions_show_json_errors_go_to_stderr(monkeypatch):
     assert json.loads(result.stderr)["error"]["code"] == "GATEWAY_UNAVAILABLE"
 
 
+def test_sessions_resume_resolves_then_runs_chat(monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "sessions.resolve": {"key": "agent:main:abc", "session_id": "abc"},
+    }
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "opensquilla.cli.chat_cmd.run_chat",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    result = runner.invoke(app, ["sessions", "resume", "abc"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == [{"session_id": "agent:main:abc"}]
+    assert ("sessions.resolve", {"key": "abc"}) in fake.calls
+
+
+def test_sessions_resume_gateway_unavailable_keeps_legacy_message(monkeypatch):
+    _install_fake_gateway(monkeypatch, FailingConnectGatewayClient)
+    monkeypatch.setattr(
+        "opensquilla.cli.chat_cmd.run_chat",
+        lambda **kwargs: pytest.fail(f"run_chat should not be called: {kwargs}"),
+    )
+
+    result = runner.invoke(app, ["sessions", "resume", "abc"])
+
+    assert result.exit_code == 0
+    assert "gateway offline" in result.stdout
+    assert "Session 'abc' requires a running gateway." in result.stdout
+
+
+def test_cli_sessions_resume_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        sessions_cmd,
+        sessions_gateway_queries,
+        sessions_presenters,
+        sessions_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(sessions_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(sessions_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(Path(sessions_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(sessions_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_presenters"
+        for alias in node.names
+    }
+    query_url_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.url_utils"
+        for alias in node.names
+    }
+    presenter_ui_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.ui"
+        for alias in node.names
+    }
+    sessions_resume = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "sessions_resume"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(sessions_resume)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(sessions_resume) if isinstance(node, ast.Name)
+    }
+
+    assert "resume_session_for_cli" in cmd_workflow_names
+    assert "resolve_session_key_from_gateway" in workflow_query_names
+    assert "SessionGatewayUnavailable" in workflow_query_names
+    assert "SessionGatewayActionFailed" in workflow_query_names
+    assert "emit_session_resume_unavailable" in workflow_presenter_names
+    assert "emit_session_resume_error" in workflow_presenter_names
+    assert query_url_names == {"normalize_gateway_url"}
+    assert {"console", "error_panel"} <= presenter_ui_names
+    assert "resume_session_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(sessions_resume))
+    assert not (
+        command_identifiers
+        & {
+            "_ACTION_FAILED",
+            "_CLIENT_UNAVAILABLE",
+            "_resolved_key",
+            "_with_client",
+            "asyncio",
+            "console",
+            "result",
+            "run_chat",
+        }
+    )
+
+
 def test_sessions_abort_resolves_then_aborts(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.rpc_payloads = {

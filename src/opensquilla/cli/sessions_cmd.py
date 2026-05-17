@@ -15,6 +15,7 @@ from opensquilla.cli.sessions_workflows import (
     abort_session_for_cli,
     delete_session_for_cli,
     list_sessions_for_cli,
+    resume_session_for_cli,
     show_session_for_cli,
 )
 from opensquilla.cli.ui import console, error_panel
@@ -82,18 +83,7 @@ def sessions_show(
 @app.command("resume")
 def sessions_resume(session_id: str = typer.Argument(..., help="Session ID to resume")) -> None:
     """Resume a session in interactive chat."""
-    from opensquilla.cli.chat_cmd import run_chat
-
-    async def _run(client):
-        return await client.resolve_session(session_id)
-
-    result = asyncio.run(_with_client(_run))
-    if result is _CLIENT_UNAVAILABLE:
-        console.print(f"[dim]Session {session_id!r} requires a running gateway.[/dim]")
-        return
-    if result is _ACTION_FAILED:
-        return
-    run_chat(session_id=_resolved_key(result, session_id))
+    resume_session_for_cli(session_id)
 
 
 @app.command("abort")

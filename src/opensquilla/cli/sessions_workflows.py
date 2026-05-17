@@ -8,16 +8,21 @@ from typing import Any
 import typer
 
 from opensquilla.cli.sessions_gateway_queries import (
+    SessionGatewayActionFailed,
+    SessionGatewayUnavailable,
     abort_session_from_gateway,
     delete_session_from_gateway,
     list_sessions_from_gateway,
     load_session_preview_from_gateway,
+    resolve_session_key_from_gateway,
 )
 from opensquilla.cli.sessions_presenters import (
     confirm_session_delete,
     emit_session_abort,
     emit_session_delete,
     emit_session_preview,
+    emit_session_resume_error,
+    emit_session_resume_unavailable,
     emit_sessions_list,
 )
 
@@ -125,6 +130,22 @@ def show_session_for_cli(session_id: str, *, json_output: bool) -> None:
 
     payload = load_session_preview_from_gateway(session_id, json_output=json_output)
     emit_session_preview(payload, session_id=session_id, json_output=json_output)
+
+
+def resume_session_for_cli(session_id: str) -> None:
+    """Resolve a session and resume it in interactive chat."""
+
+    result = resolve_session_key_from_gateway(session_id)
+    if isinstance(result, SessionGatewayUnavailable):
+        emit_session_resume_unavailable(session_id, message=result.message)
+        return
+    if isinstance(result, SessionGatewayActionFailed):
+        emit_session_resume_error(result.message)
+        return
+
+    from opensquilla.cli.chat_cmd import run_chat
+
+    run_chat(session_id=result)
 
 
 def abort_session_for_cli(session_id: str, *, json_output: bool) -> None:

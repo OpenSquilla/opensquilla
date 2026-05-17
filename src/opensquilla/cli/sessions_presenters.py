@@ -8,7 +8,7 @@ import typer
 from rich.table import Table
 
 from opensquilla.cli.output import print_json
-from opensquilla.cli.ui import console
+from opensquilla.cli.ui import console, error_panel
 
 
 def emit_sessions_list(
@@ -88,6 +88,20 @@ def emit_session_preview(
     last_message = str(preview.get("lastMessage") or "")
     if last_message:
         console.print(last_message)
+
+
+def emit_session_resume_unavailable(session_id: str, *, message: str) -> None:
+    """Emit resume's gateway-unavailable message."""
+
+    if message:
+        console.print(f"[dim]{message}[/dim]")
+    console.print(f"[dim]Session {session_id!r} requires a running gateway.[/dim]")
+
+
+def emit_session_resume_error(message: str) -> None:
+    """Emit resume's gateway action failure message."""
+
+    console.print(error_panel(message))
 
 
 def emit_session_abort(
