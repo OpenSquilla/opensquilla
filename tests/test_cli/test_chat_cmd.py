@@ -1468,6 +1468,8 @@ async def test_gateway_path_command_remote_rejects_before_send(
     monkeypatch,
     tmp_path,
 ) -> None:
+    from opensquilla.cli import chat_gateway_path_workflows
+
     _FakeGatewayClient.instances.clear()
     monkeypatch.setattr("opensquilla.cli.gateway_client.GatewayClient", _FakeGatewayClient)
     fake = _FakeGatewayClient()
@@ -1475,7 +1477,7 @@ async def test_gateway_path_command_remote_rejects_before_send(
     state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
     buffer = io.StringIO()
     monkeypatch.setattr(
-        chat_cmd,
+        chat_gateway_path_workflows,
         "console",
         Console(file=buffer, force_terminal=False, width=100, highlight=False),
     )
@@ -1489,6 +1491,190 @@ async def test_gateway_path_command_remote_rejects_before_send(
     assert fake.send_calls == []
     assert "Use /file to upload from this CLI machine" in buffer.getvalue()
     assert "File not found" not in buffer.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_gateway_path_workflow_streams_prompt_without_upload_and_updates_state() -> None:
+    from opensquilla.cli import chat_gateway_path_workflows
+
+    state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    client = object()
+    elevated_state = {"mode": "always"}
+    calls: list[dict[str, object]] = []
+
+    def path_prompt_and_attachments(command: str) -> tuple[str, list[dict[str, object]]]:
+        assert command == "/path /tmp/large.log inspect"
+        return "inspect path", []
+
+    def gateway_client_is_local(gateway_client: object) -> bool:
+        assert gateway_client is client
+        return True
+
+    async def stream_response(
+        gateway_client: object,
+        session_key: str,
+        prompt: str,
+        elevated: dict[str, str | None],
+        **kwargs: object,
+    ) -> TurnResult:
+        calls.append(
+            {
+                "client": gateway_client,
+                "session_key": session_key,
+                "prompt": prompt,
+                "elevated": elevated,
+                "kwargs": kwargs,
+            }
+        )
+        return TurnResult(
+            text="path gateway reply",
+            usage=UsageSummary(input_tokens=8, output_tokens=12, cost_usd=0.025),
+        )
+
+    handled = await chat_gateway_path_workflows.handle_gateway_path_command(
+        "/path /tmp/large.log inspect",
+        ["/path", "/tmp/large.log inspect"],
+        state,
+        client=client,
+        elevated_state=elevated_state,
+        stream_response=stream_response,
+        path_prompt_and_attachments=path_prompt_and_attachments,
+        gateway_client_is_local=gateway_client_is_local,
+        remote_gateway_message="remote /path blocked",
+    )
+
+    assert handled is True
+    assert calls == [
+        {
+            "client": client,
+            "session_key": "agent:main:abc123",
+            "prompt": "inspect path",
+            "elevated": elevated_state,
+            "kwargs": {"attachments": []},
+        }
+    ]
+    transcript = state.transcript.to_markdown()
+    assert "inspect path" in transcript
+    assert "path gateway reply" in transcript
+    assert state.usage.render() == "20 tok (8 in / 12 out) · cache 0 · $0.025000"
+
+
+@pytest.mark.asyncio
+async def test_gateway_path_workflow_prints_usage_without_path(monkeypatch) -> None:
+    from opensquilla.cli import chat_gateway_path_workflows
+
+    state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    buffer = io.StringIO()
+
+    async def stream_response(*args: object, **kwargs: object) -> TurnResult:
+        raise AssertionError("stream_response must not run without a path")
+
+    def path_prompt_and_attachments(command: str) -> tuple[str, list[dict[str, object]]]:
+        raise AssertionError("path_prompt_and_attachments must not run without a path")
+
+    def gateway_client_is_local(gateway_client: object) -> bool:
+        raise AssertionError("gateway_client_is_local must not run without a path")
+
+    monkeypatch.setattr(
+        chat_gateway_path_workflows,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_gateway_path_workflows.handle_gateway_path_command(
+        "/path",
+        ["/path"],
+        state,
+        client=object(),
+        elevated_state={"mode": None},
+        stream_response=stream_response,
+        path_prompt_and_attachments=path_prompt_and_attachments,
+        gateway_client_is_local=gateway_client_is_local,
+        remote_gateway_message="remote /path blocked",
+    )
+
+    assert handled is True
+    assert "Usage: /path <path> [prompt]" in buffer.getvalue()
+    assert state.transcript.to_markdown() == ""
+
+
+@pytest.mark.asyncio
+async def test_gateway_path_workflow_remote_rejects_before_prompt(monkeypatch) -> None:
+    from opensquilla.cli import chat_gateway_path_workflows
+
+    state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    buffer = io.StringIO()
+
+    async def stream_response(*args: object, **kwargs: object) -> TurnResult:
+        raise AssertionError("stream_response must not run for remote /path")
+
+    def path_prompt_and_attachments(command: str) -> tuple[str, list[dict[str, object]]]:
+        raise AssertionError("path_prompt_and_attachments must not run for remote /path")
+
+    def gateway_client_is_local(gateway_client: object) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        chat_gateway_path_workflows,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_gateway_path_workflows.handle_gateway_path_command(
+        "/path missing.txt inspect",
+        ["/path", "missing.txt inspect"],
+        state,
+        client=object(),
+        elevated_state={"mode": None},
+        stream_response=stream_response,
+        path_prompt_and_attachments=path_prompt_and_attachments,
+        gateway_client_is_local=gateway_client_is_local,
+        remote_gateway_message="remote /path blocked",
+    )
+
+    assert handled is True
+    assert "remote /path blocked" in buffer.getvalue()
+    assert state.transcript.to_markdown() == ""
+
+
+@pytest.mark.asyncio
+async def test_gateway_path_workflow_renders_prompt_errors(monkeypatch) -> None:
+    from opensquilla.cli import chat_gateway_path_workflows
+
+    state = ChatSessionState(session_key="agent:main:abc123", model="openai/test")
+    buffer = io.StringIO()
+
+    def path_prompt_and_attachments(command: str) -> tuple[str, list[dict[str, object]]]:
+        assert command == "/path missing.txt"
+        raise ValueError("File not found: missing.txt")
+
+    def gateway_client_is_local(gateway_client: object) -> bool:
+        return True
+
+    async def stream_response(*args: object, **kwargs: object) -> TurnResult:
+        raise AssertionError("stream_response must not run after a prompt error")
+
+    monkeypatch.setattr(
+        chat_gateway_path_workflows,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_gateway_path_workflows.handle_gateway_path_command(
+        "/path missing.txt",
+        ["/path", "missing.txt"],
+        state,
+        client=object(),
+        elevated_state={"mode": None},
+        stream_response=stream_response,
+        path_prompt_and_attachments=path_prompt_and_attachments,
+        gateway_client_is_local=gateway_client_is_local,
+        remote_gateway_message="remote /path blocked",
+    )
+
+    assert handled is True
+    assert "File not found: missing.txt" in buffer.getvalue()
+    assert state.transcript.to_markdown() == ""
 
 
 @pytest.mark.asyncio
@@ -2968,6 +3154,49 @@ def test_chat_gateway_image_slash_uses_workflow_boundary() -> None:
     assert "_image_prompt_and_attachments" not in slash_name_calls
     assert "Usage: /image <path> [prompt]" not in slash_literals
     assert "handle_gateway_image_command" in workflow_defs
+
+
+def test_chat_gateway_path_slash_uses_workflow_boundary() -> None:
+    chat_tree = ast.parse(Path(chat_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_path = Path(chat_cmd.__file__).with_name("chat_gateway_path_workflows.py")
+
+    assert workflow_path.exists()
+
+    workflow_tree = ast.parse(workflow_path.read_text(encoding="utf-8"))
+    slash_handler = next(
+        node
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_gateway_slash_command"
+    )
+    chat_workflow_names = {
+        alias.name
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.chat_gateway_path_workflows"
+        for alias in node.names
+    }
+    slash_name_calls = {
+        node.func.id
+        for node in ast.walk(slash_handler)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    slash_literals = {
+        node.value
+        for node in ast.walk(slash_handler)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    workflow_defs = {
+        node.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert chat_workflow_names == {"handle_gateway_path_command"}
+    assert "handle_gateway_path_command" in slash_name_calls
+    assert "_path_prompt_and_attachments" not in slash_name_calls
+    assert "_gateway_client_is_local" not in slash_name_calls
+    assert "Usage: /path <path> [prompt]" not in slash_literals
+    assert "handle_gateway_path_command" in workflow_defs
 
 
 def test_chat_session_presenter_renders_gateway_rows(monkeypatch) -> None:
