@@ -130,15 +130,15 @@ Move chat `/tool-compress` config workflow behind a dedicated CLI workflow bound
 - [x] Update tests to target the new workflow module where direct helper access is needed.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -164,16 +164,18 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `c8b1de0`
+- Integration merge: `e590262`
 - Verification evidence:
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `bb705ed`.
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-cli-chat-tool-compress-workflows-boundary` passed on branch `codex/refactor-cli-chat-tool-compress-workflows-boundary` at `bb705ed`.
   - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_tool_compress_slashes_use_workflow_boundary -q` failed as expected because `chat_tool_compression_workflows.py` did not exist.
   - Green: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_tool_compress_slashes_use_workflow_boundary tests/test_cli/test_chat_cmd.py::test_gateway_slash_tool_compress_toggles_config tests/test_cli/test_chat_cmd.py::test_gateway_slash_tool_compress_can_switch_to_summarize tests/test_cli/test_chat_cmd.py::test_gateway_slash_tool_compress_status_reads_config tests/test_cli/test_chat_cmd.py::test_standalone_tool_compress_toggles_config tests/test_cli/test_chat_cmd.py::test_tool_compress_workflow_emits_status_and_usage_messages -q` passed: 6 passed.
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_tool_compression_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed: 148 passed.
   - Child gate: `scripts/refactor_gate.sh` passed: ruff, mypy, whitespace, pytest 2312 passed / 8 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
+  - Integration gate: `scripts/refactor_gate.sh` passed after merge `e590262`: ruff, mypy, whitespace, pytest 2314 passed / 6 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
 - Residual risk:
-- Low. The slice moves the existing `/tool-compress` logic without changing config paths, aliases, mutation payloads, or resolved mode/model output. It intentionally does not fix the existing Rich markup behavior that hides the bracketed mode list in plain captured output.
+  - Low. The slice moves the existing `/tool-compress` logic without changing config paths, aliases, mutation payloads, or resolved mode/model output. It intentionally does not fix the existing Rich markup behavior that hides the bracketed mode list in plain captured output.
 - Next recommended slice:
-- Continue reducing `chat_cmd.py` by extracting the standalone `/model` and `/cost` slash workflows, or move the gateway `/save` transcript export dispatch into a smaller workflow boundary if prioritizing gateway-only surfaces.
+  - Continue reducing `chat_cmd.py` by extracting the standalone `/model` and `/cost` slash workflows, or move the gateway `/save` transcript export dispatch into a smaller workflow boundary if prioritizing gateway-only surfaces.
