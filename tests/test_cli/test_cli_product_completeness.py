@@ -203,6 +203,33 @@ def test_skills_view_and_update_use_gateway_rpc(monkeypatch):
     assert ("skills.update", {"name": "planner"}) in fake.calls
 
 
+def test_cli_skill_gateway_queries_use_gateway_rpc_boundary(monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "skills.get": {"name": "planner", "description": "Plan work"},
+        "skills.update": {"results": [{"success": True, "name": "planner"}]},
+    }
+    from opensquilla.cli.skills_gateway_queries import (
+        load_gateway_skill,
+        update_gateway_skills,
+    )
+
+    skill = load_gateway_skill("planner", json_output=True)
+    update_one = update_gateway_skills(
+        "planner",
+        all_skills=False,
+        json_output=True,
+    )
+    update_all = update_gateway_skills(None, all_skills=True, json_output=True)
+
+    assert skill["name"] == "planner"
+    assert update_one["results"][0]["name"] == "planner"
+    assert update_all["results"][0]["success"] is True
+    assert ("skills.get", {"name": "planner"}) in fake.calls
+    assert ("skills.update", {"name": "planner"}) in fake.calls
+    assert ("skills.update", {}) in fake.calls
+
+
 def test_skills_search_delegates_to_cli_search_rows_boundary(monkeypatch):
     from opensquilla.cli import skills_cmd
 
@@ -759,6 +786,44 @@ def test_cli_skills_install_gateway_mutations_use_cli_boundary() -> None:
     assert "GatewayClient" not in identifiers
     assert "GatewayRPCError" not in identifiers
     assert "_try_gateway_skill_mutation" not in function_names
+
+
+def test_cli_skills_gateway_queries_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd
+
+    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    imported_gateway_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    imported_query_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_gateway_queries"
+        for alias in node.names
+    }
+    identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    constants = {
+        node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+    }
+    client_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "call"
+    ]
+
+    assert imported_query_names == {"load_gateway_skill", "update_gateway_skills"}
+    assert "run_gateway_sync" not in imported_gateway_names
+    assert "run_gateway_sync" not in identifiers
+    assert "skills.get" not in constants
+    assert "skills.update" not in constants
+    assert client_calls == []
 
 
 def test_skills_tap_commands_delegate_to_cli_tap_boundary(monkeypatch):
