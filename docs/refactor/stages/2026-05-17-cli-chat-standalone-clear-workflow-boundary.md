@@ -119,15 +119,15 @@ Move standalone `/clear` and `/reset` behavior behind the standalone session wor
 - [x] Update `chat_cmd.py` standalone dispatch to delegate `/clear` and `/reset`.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -153,8 +153,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `fb26484`
+- Integration merge: `f7a90ec`
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-cli-chat-standalone-clear-workflow-boundary` passed on branch `codex/refactor-cli-chat-standalone-clear-workflow-boundary` at `e09c3ab`.
   - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_standalone_clear_slash_uses_workflow_boundary -q` failed as expected because `handle_standalone_clear_command` was not imported/defined.
@@ -162,6 +162,10 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_standalone_session_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed: 160 passed.
   - Child gate: `scripts/refactor_gate.sh` passed: ruff, mypy, whitespace, pytest 2324 passed / 8 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
+  - Stage close: `scripts/refactor_stage_close.sh` passed on child commit `fb26484`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `e09c3ab`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-standalone-clear-workflow-boundary` produced merge commit `f7a90ec`.
+  - Integration gate: `scripts/refactor_gate.sh` passed: ruff, mypy, whitespace, pytest 2326 passed / 6 skipped / 2 warnings, gateway smoke start/status/stop/status ok.
 - Residual risk:
   - Low. The slice only moves standalone clear/reset reset mechanics and keeps the shared flush-safety helper and dispatch ordering unchanged.
 - Next recommended slice:
