@@ -610,6 +610,16 @@ def test_skills_update_exits_nonzero_on_top_level_failure(monkeypatch):
     assert ("skills.update", {"name": "planner"}) in fake.calls
 
 
+def test_skills_update_requires_exactly_one_target() -> None:
+    missing = runner.invoke(app, ["skills", "update", "--json"])
+    conflicting = runner.invoke(app, ["skills", "update", "planner", "--all", "--json"])
+
+    assert missing.exit_code != 0
+    assert conflicting.exit_code != 0
+    assert "provide exactly one of NAME or --all" in missing.output
+    assert "provide exactly one of NAME or --all" in conflicting.output
+
+
 def test_skills_install_and_uninstall_use_gateway_rpc_when_available(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.rpc_payloads = {
@@ -908,7 +918,7 @@ def test_cli_skills_commands_use_workflow_facade_boundary() -> None:
         "remove_skill_tap_for_cli",
         "search_skills_for_cli_command",
         "uninstall_skill_for_cli_command",
-        "update_gateway_skills_for_cli",
+        "update_gateway_skills_for_cli_command",
         "view_gateway_skill_for_cli",
     }
     assert cmd_direct_modules == {"opensquilla.cli.skills_workflows"}
@@ -1125,17 +1135,25 @@ def test_cli_skills_gateway_queries_use_cli_boundary() -> None:
         and node.func.attr == "call"
     ]
 
-    assert "update_gateway_skills_for_cli" in imported_workflow_names
+    bad_parameter_refs = [
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Attribute) and node.attr == "BadParameter"
+    ]
+
+    assert "update_gateway_skills_for_cli_command" in imported_workflow_names
     assert "view_gateway_skill_for_cli" in imported_workflow_names
     assert facade_workflow_names == {
-        "update_gateway_skills_for_cli",
+        "update_gateway_skills_for_cli_command",
         "view_gateway_skill_for_cli",
     }
     assert imported_query_names == {"load_gateway_skill", "update_gateway_skills"}
     assert "opensquilla.cli.skills_gateway_workflows" not in cmd_direct_modules
     assert "opensquilla.cli.skills_gateway_queries" not in cmd_direct_modules
+    assert bad_parameter_refs == []
     assert "run_gateway_sync" not in imported_gateway_names
     assert "run_gateway_sync" not in identifiers
+    assert "provide exactly one of NAME or --all" not in constants
     assert "skills.get" not in constants
     assert "skills.update" not in constants
     assert client_calls == []

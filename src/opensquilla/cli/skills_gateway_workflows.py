@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import typer
+
 from opensquilla.cli.skills_gateway_presenters import (
     emit_gateway_skill_update,
     emit_gateway_skill_view,
@@ -33,3 +35,21 @@ def update_gateway_skills_for_cli(
         json_output=json_output,
     )
     emit_gateway_skill_update(payload, json_output=json_output)
+
+
+def update_gateway_skills_for_cli_command(
+    name: str | None,
+    *,
+    all_skills: bool,
+    json_output: bool,
+) -> None:
+    """Validate update options and run the gateway-backed update workflow."""
+
+    if bool(name) == all_skills:
+        raise typer.BadParameter("provide exactly one of NAME or --all")
+
+    update_gateway_skills_for_cli(
+        name,
+        all_skills=all_skills,
+        json_output=json_output,
+    )

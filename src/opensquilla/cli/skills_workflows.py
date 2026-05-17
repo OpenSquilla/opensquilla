@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from opensquilla.cli.skills_gateway_workflows import (
-    update_gateway_skills_for_cli,
+    update_gateway_skills_for_cli_command,
     view_gateway_skill_for_cli,
 )
 from opensquilla.cli.skills_list_workflows import list_skills_for_cli
@@ -28,6 +28,6 @@ __all__ = [
     "remove_skill_tap_for_cli",
     "search_skills_for_cli_command",
     "uninstall_skill_for_cli_command",
-    "update_gateway_skills_for_cli",
+    "update_gateway_skills_for_cli_command",
     "view_gateway_skill_for_cli",
 ]
