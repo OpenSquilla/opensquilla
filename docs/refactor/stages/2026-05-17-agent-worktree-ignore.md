@@ -74,14 +74,14 @@ ignored by git.
 - [x] Make `.worktrees/` and `worktrees/` explicit gitignore entries.
 - [x] Clarify in root `AGENTS.md` that the file is tracked on the refactor line and may be absent from main checkout.
 - [x] Verify ignore behavior and whitespace.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Rollback
 
@@ -91,12 +91,17 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `857d295`
+- Integration merge: `cf3a631`
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-agent-worktree-ignore` passed on branch `codex/refactor-agent-worktree-ignore` at `b207aec`.
   - Ignore check: `git check-ignore -v .worktrees/ worktrees/` reported `.gitignore:21:.worktrees/` and `.gitignore:22:worktrees/`.
   - Whitespace: `git diff --check` passed.
+  - Stage close: `scripts/refactor_stage_close.sh` passed on child commit `857d295`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `b207aec`.
+  - Integration merge: `git merge --no-ff codex/refactor-agent-worktree-ignore` produced merge commit `cf3a631`.
+  - Integration ignore check: `git check-ignore -v .worktrees/ worktrees/` reported `.gitignore:21:.worktrees/` and `.gitignore:22:worktrees/`.
+  - Integration whitespace: `git diff --check HEAD^ HEAD` passed.
 - Residual risk:
   - Low. The slice only clarifies agent guidance and local worktree ignore rules.
 - Next recommended slice:
