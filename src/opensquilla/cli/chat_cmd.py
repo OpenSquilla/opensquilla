@@ -45,6 +45,7 @@ from opensquilla.cli.chat_standalone_model_cost_workflows import (
     handle_standalone_model_command,
 )
 from opensquilla.cli.chat_standalone_session_workflows import (
+    handle_standalone_clear_command,
     handle_standalone_new_command,
 )
 from opensquilla.cli.chat_standalone_status_workflows import (
@@ -596,18 +597,11 @@ async def _standalone_repl(
                     await handle_tool_compress_command(stripped, config=svc.config)
                     continue
                 if stripped in {"/clear", "/reset"}:
-                    if svc.session_manager is not None:
-                        safe_to_reset = await _flush_before_standalone_rewrite(
-                            svc,
-                            session_key,
-                            operation="Reset",
-                        )
-                        if not safe_to_reset:
-                            continue
-                        await svc.session_manager.truncate(session_key, max_messages=0)
-                    state.transcript.clear()
-                    state.usage.reset()
-                    console.print(f"[{ACCENT}]cleared[/] [dim]{state.session_key}[/dim]")
+                    await handle_standalone_clear_command(
+                        state,
+                        services=svc,
+                        flush_before_rewrite=_flush_before_standalone_rewrite,
+                    )
                     continue
                 if stripped == "/compact":
                     if svc.session_manager is not None:

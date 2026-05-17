@@ -1590,6 +1590,75 @@ async def test_standalone_new_workflow_creates_session_state_and_tool_context(
 
 
 @pytest.mark.asyncio
+async def test_standalone_clear_workflow_truncates_and_resets_state(
+    monkeypatch,
+) -> None:
+    from opensquilla.cli import chat_standalone_session_workflows
+
+    services = _FakeServices()
+    state = ChatSessionState(session_key="standalone:test", model="openrouter/test")
+    state.transcript.add("user", "hello")
+    state.usage.add(
+        UsageSummary(input_tokens=12, output_tokens=34, cached_tokens=5, cost_usd=0.0123)
+    )
+    flush_calls: list[dict[str, object]] = []
+    buffer = io.StringIO()
+
+    async def flush_before_rewrite(svc: object, session_key: str, *, operation: str) -> bool:
+        flush_calls.append({"svc": svc, "session_key": session_key, "operation": operation})
+        return True
+
+    monkeypatch.setattr(
+        chat_standalone_session_workflows,
+        "console",
+        Console(file=buffer, force_terminal=False, width=100, highlight=False),
+    )
+
+    handled = await chat_standalone_session_workflows.handle_standalone_clear_command(
+        state,
+        services=services,
+        flush_before_rewrite=flush_before_rewrite,
+    )
+
+    assert handled is True
+    assert flush_calls == [
+        {"svc": services, "session_key": "standalone:test", "operation": "Reset"}
+    ]
+    assert services.session_manager.truncate_calls == [("standalone:test", 0)]
+    assert state.transcript.turns == []
+    assert state.usage.render() == "0 tok (0 in / 0 out) · cache 0 · $0.000000"
+    output = buffer.getvalue()
+    assert "cleared" in output
+    assert "standalone:test" in output
+
+
+@pytest.mark.asyncio
+async def test_standalone_clear_workflow_aborts_when_flush_guard_fails() -> None:
+    from opensquilla.cli import chat_standalone_session_workflows
+
+    services = _FakeServices()
+    state = ChatSessionState(session_key="standalone:test", model="openrouter/test")
+    state.transcript.add("user", "hello")
+    state.usage.add(
+        UsageSummary(input_tokens=12, output_tokens=34, cached_tokens=5, cost_usd=0.0123)
+    )
+
+    async def flush_before_rewrite(svc: object, session_key: str, *, operation: str) -> bool:
+        return False
+
+    handled = await chat_standalone_session_workflows.handle_standalone_clear_command(
+        state,
+        services=services,
+        flush_before_rewrite=flush_before_rewrite,
+    )
+
+    assert handled is False
+    assert services.session_manager.truncate_calls == []
+    assert len(state.transcript.turns) == 1
+    assert state.usage.render() == "46 tok (12 in / 34 out) · cache 5 · $0.012300"
+
+
+@pytest.mark.asyncio
 async def test_gateway_slash_tool_compress_toggles_config(monkeypatch) -> None:
     _FakeGatewayClient.instances.clear()
     monkeypatch.setattr("opensquilla.cli.gateway_client.GatewayClient", _FakeGatewayClient)
@@ -2213,13 +2282,57 @@ def test_chat_standalone_new_slash_uses_workflow_boundary() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
-    assert chat_workflow_names == {"handle_standalone_new_command"}
+    assert "handle_standalone_new_command" in chat_workflow_names
     assert "handle_standalone_new_command" in standalone_name_calls
     assert not any(
         literal.startswith("[green]Started new session")
         for literal in standalone_literals
     )
     assert "handle_standalone_new_command" in workflow_defs
+
+
+def test_chat_standalone_clear_slash_uses_workflow_boundary() -> None:
+    chat_tree = ast.parse(Path(chat_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_path = Path(chat_cmd.__file__).with_name("chat_standalone_session_workflows.py")
+
+    assert workflow_path.exists()
+
+    workflow_tree = ast.parse(workflow_path.read_text(encoding="utf-8"))
+    standalone_handler = next(
+        node
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_standalone_repl"
+    )
+    chat_workflow_names = {
+        alias.name
+        for node in ast.walk(chat_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.chat_standalone_session_workflows"
+        for alias in node.names
+    }
+    standalone_attr_calls = {
+        node.func.attr
+        for node in ast.walk(standalone_handler)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    standalone_literals = {
+        node.value
+        for node in ast.walk(standalone_handler)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    workflow_defs = {
+        node.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert chat_workflow_names == {
+        "handle_standalone_clear_command",
+        "handle_standalone_new_command",
+    }
+    assert "handle_standalone_clear_command" in workflow_defs
+    assert "truncate" not in standalone_attr_calls
+    assert not any("]cleared[/]" in literal for literal in standalone_literals)
 
 
 def test_chat_session_presenter_renders_gateway_rows(monkeypatch) -> None:
