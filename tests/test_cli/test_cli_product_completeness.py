@@ -230,6 +230,25 @@ def test_cli_skill_gateway_queries_use_gateway_rpc_boundary(monkeypatch):
     assert ("skills.update", {}) in fake.calls
 
 
+def test_cli_skill_gateway_presenter_exits_on_update_failure(capsys):
+    import typer
+
+    from opensquilla.cli.skills_gateway_presenters import emit_gateway_skill_update
+
+    with pytest.raises(typer.Exit) as exc_info:
+        emit_gateway_skill_update(
+            {
+                "results": [
+                    {"success": False, "name": "planner", "message": "failed"}
+                ]
+            },
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 1
+    assert json.loads(capsys.readouterr().out)["results"][0]["name"] == "planner"
+
+
 def test_skills_search_delegates_to_cli_search_rows_boundary(monkeypatch):
     from opensquilla.cli import skills_cmd
 
@@ -824,6 +843,37 @@ def test_cli_skills_gateway_queries_use_cli_boundary() -> None:
     assert "skills.get" not in constants
     assert "skills.update" not in constants
     assert client_calls == []
+
+
+def test_cli_skills_gateway_presenters_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd
+
+    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    }
+    imported_presenter_names = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_gateway_presenters"
+        for alias in node.names
+    }
+    identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    constants = {
+        node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+    }
+
+    assert imported_presenter_names == {
+        "emit_gateway_skill_update",
+        "emit_gateway_skill_view",
+    }
+    assert "rich.panel" not in imported_modules
+    assert "Panel" not in identifiers
+    assert "Skill updates" not in constants
+    assert "file_path" not in constants
+    assert "base_dir" not in constants
+    assert "homepage" not in constants
 
 
 def test_skills_tap_commands_delegate_to_cli_tap_boundary(monkeypatch):
