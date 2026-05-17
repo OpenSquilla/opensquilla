@@ -8,7 +8,6 @@ import typer
 
 from opensquilla.cli.skills_catalog_presenters import (
     emit_skill_rows,
-    emit_skill_search_results,
 )
 from opensquilla.cli.skills_gateway_presenters import (
     emit_gateway_skill_update,
@@ -25,7 +24,7 @@ from opensquilla.cli.skills_mutation_workflows import (
 from opensquilla.cli.skills_publish import publish_skill_for_cli
 from opensquilla.cli.skills_publish_presenters import emit_skill_publish_result
 from opensquilla.cli.skills_rows import load_skill_rows
-from opensquilla.cli.skills_search_rows import search_skill_rows
+from opensquilla.cli.skills_search_workflows import search_skills_for_cli
 from opensquilla.cli.skills_tap_workflows import (
     add_skill_tap_for_cli,
     list_skill_taps_for_cli,
@@ -52,8 +51,7 @@ def skills_search(
     """Search for skills across Community sources."""
 
     async def _search() -> None:
-        results = await search_skill_rows(query)
-        emit_skill_search_results(query, results, json_output=json_output)
+        await search_skills_for_cli(query, json_output=json_output)
 
     asyncio.run(_search())
 

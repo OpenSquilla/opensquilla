@@ -352,7 +352,7 @@ def test_cli_skill_publish_presenter_emits_success_and_failure(capsys):
 
 
 def test_skills_search_delegates_to_cli_search_rows_boundary(monkeypatch):
-    from opensquilla.cli import skills_cmd
+    from opensquilla.cli import skills_search_workflows
 
     async def fake_search_skill_rows(query: str, *, limit: int = 20):
         assert query == "plan"
@@ -369,7 +369,11 @@ def test_skills_search_delegates_to_cli_search_rows_boundary(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(skills_cmd, "search_skill_rows", fake_search_skill_rows)
+    monkeypatch.setattr(
+        skills_search_workflows,
+        "search_skill_rows",
+        fake_search_skill_rows,
+    )
 
     result = runner.invoke(app, ["skills", "search", "plan", "--json"])
 
@@ -823,17 +827,32 @@ def test_cli_skills_does_not_import_hub_defaults() -> None:
 
 
 def test_cli_skills_search_does_not_import_hub_search_operation_details() -> None:
-    from opensquilla.cli import skills_cmd
+    from opensquilla.cli import skills_cmd, skills_search_workflows
 
-    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_search_workflows.__file__).read_text(encoding="utf-8")
+    )
     imported_names = {
         alias.name
-        for node in ast.walk(tree)
+        for node in ast.walk(workflow_tree)
         if isinstance(node, ast.ImportFrom)
         and node.module == "opensquilla.skills.hub.operations"
         for alias in node.names
     }
+    imported_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_search_workflows"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
 
+    assert imported_workflow_names == {"search_skills_for_cli"}
+    assert "opensquilla.cli.skills_search_rows" not in cmd_direct_modules
     assert "search_skills" not in imported_names
     assert "skill_search_request" not in imported_names
 
@@ -1005,28 +1024,38 @@ def test_cli_skills_gateway_presenters_use_cli_boundary() -> None:
 
 
 def test_cli_skills_catalog_presenters_use_cli_boundary() -> None:
-    from opensquilla.cli import skills_cmd
+    from opensquilla.cli import skills_cmd, skills_search_workflows
 
-    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_search_workflows.__file__).read_text(encoding="utf-8")
+    )
     imported_modules = {
-        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
     }
     imported_presenter_names = {
         alias.name
-        for node in ast.walk(tree)
+        for node in ast.walk(cmd_tree)
         if isinstance(node, ast.ImportFrom)
         and node.module == "opensquilla.cli.skills_catalog_presenters"
         for alias in node.names
     }
-    identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_catalog_presenters"
+        for alias in node.names
+    }
+    identifiers = {node.id for node in ast.walk(cmd_tree) if isinstance(node, ast.Name)}
     constants = {
-        node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+        node.value for node in ast.walk(cmd_tree) if isinstance(node, ast.Constant)
     }
 
-    assert imported_presenter_names == {
-        "emit_skill_rows",
-        "emit_skill_search_results",
-    }
+    assert imported_presenter_names == {"emit_skill_rows"}
+    assert workflow_presenter_names == {"emit_skill_search_results"}
     assert "rich.table" not in imported_modules
     assert "Table" not in identifiers
     assert "Skills (" not in constants
