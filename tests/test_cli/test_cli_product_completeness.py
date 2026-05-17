@@ -275,6 +275,96 @@ def test_models_list_json_uses_gateway_client(monkeypatch):
     assert ("models.list", {"provider": "openrouter", "capabilities": None}) in fake.calls
 
 
+def test_cli_models_list_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        models_cmd,
+        models_gateway_queries,
+        models_presenters,
+        models_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(models_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(models_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(models_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(models_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.models_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.models_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.models_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    models_list = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "models_list"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(models_list)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    cmd_identifiers = {
+        node.id
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {"list_models_for_cli"}
+    assert cmd_direct_modules == {"opensquilla.cli.models_workflows"}
+    assert workflow_query_names == {"list_models_from_gateway"}
+    assert workflow_presenter_names == {"emit_model_rows"}
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert "list_models_for_cli" in command_calls
+    assert not (
+        cmd_identifiers
+        & {"run_gateway_sync", "print_json", "console", "Table", "cast", "client"}
+    )
+
+
 def test_config_get_honors_env_path_and_redacts(tmp_path: Path, monkeypatch):
     target = tmp_path / "opensquilla.toml"
     target.write_text(
