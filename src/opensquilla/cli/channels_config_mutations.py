@@ -10,7 +10,11 @@ from opensquilla.cli.channel_fields import (
     parse_channel_field_pairs,
 )
 from opensquilla.onboarding.config_store import PersistResult, load_config, persist_config
-from opensquilla.onboarding.mutations import upsert_channel
+from opensquilla.onboarding.mutations import (
+    remove_channel,
+    set_channel_enabled,
+    upsert_channel,
+)
 
 
 def add_channel_to_config(
@@ -75,3 +79,28 @@ def edit_channel_in_config(
     result = upsert_channel(cfg, entry_payload=payload)
     persist = persist_config(result.config, path=config_path, restart_required=True)
     return persist, str(type_name)
+
+
+def remove_channel_from_config(
+    name: str,
+    *,
+    config_path: Path,
+) -> PersistResult:
+    """Remove a channel entry from a gateway config file."""
+
+    cfg = load_config(config_path)
+    result = remove_channel(cfg, name=name)
+    return persist_config(result.config, path=config_path, restart_required=True)
+
+
+def set_channel_enabled_in_config(
+    name: str,
+    *,
+    enabled: bool,
+    config_path: Path,
+) -> PersistResult:
+    """Enable or disable a channel entry in a gateway config file."""
+
+    cfg = load_config(config_path)
+    result = set_channel_enabled(cfg, name=name, enabled=enabled)
+    return persist_config(result.config, path=config_path, restart_required=True)

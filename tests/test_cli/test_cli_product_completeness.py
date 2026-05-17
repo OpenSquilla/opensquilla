@@ -2145,10 +2145,13 @@ def test_cli_channels_catalog_uses_workflow_boundary() -> None:
     assert cmd_workflow_names == {
         "add_channel_for_cli",
         "describe_channel_type_for_cli",
+        "disable_channel_for_cli",
         "edit_channel_for_cli",
+        "enable_channel_for_cli",
         "list_configured_channels_for_cli",
         "list_channel_types_for_cli",
         "logout_channel_for_cli",
+        "remove_channel_for_cli",
         "restart_channel_for_cli",
         "show_channel_status_for_cli",
     }
@@ -2159,6 +2162,8 @@ def test_cli_channels_catalog_uses_workflow_boundary() -> None:
         "emit_channel_catalog_error",
         "emit_channel_config_error",
         "emit_channel_config_path",
+        "emit_channel_enabled_state",
+        "emit_channel_removed",
         "emit_channel_restart_notice",
         "emit_channel_saved",
         "emit_channel_status",
@@ -2287,7 +2292,11 @@ def test_cli_channels_add_uses_workflow_boundary() -> None:
     } <= workflow_presenter_names
     assert mutation_field_names == {"apply_channel_token", "parse_channel_field_pairs"}
     assert mutation_config_names == {"PersistResult", "load_config", "persist_config"}
-    assert mutation_onboarding_names == {"upsert_channel"}
+    assert mutation_onboarding_names == {
+        "remove_channel",
+        "set_channel_enabled",
+        "upsert_channel",
+    }
     assert {
         "emit_channel_config_error",
         "emit_channel_restart_notice",
@@ -2406,7 +2415,11 @@ def test_cli_channels_edit_uses_workflow_boundary() -> None:
     } <= workflow_presenter_names
     assert mutation_field_names == {"apply_channel_token", "parse_channel_field_pairs"}
     assert mutation_config_names == {"PersistResult", "load_config", "persist_config"}
-    assert mutation_onboarding_names == {"upsert_channel"}
+    assert mutation_onboarding_names == {
+        "remove_channel",
+        "set_channel_enabled",
+        "upsert_channel",
+    }
     assert "emit_channel_updated" in presenter_function_names
     assert any(
         isinstance(node, ast.Call)
@@ -2422,6 +2435,151 @@ def test_cli_channels_edit_uses_workflow_boundary() -> None:
             "load_config",
             "persist_config",
             "upsert_channel",
+            "secho",
+            "Exit",
+        }
+    )
+
+
+def test_cli_channels_state_changes_use_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        channels_cmd,
+        channels_config_mutations,
+        channels_presenters,
+        channels_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(channels_cmd.__file__).read_text(encoding="utf-8"))
+    mutation_tree = ast.parse(
+        Path(channels_config_mutations.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(channels_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(channels_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_workflows"
+        for alias in node.names
+    }
+    workflow_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_mutations"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_presenters"
+        for alias in node.names
+    }
+    mutation_config_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_onboarding_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.mutations"
+        for alias in node.names
+    }
+    presenter_function_names = {
+        node.name for node in ast.walk(presenter_tree) if isinstance(node, ast.FunctionDef)
+    }
+    state_commands = [
+        next(
+            node
+            for node in ast.walk(cmd_tree)
+            if isinstance(node, ast.FunctionDef) and node.name == command_name
+        )
+        for command_name in ("channels_remove", "channels_enable", "channels_disable")
+    ]
+    state_identifiers = {
+        node.id
+        for command in state_commands
+        for node in ast.walk(command)
+        if isinstance(node, ast.Name)
+    }
+
+    assert {
+        "disable_channel_for_cli",
+        "enable_channel_for_cli",
+        "remove_channel_for_cli",
+    } <= cmd_workflow_names
+    assert "opensquilla.onboarding.config_store" not in cmd_direct_modules
+    assert "opensquilla.onboarding.mutations" not in cmd_direct_modules
+    assert {
+        "remove_channel_from_config",
+        "set_channel_enabled_in_config",
+    } <= workflow_mutation_names
+    assert "resolve_channel_config_path" in workflow_query_names
+    assert {
+        "emit_channel_config_error",
+        "emit_channel_config_path",
+        "emit_channel_enabled_state",
+        "emit_channel_removed",
+        "emit_channel_restart_notice",
+    } <= workflow_presenter_names
+    assert mutation_config_names == {"PersistResult", "load_config", "persist_config"}
+    assert mutation_onboarding_names == {
+        "remove_channel",
+        "set_channel_enabled",
+        "upsert_channel",
+    }
+    assert {
+        "emit_channel_enabled_state",
+        "emit_channel_removed",
+    } <= presenter_function_names
+    for command, workflow_name in zip(
+        state_commands,
+        (
+            "remove_channel_for_cli",
+            "enable_channel_for_cli",
+            "disable_channel_for_cli",
+        ),
+        strict=True,
+    ):
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == workflow_name
+            for node in ast.walk(command)
+        )
+    assert not (
+        state_identifiers
+        & {
+            "_print_restart_notice",
+            "_resolve_and_announce",
+            "load_config",
+            "persist_config",
+            "remove_channel",
+            "set_channel_enabled",
             "secho",
             "Exit",
         }

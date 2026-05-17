@@ -7,6 +7,8 @@ from pathlib import Path
 from opensquilla.cli.channels_config_mutations import (
     add_channel_to_config,
     edit_channel_in_config,
+    remove_channel_from_config,
+    set_channel_enabled_in_config,
 )
 from opensquilla.cli.channels_config_queries import (
     load_configured_channel_entries,
@@ -22,6 +24,8 @@ from opensquilla.cli.channels_presenters import (
     emit_channel_catalog_error,
     emit_channel_config_error,
     emit_channel_config_path,
+    emit_channel_enabled_state,
+    emit_channel_removed,
     emit_channel_restart_notice,
     emit_channel_saved,
     emit_channel_status,
@@ -118,6 +122,61 @@ def edit_channel_for_cli(
     emit_channel_updated(name, type_name, backup_path=persist.backup_path)
     emit_channel_restart_notice()
     emit_channel_verification_next_step(name)
+
+
+def remove_channel_for_cli(
+    name: str,
+    *,
+    config_path: Path | None,
+) -> None:
+    """Remove a configured channel for the CLI."""
+
+    target, source = resolve_channel_config_path(config_path)
+    emit_channel_config_path(target, source=source)
+    try:
+        remove_channel_from_config(name, config_path=target)
+    except KeyError as exc:
+        emit_channel_config_error(exc)
+
+    emit_channel_removed(name)
+    emit_channel_restart_notice()
+
+
+def enable_channel_for_cli(
+    name: str,
+    *,
+    config_path: Path | None,
+) -> None:
+    """Enable a configured channel for the CLI."""
+
+    _set_channel_enabled_for_cli(name, enabled=True, config_path=config_path)
+
+
+def disable_channel_for_cli(
+    name: str,
+    *,
+    config_path: Path | None,
+) -> None:
+    """Disable a configured channel for the CLI."""
+
+    _set_channel_enabled_for_cli(name, enabled=False, config_path=config_path)
+
+
+def _set_channel_enabled_for_cli(
+    name: str,
+    *,
+    enabled: bool,
+    config_path: Path | None,
+) -> None:
+    target, source = resolve_channel_config_path(config_path)
+    emit_channel_config_path(target, source=source)
+    try:
+        set_channel_enabled_in_config(name, enabled=enabled, config_path=target)
+    except KeyError as exc:
+        emit_channel_config_error(exc)
+
+    emit_channel_enabled_state(name, enabled=enabled)
+    emit_channel_restart_notice()
 
 
 def describe_channel_type_for_cli(type_name: str, *, json_output: bool) -> None:

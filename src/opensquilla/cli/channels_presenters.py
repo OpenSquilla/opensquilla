@@ -205,6 +205,19 @@ def emit_channel_updated(
         typer.echo(f"Backup: {backup_path}")
 
 
+def emit_channel_removed(name: str) -> None:
+    """Emit successful channel removal output."""
+
+    typer.echo(f"Channel removed: {name}")
+
+
+def emit_channel_enabled_state(name: str, *, enabled: bool) -> None:
+    """Emit successful channel enabled state output."""
+
+    state = "enabled" if enabled else "disabled"
+    typer.echo(f"Channel {state}: {name}")
+
+
 def emit_channel_restart_notice() -> None:
     """Emit the config-change gateway restart notice."""
 
