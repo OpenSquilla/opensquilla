@@ -13,7 +13,7 @@ from opensquilla.cli.skills_workflows import (
     remove_skill_tap_for_cli,
     search_skills_for_cli_command,
     uninstall_skill_for_cli_command,
-    update_gateway_skills_for_cli,
+    update_gateway_skills_for_cli_command,
     view_gateway_skill_for_cli,
 )
 
@@ -53,10 +53,7 @@ def skills_update(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Update one managed skill, or all managed skills."""
-    if bool(name) == all_skills:
-        raise typer.BadParameter("provide exactly one of NAME or --all")
-
-    update_gateway_skills_for_cli(
+    update_gateway_skills_for_cli_command(
         name,
         all_skills=all_skills,
         json_output=json_output,
