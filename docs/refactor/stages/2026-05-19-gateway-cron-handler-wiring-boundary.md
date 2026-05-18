@@ -247,9 +247,13 @@ still made explicitly under `superpowers:dispatching-parallel-agents`.
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+  - Merge commit: `0a9119b` (`Merge gateway cron handler wiring boundary`).
+- [x] Run `scripts/refactor_gate.sh` in integration.
+  - Result: ruff passed; mypy no issues in 549 source files; whitespace passed;
+    pytest `2656 passed, 6 skipped, 2 warnings in 28.45s`; gateway smoke
+    start/status/stop/status passed.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active` and
       `../opensquilla-refactor-agent-cron-handler`, run `git worktree prune`,
       and verify no extra refactor worktree directories remain beyond
@@ -284,8 +288,9 @@ Co-authored-by: Codex <noreply@openai.com>
 - Worker commit: `f1cfb49` (`Refactor gateway cron handler wiring boundary`).
 - Active child support commits:
   - `6c5bfe0` (`Merge gateway cron handler worker`).
-- Child verification commit:
-- Integration merge:
+- Child verification commit: `f845461` (`Record gateway cron handler child
+  verification`).
+- Integration merge: `0a9119b` (`Merge gateway cron handler wiring boundary`).
 - Integration record:
 - Verification evidence:
   - RED command failed as expected with 10 new boundary-test failures and 6
@@ -301,6 +306,9 @@ Co-authored-by: Codex <noreply@openai.com>
     source files; `git diff --check` passed.
   - Active child `scripts/refactor_gate.sh`: ruff passed; mypy no issues in
     549 source files; whitespace passed; pytest `2654 passed, 8 skipped, 2
+    warnings`; gateway smoke passed.
+  - Integration `scripts/refactor_gate.sh`: ruff passed; mypy no issues in 549
+    source files; whitespace passed; pytest `2656 passed, 6 skipped, 2
     warnings`; gateway smoke passed.
 - Cleanup evidence:
 - Residual risk: low before integration merge; the stage moves cron handler
