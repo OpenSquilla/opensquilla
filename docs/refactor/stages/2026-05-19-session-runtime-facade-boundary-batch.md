@@ -301,9 +301,16 @@ Co-authored-by: Codex <noreply@openai.com>
     pytest `2637 passed, 6 skipped, 2 warnings in 28.76s`; gateway smoke
     start/status/stop/status passed.
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active` and worker worktrees, run
+- [x] Remove `../opensquilla-refactor-active` and worker worktrees, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
+  - Removed:
+    - `/Users/cwan0785/opensquilla-refactor-active`
+    - `/Users/cwan0785/opensquilla-refactor-agent-session-read`
+    - `/Users/cwan0785/opensquilla-refactor-agent-runtime-facade`
+  - `git worktree list --porcelain` verified no extra
+    `opensquilla-refactor-*` worktrees remain beyond
+    `/Users/cwan0785/opensquilla-refactor-integration`.
 
 ## Child gate
 
@@ -339,7 +346,8 @@ Co-authored-by: Codex <noreply@openai.com>
 - Child verification commit: `daec318` (`Record session runtime facade child
   verification`).
 - Integration merge: `a395dca` (`Merge session runtime facade boundary batch`).
-- Integration record:
+- Integration record: `c63e4b4` (`Record session runtime facade integration
+  verification`).
 - Verification evidence:
   - Worker RED/GREEN evidence recorded above.
   - Merged focused command: `52 passed in 10.88s`.
@@ -354,6 +362,14 @@ Co-authored-by: Codex <noreply@openai.com>
     source files; whitespace passed; pytest `2637 passed, 6 skipped, 2
     warnings`; gateway smoke passed.
 - Cleanup evidence:
+  - Worker PIDs `63174` and `63175` were no longer present.
+  - Removed active child and worker worktrees:
+    `/Users/cwan0785/opensquilla-refactor-active`,
+    `/Users/cwan0785/opensquilla-refactor-agent-session-read`, and
+    `/Users/cwan0785/opensquilla-refactor-agent-runtime-facade`.
+  - Ran `git worktree prune`.
+  - `git worktree list --porcelain` shows the refactor line only has
+    `/Users/cwan0785/opensquilla-refactor-integration`.
 - Residual risk: no blocking risk observed; session read helpers moved to the
   session domain and runtime state test observability now uses a read-only
   snapshot facade while keeping compatibility paths.
