@@ -191,15 +191,38 @@ avoidable conflicts.
 
 - [x] Run `scripts/refactor_preflight.sh --allow-dirty`.
   - Result: preflight passed on active child worktree at `ff66d87`.
-- [ ] Commit this stage plan on the active child branch.
-- [ ] Create external worker worktree from the active child branch if
+- [x] Commit this stage plan on the active child branch.
+  - Commit: `20f0c41` (`Plan gateway runtime wiring boundary`).
+- [x] Create external worker worktree from the active child branch if
       implementation is delegated.
-- [ ] Worker or main thread writes failing boundary tests and records RED output.
-- [ ] Implement `gateway/runtime_wiring.py` and replace inline boot wiring with
+  - Worker worktree: `../opensquilla-refactor-agent-gateway-runtime`.
+- [x] Worker or main thread writes failing boundary tests and records RED output.
+  - RED command:
+    `uv run --extra dev pytest tests/test_gateway/test_runtime_wiring_boundary.py tests/test_gateway/test_router_boot.py::test_start_gateway_server_shares_diagnostics_state_between_app_and_turn_runner tests/test_gateway/test_router_boot.py::test_start_gateway_server_schedules_router_preload_after_channels tests/test_gateway/test_task_runtime_streaming_boundary.py -q`
+  - Expected failures observed: `runtime_wiring.py` missing, boot missing
+    `build_gateway_runtime_wiring` delegation, and import of
+    `opensquilla.gateway.runtime_wiring` failed.
+- [x] Implement `gateway/runtime_wiring.py` and replace inline boot wiring with
       a short delegator.
-- [ ] Review diff and verify no public behavior changed.
-- [ ] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
+- [x] Review diff and verify no public behavior changed.
+  - Worker commit: `153d710` (`refactor: extract gateway runtime wiring`).
+  - Main-thread hygiene fix commit: `972f278` (`Fix session runtime stage path
+    hygiene`).
+  - Worker merge commit: `3bcbcdd` (`Merge gateway runtime wiring worker`).
+  - Main-thread cleanup commit: `0e6495f` (`Polish gateway runtime wiring
+    boundary`).
+- [x] Run focused green command and touched-file checks.
+  - Focused GREEN: `28 passed in 4.65s`.
+  - Touched-file `ruff check`: passed.
+  - `uv run --extra dev mypy src/opensquilla/gateway --show-error-codes`:
+    no issues in 90 source files; existing pyproject unused-section notes only.
+  - `git diff --check`: passed.
+  - Public-release hygiene retest for the prior stage path fix:
+    `1 passed in 0.42s`.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
+  - Result: ruff passed; mypy no issues in 547 source files; whitespace passed;
+    pytest `2638 passed, 8 skipped, 2 warnings in 52.06s`; gateway smoke
+    start/status/stop/status passed.
 - [ ] Commit child verification/stage record update with:
 
 ```text
@@ -239,11 +262,32 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Worker commit:
+- Worker commit: `153d710` (`refactor: extract gateway runtime wiring`).
+- Active child support commits:
+  - `972f278` (`Fix session runtime stage path hygiene`)
+  - `3bcbcdd` (`Merge gateway runtime wiring worker`)
+  - `0e6495f` (`Polish gateway runtime wiring boundary`)
 - Child verification commit:
 - Integration merge:
 - Integration record:
 - Verification evidence:
+- Worker RED/GREEN evidence recorded above.
+- Worker focused GREEN: `28 passed in 0.85s`.
+- Worker touched-file checks passed.
+- Worker full gate reached full pytest and failed only on pre-existing public
+  release hygiene in the prior stage record.
+- Main-thread public-release hygiene retest after path cleanup: `1 passed in
+  0.42s`.
+- Main-thread focused GREEN: `28 passed in 4.65s`.
+- Main-thread touched-file checks: ruff passed; mypy no issues in 90 gateway
+  source files; `git diff --check` passed.
+- Active child `scripts/refactor_gate.sh`: ruff passed; mypy no issues in 547
+  source files; whitespace passed; pytest `2638 passed, 8 skipped, 2
+  warnings`; gateway smoke passed.
 - Cleanup evidence:
-- Residual risk:
-- Next recommended slice:
+- Residual risk: low; the stage moves runtime wiring behind a Gateway boundary
+  while preserving boot behavior through focused start-gateway tests and the
+  full refactor gate.
+- Next recommended slice: channel manager boot/wiring extraction is a natural
+  follow-up, but it also converges on `start_gateway_server`; keep it
+  single-worker unless a scout finds a disjoint file-only subdomain.
