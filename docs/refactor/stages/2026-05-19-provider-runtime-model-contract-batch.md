@@ -302,14 +302,18 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 
 ### Task 7: Integration Branch Merge and Cleanup
 
-- [ ] Merge child into integration with `git merge --no-ff codex/refactor-provider-runtime-model-contract-batch`.
-- [ ] Run full integration `scripts/refactor_gate.sh`.
-- [ ] Update this completion record with worker commits, child hash, integration hash, verification output, residual risk, and next recommended slice.
-- [ ] Commit the stage record update on integration with the required co-author trailer.
-- [ ] Remove `../opensquilla-refactor-active`.
-- [ ] Remove worker worktrees created for this batch.
-- [ ] Run `git worktree prune`.
-- [ ] Verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
+- [x] Merge child into integration with `git merge --no-ff codex/refactor-provider-runtime-model-contract-batch`.
+  - Integration merge commit: `cf69a6b`.
+- [x] Run full integration `scripts/refactor_gate.sh`.
+  - Result: ruff passed; mypy passed; whitespace passed; pytest `2534 passed, 6 skipped, 2 warnings in 27.04s`; gateway smoke start/status/stop passed; refactor gate complete.
+- [x] Update this completion record with worker commits, child hash, integration hash, verification output, residual risk, and next recommended slice.
+- [x] Commit the stage record update on integration with the required co-author trailer.
+- [x] Remove `../opensquilla-refactor-active`.
+- [x] Remove worker worktrees created for this batch.
+- [x] Run `git worktree prune`.
+- [x] Verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
+  - `git worktree list` no longer lists the active child or provider worker worktrees.
+  - `ls -d ../opensquilla-refactor-*` lists only `../opensquilla-refactor-integration`.
 
 ## Child Gate
 
@@ -346,12 +350,15 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
   - `b0665d1` Merge provider catalog assembly boundary batch.
   - `c66292e` Merge provider CLI workflows boundary batch.
 - Integration merge:
+  - `cf69a6b` Merge provider runtime model contract batch.
 - Verification evidence:
   - Baseline focused provider suite: `129 passed in 5.20s`.
   - Post-worker focused provider suite: `134 passed in 1.73s`.
   - Touched-file Ruff: `All checks passed!`.
   - Child `git diff --check`: passed.
   - Child full `scripts/refactor_gate.sh`: ruff passed; mypy passed; whitespace passed; pytest `2532 passed, 8 skipped, 2 warnings in 56.61s`; gateway smoke passed.
+  - Integration full `scripts/refactor_gate.sh`: ruff passed; mypy passed; whitespace passed; pytest `2534 passed, 6 skipped, 2 warnings in 27.04s`; gateway smoke passed.
+  - Cleanup: temporary active and worker worktrees removed and pruned; only `../opensquilla-refactor-integration` remains among refactor worktrees.
 - Residual risk:
   - Provider behavior verification is covered by unit/AST/CLI/static contract tests and gateway smoke; live provider network calls remain skipped by default.
   - Gateway provider RPC facade production code did not need a main-thread edit in this batch, so facade compatibility depends on existing wrapper coverage.
