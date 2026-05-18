@@ -76,13 +76,13 @@ same boot function and create avoidable conflicts.
 - `superpowers:writing-plans`:
   - Evidence: wrote this stage record before production edits.
 - `superpowers:test-driven-development`:
-  - Evidence: this stage requires RED boundary tests before adding
-    `gateway/app_server_wiring.py` or changing `boot.py`.
+  - Evidence: worker wrote `tests/test_gateway/test_app_server_wiring_boundary.py`
+    before production edits and observed the required RED failures.
 - `superpowers:verification-before-completion`:
-  - Evidence: focused tests, touched-file checks, child
-    `scripts/refactor_gate.sh`, integration `scripts/refactor_gate.sh`, merge
-    records, and cleanup evidence are required before claiming this stage
-    complete.
+  - Evidence: worker ran focused GREEN tests and touched-file checks after
+    implementation; child `scripts/refactor_gate.sh`, integration
+    `scripts/refactor_gate.sh`, merge records, and cleanup evidence remain
+    required before claiming the overall stage complete.
 - Parallelism decision:
   - `superpowers:dispatching-parallel-agents` used: yes for the decision.
     Implementation is intentionally single-worker because all production paths
@@ -142,6 +142,14 @@ same boot function and create avoidable conflicts.
 
 - Failing test command:
   - `uv run --extra dev pytest tests/test_gateway/test_app_server_wiring_boundary.py tests/test_gateway/test_router_boot.py::test_start_gateway_server_schedules_router_preload_after_channels tests/test_gateway/test_readiness.py -q`
+- RED output:
+  - Exit code: 1
+  - Summary: `3 failed, 3 passed in 2.98s`
+  - Failures:
+    - `AssertionError: assert 'build_gateway_app_server' in {...}` in
+      `test_boot_delegates_app_server_wiring_to_gateway_boundary`
+    - `ModuleNotFoundError: No module named 'opensquilla.gateway.app_server_wiring'`
+      in both app-server wiring behavior tests.
 - Expected red failure:
   - `src/opensquilla/gateway/app_server_wiring.py` does not exist, or AST
     boundary tests show `start_gateway_server` still directly calls
@@ -163,10 +171,26 @@ same boot function and create avoidable conflicts.
     flip, and return in `boot.py`.
 - Focused green command:
   - `uv run --extra dev pytest tests/test_gateway/test_app_server_wiring_boundary.py tests/test_gateway/test_router_boot.py::test_start_gateway_server_schedules_router_preload_after_channels tests/test_gateway/test_router_boot.py::test_start_gateway_server_shares_diagnostics_state_between_app_and_turn_runner tests/test_gateway/test_readiness.py -q`
+- GREEN output:
+  - Exit code: 0
+  - Summary: `7 passed in 0.51s`
 - Additional touched-file checks:
   - `uv run --extra dev ruff check src/opensquilla/gateway/boot.py src/opensquilla/gateway/app_server_wiring.py tests/test_gateway/test_app_server_wiring_boundary.py`
   - `uv run --extra dev mypy src/opensquilla/gateway --show-error-codes`
   - `git diff --check`
+- Touched-file check output:
+  - Ruff exit code: 0; `All checks passed!`
+  - Mypy exit code: 0; `Success: no issues found in 93 source files`
+  - `git diff --check` exit code: 0; no output.
+- Full child gate command:
+  - `scripts/refactor_gate.sh`
+- Full child gate output:
+  - Exit code: 0
+  - Ruff: `All checks passed!`
+  - Mypy: `Success: no issues found in 550 source files`
+  - Pytest: `2657 passed, 8 skipped, 2 warnings in 54.23s`
+  - Gateway smoke: start/status/stop/status all returned `{"ok": true, ...}`.
+  - Final line: `Refactor gate complete.`
 
 ## Files
 
@@ -186,13 +210,13 @@ same boot function and create avoidable conflicts.
 - [ ] Run `scripts/refactor_preflight.sh --allow-dirty`.
 - [ ] Commit this stage plan on the active child branch.
 - [ ] Create external worker worktree from the active child branch.
-- [ ] Worker writes failing boundary tests and records RED output.
-- [ ] Worker implements `gateway/app_server_wiring.py` and replaces the inline
+- [x] Worker writes failing boundary tests and records RED output.
+- [x] Worker implements `gateway/app_server_wiring.py` and replaces the inline
       app/server wiring block with a short delegator call.
 - [ ] Main thread reviews diff for behavior compatibility and boundary scope.
-- [ ] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
-- [ ] Commit child verification/stage record update with:
+- [x] Run focused green command and touched-file checks.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
+- [x] Commit child verification/stage record update with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
@@ -233,12 +257,15 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Worker commit:
+- Worker commit: this worker implementation commit; hash reported in worker
+  final response.
 - Active child support commits:
 - Child verification commit:
 - Integration merge:
 - Integration record:
-- Verification evidence:
-- Cleanup evidence:
-- Residual risk:
+- Verification evidence: worker RED/GREEN/touched-file checks and full child
+  gate recorded above.
+- Cleanup evidence: pending main-thread merge and worktree cleanup.
+- Residual risk: low; boot still owns channel startup, router preload
+  scheduling, and the final readiness flip after delegating app/server wiring.
 - Next recommended slice:
