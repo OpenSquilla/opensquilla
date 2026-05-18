@@ -209,62 +209,90 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
   - Observed: same-thread read-only probe started successfully.
 - [x] Create fixed active worktree on `codex/refactor-runtime-stream-delivery-boundary-batch`.
 - [x] Write this stage plan before implementation.
-- [ ] Commit this stage plan as the worker base.
-- [ ] Launch three same-thread workers with explicit ownership:
+- [x] Commit this stage plan as the worker base.
+  - Commit: `02227c0` (`Plan runtime stream delivery boundary batch`).
+- [x] Launch three worker slices with explicit ownership:
   - `runtime-stream`
   - `session-delivery`
   - `webui-terminal`
+  - Same-thread `runtime-stream` worker: `019e3cf9-4b55-7e52-8618-70f2359e502c`.
+  - Same-thread `session-delivery` worker: `019e3cf9-4c82-76a3-b03e-8dad80e4064a`.
+  - Same-thread `webui-terminal` worker hit `agent thread limit reached`, so this slice used `scripts/refactor_external_agent.sh --slot webui-terminal --branch codex/refactor-webui-terminal-boundary --base 02227c0`.
 
 ### Task 2: Worker `runtime-stream`
 
-- [ ] Write RED tests in `tests/test_gateway/test_task_runtime_streaming_boundary.py`.
+- [x] Write RED tests in `tests/test_gateway/test_task_runtime_streaming_boundary.py`.
   - Import `emit_task_runtime_stream_events` from `opensquilla.gateway.task_runtime_streaming`.
   - Assert `boot._emit_task_runtime_stream_events` is the imported compatibility alias or a short delegator.
   - Assert stream `ErrorEvent(code="iteration_timeout")` emits the existing terminal payload and raises raw `RuntimeError`.
   - Assert `stream_event_sink` is called and sink failures do not block event emission.
-- [ ] Run `uv run --extra dev pytest tests/test_gateway/test_task_runtime_streaming_boundary.py -q` and confirm the expected missing-module or ownership failure.
-- [ ] Move `_emit_task_runtime_stream_events` implementation to `task_runtime_streaming.emit_task_runtime_stream_events`.
-- [ ] Keep `boot._emit_task_runtime_stream_events` compatible.
-- [ ] Run focused worker checks:
+- [x] Run `uv run --extra dev pytest tests/test_gateway/test_task_runtime_streaming_boundary.py -q` and confirm the expected missing-module or ownership failure.
+  - RED: `4 failed`, all from `ModuleNotFoundError: No module named 'opensquilla.gateway.task_runtime_streaming'`.
+- [x] Move `_emit_task_runtime_stream_events` implementation to `task_runtime_streaming.emit_task_runtime_stream_events`.
+- [x] Keep `boot._emit_task_runtime_stream_events` compatible.
+- [x] Run focused worker checks:
   - `uv run --extra dev pytest tests/test_gateway/test_task_runtime_streaming_boundary.py tests/test_gateway/test_task_runtime_terminal_message.py -q`
   - touched-file `ruff check`
-- [ ] Commit with the required trailer.
+  - GREEN: `9 passed in 0.55s`.
+  - Ruff: `All checks passed!`.
+  - `git diff --check && git diff --cached --check`: passed with no output.
+- [x] Commit with the required trailer.
+  - Commit: `2092b89` (`Extract task runtime stream emission`).
 
 ### Task 3: Worker `session-delivery`
 
-- [ ] Write RED tests in `tests/test_gateway/test_session_event_delivery_boundary.py`.
+- [x] Write RED tests in `tests/test_gateway/test_session_event_delivery_boundary.py`.
   - Assert new `buffer_session_event` helper records only `session.event.*` with `session_key` and `stream_seq`.
   - Assert shared delivery sends `session.event.*` to message subscribers and buffers payload.
   - Assert `sessions.changed` also reaches session subscribers and still receives epoch when called through RPC path.
   - Assert `EventBridge.emit` delegates to the shared delivery helper rather than directly calling `get_session_streams().record`.
-- [ ] Run `uv run --extra dev pytest tests/test_gateway/test_session_event_delivery_boundary.py -q` and confirm the expected missing-module or ownership failure.
-- [ ] Move shared buffering/subscriber routing to `session_event_delivery.py`.
-- [ ] Update `rpc_session_events.py`, `event_bridge.py`, and boot inline session emitter to delegate to the shared helper while preserving epoch behavior.
-- [ ] Run focused worker checks:
+- [x] Run `uv run --extra dev pytest tests/test_gateway/test_session_event_delivery_boundary.py -q` and confirm the expected missing-module or ownership failure.
+  - RED: expected `ModuleNotFoundError: No module named 'opensquilla.gateway.session_event_delivery'`.
+- [x] Move shared buffering/subscriber routing to `session_event_delivery.py`.
+- [x] Update `rpc_session_events.py`, `event_bridge.py`, and boot inline session emitter to delegate to the shared helper while preserving epoch behavior.
+- [x] Run focused worker checks:
   - `uv run --extra dev pytest tests/test_gateway/test_session_event_delivery_boundary.py tests/test_gateway/test_rpc_session_events.py tests/test_gateway/test_session_streams.py tests/test_session/test_session_rpc_payload.py -q`
   - touched-file `ruff check`
-- [ ] Commit with the required trailer.
+  - GREEN: `43 passed`.
+  - Ruff: passed.
+  - `git diff --check`: passed.
+- [x] Commit with the required trailer.
+  - Commit: `e4989e5` (`Refactor session event delivery boundary`).
 
 ### Task 4: Worker `webui-terminal`
 
-- [ ] Write or tighten RED static tests in `tests/test_gateway/test_chat_view_static.py`.
+- [x] Write or tighten RED static tests in `tests/test_gateway/test_chat_view_static.py`.
   - Assert task-terminal mapping remains centralized in `_CHAT_VIEW_STATE.taskTerminalAsSessionEvent`.
   - Assert visible terminal fallback strings are isolated in `_CHAT_VIEW_STATE.terminalMessages`/`taskTerminalMessage`, not duplicated in task event handlers.
   - Assert `payload?.terminal_message` remains preferred.
-- [ ] Run `uv run --extra dev pytest tests/test_gateway/test_chat_view_static.py -q` and confirm the expected failure.
-- [ ] Adjust `chat.js` only if needed to centralize mapping/fallback behavior without changing public event handling.
-- [ ] Run focused worker checks:
+- [x] Run `uv run --extra dev pytest tests/test_gateway/test_chat_view_static.py -q` and confirm the expected failure.
+  - RED: `1 failed, 44 passed`; `_CHAT_VIEW_STATE.taskTerminalAsSessionEvent` was not yet using the centralized terminal status helper.
+- [x] Adjust `chat.js` only if needed to centralize mapping/fallback behavior without changing public event handling.
+- [x] Run focused worker checks:
   - `uv run --extra dev pytest tests/test_gateway/test_chat_view_static.py -q`
   - touched-file `ruff check tests/test_gateway/test_chat_view_static.py`
-- [ ] Commit with the required trailer.
+  - GREEN: `45 passed`.
+  - Ruff: `All checks passed!`.
+  - `git diff --check`: passed.
+  - Worker also ran `scripts/refactor_gate.sh`: `2591 passed, 8 skipped`.
+- [x] Commit with the required trailer.
+  - Commit: `e0d8504` (`test: tighten webui task terminal mapping`).
 
 ### Task 5: Main-Thread Integration Review
 
-- [ ] Collect worker results and inspect diffs before trusting summaries.
-- [ ] Merge worker changes into `../opensquilla-refactor-active`, resolving shared `boot.py` conflicts manually.
-- [ ] Run focused green command.
-- [ ] Run additional touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in child.
+- [x] Collect worker results and inspect diffs before trusting summaries.
+- [x] Merge worker changes into `../opensquilla-refactor-active`, resolving shared `boot.py` conflicts manually.
+  - Same-thread worker commits landed linearly on active child.
+  - External webui worker merged with `db5209c` (`Merge webui terminal boundary worker`).
+- [x] Run focused green command.
+  - `uv run --extra dev pytest tests/test_gateway/test_task_runtime_streaming_boundary.py tests/test_gateway/test_session_event_delivery_boundary.py tests/test_gateway/test_task_runtime_terminal_message.py tests/test_gateway/test_rpc_session_events.py tests/test_gateway/test_session_streams.py tests/test_gateway/test_chat_view_static.py tests/test_session/test_session_rpc_payload.py -q`
+  - Result: `97 passed in 0.57s`.
+- [x] Run additional touched-file checks.
+  - Touched-file ruff: `All checks passed!`.
+  - `uv run --extra dev mypy src/opensquilla --show-error-codes`: `Success: no issues found in 539 source files` with existing untyped-function notes.
+  - `git diff --check`: passed with no output.
+- [x] Run `scripts/refactor_gate.sh` in child.
+  - Result: `2599 passed, 8 skipped, 2 warnings`; gateway smoke start/status/stop/status passed.
 - [ ] Commit child verification/stage record.
 - [ ] Merge child into integration with `git merge --no-ff`.
 - [ ] Run `scripts/refactor_gate.sh` in integration.
@@ -297,9 +325,17 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 
 - Child commit:
 - Worker commits:
+  - `2092b89` (`Extract task runtime stream emission`)
+  - `e4989e5` (`Refactor session event delivery boundary`)
+  - `e0d8504` (`test: tighten webui task terminal mapping`)
+  - `db5209c` (`Merge webui terminal boundary worker`)
 - Integration merge:
 - Verification evidence:
+  - Focused batch: `97 passed in 0.57s`.
+  - Touched-file ruff: `All checks passed!`.
+  - Mypy: `Success: no issues found in 539 source files` with existing notes.
+  - `git diff --check`: passed with no output.
+  - Child `scripts/refactor_gate.sh`: `2599 passed, 8 skipped, 2 warnings`; gateway smoke passed.
 - Cleanup evidence:
-- Residual risk:
-- Next recommended slice:
-
+- Residual risk: boot cron-result manual delivery still has a small duplicated subscriber loop; leave it for a later boot wiring/service cleanup to avoid broadening this stream boundary.
+- Next recommended slice: task runtime execution/shutdown lifecycle boundary, covering `_execute`, `shutdown`, and terminal state mutation helpers after this stream/session delivery layer is separate.
