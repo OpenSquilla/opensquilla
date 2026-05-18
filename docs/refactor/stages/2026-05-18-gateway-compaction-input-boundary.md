@@ -137,9 +137,9 @@ Extract duplicated gateway compaction input/provider normalization from `rpc_ses
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -165,8 +165,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `c3f177e` (`Move gateway compaction inputs behind boundary`)
+- Integration merge: `c717354` (`Merge branch 'codex/refactor-gateway-compaction-input-boundary' into codex/refactor-architecture`)
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-gateway-compaction-input-boundary` passed on branch `codex/refactor-gateway-compaction-input-boundary` at `06c7ccb`.
   - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py::TestSessionsContextCompact::test_gateway_context_compact_delegates_inputs_to_gateway_boundary tests/test_gateway/test_context_overflow.py::test_rpc_chat_auto_summarize_delegates_compaction_inputs_to_gateway_boundary -q` failed as expected because `rpc_compaction_inputs.py` did not exist; `2 failed in 4.70s`.
@@ -175,6 +175,8 @@ Co-authored-by: Codex <noreply@openai.com>
   - Mypy fix check: `uv run --extra dev mypy src/opensquilla --show-error-codes` passed after narrowing the provider resolver return type; `Success: no issues found in 482 source files`.
   - Touched tests after mypy fix: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py::TestSessionsContextCompact tests/test_gateway/test_context_overflow.py -q` passed; `20 passed in 0.71s`.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 482 source files; whitespace passed; pytest passed with `2392 passed, 8 skipped, 2 warnings in 61.97s`; gateway smoke start/status/stop passed on `127.0.0.1:55284`.
+  - Integration merge: `git merge --no-ff codex/refactor-gateway-compaction-input-boundary` produced merge commit `c717354` on top of `d229056`, preserving the concurrently merged `rpc_session_turn_runtime.py` boundary.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 483 source files; whitespace passed; pytest passed with `2395 passed, 6 skipped, 2 warnings in 30.25s`; gateway smoke start/status/stop passed on `127.0.0.1:55688`.
 - Residual risk:
   - Low. The new boundary centralizes duplicated provider/model/config construction while keeping `rpc_sessions.py` compatibility wrappers for private helper names and preserving existing behavioral tests for session context compaction and WebChat AUTO_SUMMARIZE.
 - Next recommended slice:
