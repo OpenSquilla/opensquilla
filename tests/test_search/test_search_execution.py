@@ -4,12 +4,14 @@ import pytest
 
 from opensquilla.search.execution import (
     run_search_payload,
-    search_provider_payload,
-    search_query_rpc_payload,
     search_runtime_status,
-    search_status_rpc_payload,
 )
 from opensquilla.search.registry import register_provider
+from opensquilla.search.rpc_payload import (
+    search_provider_payload,
+    search_query_rpc_payload,
+    search_status_rpc_payload,
+)
 from opensquilla.search.types import SearchProviderError, SearchProviderSpec, SearchResult
 from opensquilla.tools.builtin.web import configure_search, run_web_search_payload
 

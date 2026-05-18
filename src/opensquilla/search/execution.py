@@ -31,8 +31,7 @@ def _format_search_error(provider_name: str, exc: Exception) -> tuple[str, str]:
 
 
 def _ensure_builtin_search_providers() -> None:
-    import opensquilla.search.providers.brave  # noqa: F401
-    import opensquilla.search.providers.duckduckgo  # noqa: F401
+    search_runtime.ensure_builtin_search_providers()
 
 
 def _search_provider_kwargs(provider_name: str) -> dict[str, object]:
@@ -228,13 +227,6 @@ def _search_payload(
     if attempts is not None:
         payload["attempts"] = attempts
     return payload
-
-
-from opensquilla.search.rpc_payload import (  # noqa: E402
-    search_provider_payload,  # noqa: F401
-    search_query_rpc_payload,  # noqa: F401
-    search_status_rpc_payload,  # noqa: F401
-)
 
 
 def _search_error_payload(
