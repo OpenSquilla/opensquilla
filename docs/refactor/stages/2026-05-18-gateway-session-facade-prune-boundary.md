@@ -122,15 +122,15 @@ Remove compatibility-only private helper aliases from `rpc_sessions.py` after th
 - [x] Implement the behavior-compatible facade prune.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove the active child worktree after the integration record is committed.
 
 ## Child Gate
@@ -153,11 +153,12 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Integration Gate
 
-- `uv run --extra dev ruff check src tests`
-- `uv run --extra dev mypy src/opensquilla --show-error-codes`
-- `git diff --check HEAD^ HEAD`
-- `uv run --extra dev pytest`
-- gateway smoke through `scripts/refactor_gate.sh`
+- Integration preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-architecture`
+  - Result: passed on branch `codex/refactor-architecture` at `1d9e61e`.
+- Integration merge: `git merge --no-ff codex/refactor-gateway-session-facade-prune`
+  - Result: merge commit `da123c4`.
+- Full integration gate: `scripts/refactor_gate.sh`
+  - Result: ruff passed; mypy passed; whitespace passed; pytest `2422 passed, 6 skipped, 2 warnings in 28.61s`; gateway smoke passed on port `60283`; `Refactor gate complete.`
 
 ## Rollback
 
@@ -167,8 +168,21 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `f3f8a8f`
+- Integration merge: `da123c4`
 - Verification evidence:
+  - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-gateway-session-facade-prune` passed on branch `codex/refactor-gateway-session-facade-prune` at `1d9e61e`.
+  - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_session_facade_prune_boundary.py tests/test_gateway/test_rpc_sessions_attachments.py tests/test_gateway/test_uploads_endpoint.py tests/test_session/test_epoch_migration.py::test_epoch_in_event_payload tests/test_session/test_epoch_production_path.py::test_emit_no_db_query_per_event tests/test_gateway/test_rpc_session_management_boundary.py -q` failed as expected with `1 failed, 45 passed in 4.50s`.
+  - Focused green: same command passed with `46 passed in 0.80s`.
+  - Reset drain regression check: `uv run --extra dev pytest tests/test_gateway/test_force_reset_drain.py tests/test_gateway/test_rpc_session_facade_prune_boundary.py tests/test_gateway/test_rpc_session_lifecycle_boundary.py tests/test_gateway/test_rpc_sessions.py::TestSessionsReset -q` passed with `13 passed in 0.49s`.
+  - Touched ruff: `uv run --extra dev ruff check src/opensquilla/gateway/rpc_sessions.py src/opensquilla/session/manager.py tests/test_gateway/test_force_reset_drain.py tests/test_gateway/test_rpc_session_facade_prune_boundary.py tests/test_gateway/test_rpc_session_management_boundary.py tests/test_gateway/test_rpc_sessions_attachments.py tests/test_gateway/test_uploads_endpoint.py tests/test_session/test_epoch_migration.py tests/test_session/test_epoch_production_path.py` passed.
+  - Whitespace: `git diff --check` passed.
+  - Broader gateway/session/epoch check: `uv run --extra dev pytest tests/test_gateway/test_force_reset_drain.py tests/test_gateway/test_rpc_sessions.py tests/test_gateway/test_rpc_session_facade_prune_boundary.py tests/test_gateway/test_rpc_session_events.py tests/test_gateway/test_rpc_session_lifecycle_boundary.py tests/test_gateway/test_rpc_session_management_boundary.py tests/test_gateway/test_rpc_session_read_queries_boundary.py tests/test_gateway/test_rpc_session_send_boundary.py tests/test_gateway/test_rpc_session_services.py tests/test_gateway/test_rpc_sessions_attachments.py tests/test_gateway/test_uploads_endpoint.py tests/test_gateway/test_rpc_public_surface_baseline.py tests/test_session/test_epoch_migration.py tests/test_session/test_epoch_production_path.py -q` passed with `156 passed in 1.36s`.
+  - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 494 source files; whitespace passed; pytest `2420 passed, 8 skipped, 2 warnings in 26.34s`; gateway smoke start/status/stop passed on `127.0.0.1:59871`.
+  - Integration preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `1d9e61e`.
+  - Integration merge: `git merge --no-ff codex/refactor-gateway-session-facade-prune` produced merge commit `da123c4`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 494 source files; whitespace passed; pytest `2422 passed, 6 skipped, 2 warnings in 28.61s`; gateway smoke start/status/stop passed on `127.0.0.1:60283`.
 - Residual risk:
+  - Low. The slice removes private compatibility aliases and redirects tests to owning boundary modules while preserving public RPC method registration and full integration behavior.
 - Next recommended slice:
+  - Continue with larger module-level slices using one active child worktree at a time. Good candidates: Provider runtime/config facade consolidation or a Web UI access module consolidation, with child worktree cleanup immediately after the integration record.
