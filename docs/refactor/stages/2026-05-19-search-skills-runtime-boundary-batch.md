@@ -306,16 +306,16 @@ do not revert unrelated changes, and stop rather than editing outside ownership.
 - [x] Run combined focused GREEN.
 - [x] Run touched-file Ruff, mypy, and `git diff --check`.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
+- [x] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
 
@@ -342,6 +342,20 @@ Co-authored-by: Codex <noreply@openai.com>
 - `git diff --check HEAD^ HEAD`
 - `uv run --extra dev pytest`
 - gateway smoke through `scripts/refactor_gate.sh`
+- Result after merge `e71fdfb`: passed.
+  - Ruff: passed.
+  - Mypy: `Success: no issues found in 531 source files`.
+  - Whitespace: clean.
+  - Pytest: `2561 passed, 6 skipped, 2 warnings`.
+  - Gateway smoke: start/status/stop/status passed on `127.0.0.1:64683`.
+
+## Cleanup audit
+
+- Removed fixed child worktree `../opensquilla-refactor-active`.
+- Ran `git worktree prune`.
+- Verified `git worktree list --porcelain` no longer lists
+  `../opensquilla-refactor-active`; only `../opensquilla-refactor-integration`
+  remains for this refactor line.
 
 ## Rollback
 
@@ -354,12 +368,15 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Child commit:
-  - Pending stage-record commit after this update.
+  - `c17361e` (`codex/refactor-search-skills-runtime-boundary-batch`).
 - Integration merge:
+  - `e71fdfb` (`Merge search skills runtime boundary batch`).
 - Verification evidence:
   - Child focused: `77 passed`.
   - Child touched-file Ruff/mypy/diff-check: passed.
   - Child `scripts/refactor_gate.sh`: passed with `2559 passed, 8 skipped`.
+  - Integration `scripts/refactor_gate.sh`: passed with `2561 passed, 6 skipped`.
+  - Cleanup audit: passed.
 - Residual risk:
   - Memory runtime/flush orchestration is intentionally left for a later batch
     because it touches gateway boot plus engine/session lifecycle hot paths.
