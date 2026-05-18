@@ -248,16 +248,16 @@ new `tools`/`gateway` cycles.
 - [x] Run the combined focused GREEN command.
 - [x] Run touched-file Ruff, mypy, and `git diff --check`.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
+- [x] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
 
@@ -279,10 +279,17 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Integration gate
 
 - `uv run --extra dev ruff check src tests`
+  - Result: `All checks passed!`
 - `uv run --extra dev mypy src/opensquilla --show-error-codes`
+  - Result: `Success: no issues found in 530 source files`.
 - `git diff --check HEAD^ HEAD`
+  - Result: clean through `scripts/refactor_gate.sh` whitespace step.
 - `uv run --extra dev pytest`
+  - Result: `2552 passed, 6 skipped, 2 warnings in 28.17s`.
 - gateway smoke through `scripts/refactor_gate.sh`
+  - Result: gateway smoke started on `127.0.0.1:62812`, reported running,
+    stopped cleanly, and then reported `not_started`.
+  - Final result: `Refactor gate complete.`
 
 ## Rollback
 
@@ -294,8 +301,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `638830eca5c94edf97b13dc23675bcadebd0eb69`
+- Integration merge: `d0b79582038f3c139cdaadf7232cc86b807439f9`
 - Verification evidence:
   - Child focused closeout: `40 passed in 2.64s`.
   - Child touched-file Ruff: all checks passed.
@@ -304,11 +311,17 @@ Co-authored-by: Codex <noreply@openai.com>
   - Child `scripts/refactor_gate.sh`: ruff passed; mypy passed over 530
     source files; pytest `2550 passed, 8 skipped, 2 warnings`; gateway smoke
     passed.
+  - Integration `scripts/refactor_gate.sh`: ruff passed; mypy passed over 530
+    source files; pytest `2552 passed, 6 skipped, 2 warnings`; gateway smoke
+    passed.
+  - Cleanup: `git worktree remove /Users/cwan0785/opensquilla-refactor-active`
+    and `git worktree prune` completed; `git worktree list` no longer shows
+    `../opensquilla-refactor-active`.
 - Residual risk:
   - Same-thread `spawn_agent` remains capacity-bound; close completed agents
     before spawning more, and use `scripts/refactor_external_agent.sh` fixed
     worker worktrees if capacity cannot be released.
 - Next recommended slice:
-  - Continue with the next coarse module-family boundary only after this child
-    branch is merged into integration, the integration gate passes, and
-    `../opensquilla-refactor-active` is removed/pruned.
+  - Start the next coarse module-family boundary from the clean integration
+    branch, reusing `../opensquilla-refactor-active` only after the previous
+    worktree has been removed and pruned.
