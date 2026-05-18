@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable, Iterable
+
 import httpx
 import structlog
 
@@ -12,6 +15,9 @@ from .registry import UnknownProviderError, get_provider_spec
 from .types import ModelCapabilities, ModelInfo
 
 log = structlog.get_logger(__name__)
+
+PriceModelIds = list[str] | tuple[str, ...] | set[str]
+PriceRefresh = Callable[[PriceModelIds, str | None], None]
 
 DEFAULT_MAX_TOKENS = 8192
 DEFAULT_CONTEXT_WINDOW = 200_000
@@ -251,3 +257,39 @@ class ModelCatalog:
         if model_id in _STATIC_FALLBACK:
             return _STATIC_FALLBACK[model_id][1]
         return DEFAULT_CONTEXT_WINDOW
+
+
+async def refresh_openrouter_catalog_and_pricing(
+    model_catalog: ModelCatalog,
+    *,
+    api_key: str,
+    base_url: str,
+    proxy: str = "",
+    pricing_model_ids: Iterable[str] = (),
+    refresh_prices: PriceRefresh | None = None,
+    timeout: float = 5.0,
+) -> None:
+    """Best-effort OpenRouter catalog refresh plus optional live pricing refresh."""
+
+    try:
+        await asyncio.wait_for(
+            model_catalog.fetch_openrouter(api_key, base_url, proxy),
+            timeout=timeout,
+        )
+        log.info("build_services.model_catalog_ready", count=len(model_catalog))
+    except Exception as e:
+        log.warning("build_services.model_catalog_failed", error=str(e))
+
+    if refresh_prices is None:
+        return
+
+    pricing_models = {model_id for raw in pricing_model_ids if (model_id := str(raw))}
+    try:
+        await asyncio.to_thread(
+            refresh_prices,
+            pricing_models,
+            f"{base_url.rstrip('/')}/v1",
+        )
+        log.info("build_services.pricing_cache_ready", count=len(pricing_models))
+    except Exception as e:
+        log.warning("build_services.pricing_cache_failed", error=str(e))

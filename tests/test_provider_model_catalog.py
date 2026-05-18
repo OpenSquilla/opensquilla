@@ -4,7 +4,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from opensquilla.provider.model_catalog import ModelCatalog
+from opensquilla.provider.model_catalog import (
+    ModelCatalog,
+    refresh_openrouter_catalog_and_pricing,
+)
+
+
+class FakeRefreshCatalog:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.fetch_calls: list[tuple[str, str, str]] = []
+
+    def __len__(self) -> int:
+        return 7
+
+    async def fetch_openrouter(self, api_key: str, base_url: str, proxy: str = "") -> None:
+        self.fetch_calls.append((api_key, base_url, proxy))
+        if self.fail:
+            raise RuntimeError("catalog down")
 
 
 def test_deepseek_v4_direct_models_use_official_context_and_output_windows() -> None:
@@ -40,6 +57,45 @@ def test_direct_profile_static_fallbacks_cover_context_windows() -> None:
         max_tokens = catalog.resolve_max_tokens(model_id)
         assert max_tokens > 0
         assert max_tokens <= context_window
+
+
+@pytest.mark.asyncio
+async def test_refresh_openrouter_catalog_and_pricing_materializes_provider_catalog() -> None:
+    catalog = FakeRefreshCatalog()
+    pricing_calls: list[tuple[set[str], str]] = []
+
+    await refresh_openrouter_catalog_and_pricing(
+        catalog,  # type: ignore[arg-type]
+        api_key="test-key",
+        base_url="https://openrouter.ai/api",
+        proxy="socks5://127.0.0.1:7891",
+        pricing_model_ids=["openrouter/a", "openrouter/b", "openrouter/a"],
+        refresh_prices=lambda models, base_url: pricing_calls.append((set(models), base_url)),
+    )
+
+    assert catalog.fetch_calls == [
+        ("test-key", "https://openrouter.ai/api", "socks5://127.0.0.1:7891")
+    ]
+    assert pricing_calls == [
+        ({"openrouter/a", "openrouter/b"}, "https://openrouter.ai/api/v1")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_refresh_openrouter_catalog_and_pricing_keeps_pricing_best_effort() -> None:
+    catalog = FakeRefreshCatalog(fail=True)
+    pricing_calls: list[tuple[set[str], str]] = []
+
+    await refresh_openrouter_catalog_and_pricing(
+        catalog,  # type: ignore[arg-type]
+        api_key="test-key",
+        base_url="https://openrouter.ai/api/",
+        pricing_model_ids=["openrouter/a"],
+        refresh_prices=lambda models, base_url: pricing_calls.append((set(models), base_url)),
+    )
+
+    assert catalog.fetch_calls == [("test-key", "https://openrouter.ai/api/", "")]
+    assert pricing_calls == [({"openrouter/a"}, "https://openrouter.ai/api/v1")]
 
 
 @pytest.mark.asyncio

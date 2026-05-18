@@ -64,12 +64,17 @@ def test_provider_bootstrap_delegates_to_runtime_assembly_boundary() -> None:
     assert {
         "build_provider_runtime_services",
         "normalize_provider_base_url",
-        "_refresh_openrouter_catalog_and_pricing",
+        "_openrouter_pricing_model_ids",
     } <= assembly_functions
+    assert "_refresh_openrouter_catalog_and_pricing" not in assembly_functions
     assert "ProviderRuntimeServices" in assembly_classes
     assert {
         ("opensquilla.gateway.provider_runtime_sync", "sync_image_generation"),
         ("opensquilla.provider.model_catalog", "ModelCatalog"),
+        (
+            "opensquilla.provider.model_catalog",
+            "refresh_openrouter_catalog_and_pricing",
+        ),
         (
             "opensquilla.provider.selector_materialization",
             "build_provider_selector_from_runtime",
@@ -114,3 +119,74 @@ async def test_provider_runtime_assembly_preserves_selector_and_image_runtime_st
         assert current_image_generation_config() is config.image_generation
     finally:
         configure_image_generation(None)
+
+
+@pytest.mark.asyncio
+async def test_provider_runtime_assembly_delegates_catalog_refresh_to_provider_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opensquilla.gateway import provider_runtime_assembly
+    from opensquilla.gateway.config import GatewayConfig
+    from opensquilla.gateway.provider_runtime_assembly import (
+        build_provider_runtime_services,
+    )
+
+    captured: dict[str, object] = {}
+
+    async def fake_refresh(
+        model_catalog,
+        *,
+        api_key: str,
+        base_url: str,
+        proxy: str,
+        pricing_model_ids,
+        refresh_prices,
+    ) -> None:
+        captured["catalog"] = model_catalog
+        captured["api_key"] = api_key
+        captured["base_url"] = base_url
+        captured["proxy"] = proxy
+        captured["pricing_model_ids"] = set(pricing_model_ids)
+        captured["refresh_prices"] = refresh_prices
+
+    def fake_refresh_live_prices(models, base_url: str) -> None:
+        captured["live_price_models"] = set(models)
+        captured["live_price_base_url"] = base_url
+
+    monkeypatch.setattr(
+        provider_runtime_assembly,
+        "refresh_openrouter_catalog_and_pricing",
+        fake_refresh,
+    )
+    monkeypatch.setattr(
+        provider_runtime_assembly,
+        "refresh_live_prices",
+        fake_refresh_live_prices,
+    )
+
+    config = GatewayConfig(
+        llm={
+            "provider": "openrouter",
+            "model": "openrouter/active",
+            "api_key": "llm-key",
+            "base_url": "https://openrouter.example/api/v1",
+        },
+        squilla_router={
+            "tiers": {
+                "fast": {"model": "openrouter/fast"},
+                "missing": {},
+            }
+        },
+    )
+
+    services = await build_provider_runtime_services(config, provider_selector=object())
+
+    assert captured["catalog"] is services.model_catalog
+    assert captured["api_key"] == "llm-key"
+    assert captured["base_url"] == "https://openrouter.example/api"
+    assert captured["proxy"] == ""
+    assert captured["pricing_model_ids"] == {
+        "openrouter/active",
+        "openrouter/fast",
+    }
+    assert captured["refresh_prices"] is fake_refresh_live_prices
