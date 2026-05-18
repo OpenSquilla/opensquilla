@@ -177,9 +177,9 @@ Separate reusable session-management services from Gateway helper modules withou
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active`, run `git worktree prune`, and verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
 
 ## Child gate
@@ -206,8 +206,9 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit: `5b4043c`.
-- Integration merge: Not performed by this external worker.
+- Child implementation commit: `5b4043c`.
+- Child head: `ebea51e`.
+- Integration merge: `443abcbce14e3a0f9156d1ba0d2ec95786aa2f71`.
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-session-management-batch` passed on branch `codex/refactor-session-management-batch` at `3d9837d`.
   - Red: `uv run --extra dev pytest tests/test_session/test_session_management_domain_services_boundary.py tests/test_gateway/test_session_management_service_boundary.py tests/test_gateway/test_rpc_session_management_boundary.py tests/test_gateway/test_rpc_session_services.py tests/test_gateway/test_rpc_session_send_boundary.py tests/test_gateway/test_rpc_sessions.py::TestSessionsCreate tests/test_gateway/test_rpc_sessions.py::TestSessionsPatch tests/test_gateway/test_rpc_sessions.py::TestSessionsSend::test_send_uses_agent_registry_model_when_session_model_missing -q` failed as expected with `4 failed, 26 passed in 4.39s`; failures showed missing `opensquilla.session.management_service`, missing `opensquilla.session.services`, and Gateway helper modules still owning implementations.
@@ -217,6 +218,7 @@ Co-authored-by: Codex <noreply@openai.com>
   - Whitespace: `git diff --check` passed.
   - Architecture correction: first full `scripts/refactor_gate.sh` run failed at `tests/test_ci/test_architecture_import_contracts.py::test_package_imports_do_not_add_new_edges` because `opensquilla.session.management_service` statically imported `opensquilla.gateway.rpc`, producing `session->gateway`; the service now uses structural typing and lazy exception lookup to avoid that package edge.
   - Full child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 514 source files; whitespace passed; pytest passed with `2466 passed, 8 skipped, 2 warnings in 29.44s`; gateway smoke start/status/stop passed on port `58144`.
+  - Integration merge gate: `scripts/refactor_gate.sh` passed after merge `443abcb`; ruff passed; mypy passed with no issues in 514 source files; whitespace passed; pytest passed with `2471 passed, 6 skipped, 2 warnings in 25.98s`; gateway smoke start/status/stop/status passed on `127.0.0.1:58521`.
 - Residual risk:
   - Low to medium. The public RPC behavior remains covered and compatibility import facades preserve old Gateway paths, but `opensquilla.session.management_service` still performs lazy lookup of Gateway RPC exception classes at raise sites to avoid a static package edge.
 - Next recommended slice:
