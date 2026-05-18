@@ -210,55 +210,95 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 - [x] Use Serena project activation and initial instructions.
 - [x] Create fixed active worktree on `codex/refactor-provider-runtime-model-contract-batch`.
 - [x] Write this stage plan before implementation.
-- [ ] Commit this stage plan as the worker base.
+- [x] Commit this stage plan as the worker base.
+  - Commit: `c45f362`.
+  - Baseline focused provider suite: `129 passed in 5.20s`.
 
 ### Task 2: Worker `provider-status-domain`
 
-- [ ] Create an independent worker worktree/branch.
-- [ ] Write RED provider status query/report boundary tests.
-- [ ] Run the worker RED command and record the expected failure.
-- [ ] Implement one behavior-compatible provider status domain boundary move.
-- [ ] Run worker focused tests and touched-file checks.
-- [ ] Commit with the required co-author trailer.
+- [x] Create an independent worker worktree/branch.
+- [x] Write RED provider status query/report boundary tests.
+- [x] Run the worker RED command and record the expected failure.
+  - RED: `uv run --extra dev pytest tests/test_provider_runtime_status.py tests/test_gateway/test_provider_rpc_payload_facade.py -q`.
+  - Result: expected failure, `1 failed, 10 passed`, because `ProviderStatusQuery` did not exist.
+- [x] Implement one behavior-compatible provider status domain boundary move.
+  - Added provider-owned `ProviderStatusQuery` and `build_provider_status_report_for_query` while preserving existing wrappers.
+- [x] Run worker focused tests and touched-file checks.
+  - GREEN: same pytest command, `11 passed`.
+  - Ruff: `uv run --extra dev ruff check src/opensquilla/provider/runtime_status.py tests/test_provider_runtime_status.py`, `All checks passed!`.
+  - `git diff --check` passed.
+- [x] Commit with the required co-author trailer.
+  - Commit: `5e7d056`.
 
 ### Task 3: Worker `provider-model-listing-domain`
 
-- [ ] Create an independent worker worktree/branch.
-- [ ] Write RED provider model listing query/row boundary tests.
-- [ ] Run the worker RED command and record the expected failure.
-- [ ] Implement one behavior-compatible provider model listing boundary move.
-- [ ] Run worker focused tests and touched-file checks.
-- [ ] Commit with the required co-author trailer.
+- [x] Create an independent worker worktree/branch.
+- [x] Write RED provider model listing query/row boundary tests.
+- [x] Run the worker RED command and record the expected failure.
+  - RED: `uv run --extra dev pytest tests/test_provider_model_listing.py tests/test_gateway/test_provider_rpc_payload_facade.py tests/test_gateway/test_rpc_models.py -q`.
+  - Result: expected failure, `1 failed, 11 passed`, because `ProviderModelQuery` did not exist.
+- [x] Implement one behavior-compatible provider model listing boundary move.
+  - Added provider-owned `ProviderModelQuery` with provider/capability matching while preserving filter kwargs and RPC compatibility wrapper behavior.
+- [x] Run worker focused tests and touched-file checks.
+  - GREEN: same pytest command, `12 passed in 0.45s`.
+  - Ruff: `uv run --extra dev ruff check src/opensquilla/provider/model_listing.py tests/test_provider_model_listing.py`, `All checks passed!`.
+  - `git diff --check` passed.
+- [x] Commit with the required co-author trailer.
+  - Commit: `c206fca`.
 
 ### Task 4: Worker `provider-catalog-assembly`
 
-- [ ] Create an independent worker worktree/branch.
-- [ ] Write RED catalog/assembly boundary tests.
-- [ ] Run the worker RED command and record the expected failure.
-- [ ] Implement one behavior-compatible catalog/assembly boundary move.
-- [ ] Run worker focused tests and touched-file checks.
-- [ ] Commit with the required co-author trailer.
+- [x] Create an independent worker worktree/branch.
+- [x] Write RED catalog/assembly boundary tests.
+- [x] Run the worker RED command and record the expected failure.
+  - RED: `uv run --extra dev pytest tests/test_provider_model_catalog.py tests/test_gateway/test_provider_runtime_assembly_boundary.py tests/test_provider_image_generation_runtime_boundary.py -q`.
+  - Result: expected failure, `2 failed, 12 passed`, because `openrouter_pricing_model_ids` did not exist in the provider catalog and the pricing-model policy was still owned by gateway assembly.
+- [x] Implement one behavior-compatible catalog/assembly boundary move.
+  - Moved OpenRouter pricing model id collection to provider-owned `model_catalog.openrouter_pricing_model_ids`; gateway runtime assembly delegates to it.
+- [x] Run worker focused tests and touched-file checks.
+  - GREEN: same pytest command, `14 passed`.
+  - Ruff: `uv run --extra dev ruff check src/opensquilla/provider/model_catalog.py src/opensquilla/gateway/provider_runtime_assembly.py tests/test_provider_model_catalog.py tests/test_gateway/test_provider_runtime_assembly_boundary.py tests/test_provider_image_generation_runtime_boundary.py`, `All checks passed!`.
+  - `git diff --check` passed.
+- [x] Commit with the required co-author trailer.
+  - Commit: `91c68ff`.
 
 ### Task 5: Worker `provider-cli-workflows`
 
-- [ ] Create an independent worker worktree/branch.
-- [ ] Write RED CLI provider/model workflow boundary tests.
-- [ ] Run the worker RED command and record the expected failure.
-- [ ] Implement one behavior-compatible CLI workflow boundary move.
-- [ ] Run worker focused tests and touched-file checks.
-- [ ] Commit with the required co-author trailer.
+- [x] Create an independent worker worktree/branch.
+- [x] Write RED CLI provider/model workflow boundary tests.
+- [x] Run the worker RED command and record the expected failure.
+  - RED: `uv run --extra dev pytest tests/test_cli/test_providers_cmd.py tests/test_cli/test_cli_product_completeness.py tests/test_cli/test_provider_model_workflow_boundaries.py -q`.
+  - Result: expected failure, `2 failed, 95 passed`, because `provider_status_request_params` and `model_list_request_params` did not exist.
+- [x] Implement one behavior-compatible CLI workflow boundary move.
+  - Added CLI gateway query request-param helpers for providers status and models list while preserving command behavior.
+- [x] Run worker focused tests and touched-file checks.
+  - GREEN: same pytest command, `97 passed`.
+  - Ruff on touched files and new test: `All checks passed!`.
+  - `git diff --check` passed.
+- [x] Commit with the required co-author trailer.
+  - Commit: `48e2344`.
 
 ### Task 6: Main Integration Review
 
-- [ ] Wait for all worker branches and read summaries.
-- [ ] Review each branch diff before merge.
-- [ ] Merge worker branches into child branch one by one with `git merge --no-ff`.
-- [ ] Integrate `gateway.provider_rpc_payloads` only if worker changes expose new provider-domain helpers that should be consumed by the facade.
-- [ ] Resolve conflicts without reverting another worker's ownership.
-- [ ] Run the focused batch green command.
-- [ ] Run touched-file ruff and `git diff --check`.
-- [ ] Run full child `scripts/refactor_gate.sh`.
-- [ ] Commit stage-record update with the required co-author trailer.
+- [x] Wait for all worker branches and read summaries.
+- [x] Review each branch diff before merge.
+- [x] Merge worker branches into child branch one by one with `git merge --no-ff`.
+  - Provider status merge: `b262c1d`.
+  - Provider model listing merge: `e10437c`.
+  - Provider catalog/assembly merge: `b0665d1`.
+  - Provider CLI workflows merge: `c66292e`.
+- [x] Integrate `gateway.provider_rpc_payloads` only if worker changes expose new provider-domain helpers that should be consumed by the facade.
+  - No main-thread facade production edit was needed; existing facade continued to consume provider-domain compatibility wrappers.
+- [x] Resolve conflicts without reverting another worker's ownership.
+  - No merge conflicts occurred.
+- [x] Run the focused batch green command.
+  - Result: `134 passed in 1.73s`.
+- [x] Run touched-file ruff and `git diff --check`.
+  - Ruff touched files/tests: `All checks passed!`.
+  - `git diff --check` passed.
+- [x] Run full child `scripts/refactor_gate.sh`.
+  - Result: ruff passed; mypy passed; whitespace passed; pytest `2532 passed, 8 skipped, 2 warnings in 56.61s`; gateway smoke start/status/stop passed; refactor gate complete.
+- [x] Commit stage-record update with the required co-author trailer.
 
 ### Task 7: Integration Branch Merge and Cleanup
 
@@ -296,8 +336,24 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 ## Completion Record
 
 - Worker commits:
+  - `5e7d056` Refactor provider status domain query boundary.
+  - `c206fca` Refactor provider model listing query boundary.
+  - `91c68ff` Refactor OpenRouter pricing model policy boundary.
+  - `48e2344` Refactor provider CLI gateway query params.
 - Child integration commits:
+  - `b262c1d` Merge provider status domain boundary batch.
+  - `e10437c` Merge provider model listing domain boundary batch.
+  - `b0665d1` Merge provider catalog assembly boundary batch.
+  - `c66292e` Merge provider CLI workflows boundary batch.
 - Integration merge:
 - Verification evidence:
+  - Baseline focused provider suite: `129 passed in 5.20s`.
+  - Post-worker focused provider suite: `134 passed in 1.73s`.
+  - Touched-file Ruff: `All checks passed!`.
+  - Child `git diff --check`: passed.
+  - Child full `scripts/refactor_gate.sh`: ruff passed; mypy passed; whitespace passed; pytest `2532 passed, 8 skipped, 2 warnings in 56.61s`; gateway smoke passed.
 - Residual risk:
+  - Provider behavior verification is covered by unit/AST/CLI/static contract tests and gateway smoke; live provider network calls remain skipped by default.
+  - Gateway provider RPC facade production code did not need a main-thread edit in this batch, so facade compatibility depends on existing wrapper coverage.
 - Next recommended slice:
+  - Model-router/runtime scoring or provider backend request payload boundaries, depending on whether the next priority is routing correctness or backend adapter cleanup.
