@@ -44,6 +44,9 @@ from opensquilla.gateway.task_runtime_records import (
 from opensquilla.gateway.task_runtime_records import (
     RuntimeTask as _RuntimeTask,
 )
+from opensquilla.gateway.task_runtime_records import (
+    TaskRun as TaskRun,
+)
 from opensquilla.gateway.task_runtime_scheduler import TaskRuntimeScheduler
 from opensquilla.gateway.task_runtime_shutdown import shutdown_task_runtime
 from opensquilla.gateway.task_runtime_terminal import (
