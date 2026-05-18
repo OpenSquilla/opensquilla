@@ -89,7 +89,8 @@ async def test_cancel_before_start_marks_cancelled_with_terminal_reason() -> Non
     lock = runtime._get_session_lock_for_turn(envelope.session_key)
     await lock.acquire()
     handle = await runtime.enqueue(envelope, "hello")
-    task = runtime._tasks[handle.task_id]
+    task = runtime.get_runtime_task(handle.task_id)
+    assert task is not None
     task.cancel_requested = True
     lock.release()
 

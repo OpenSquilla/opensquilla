@@ -13,7 +13,6 @@ from opensquilla.gateway.background_completion import (
 )
 from opensquilla.gateway.routing import ReplyTarget, RouteEnvelope, SourceKind
 from opensquilla.gateway.task_runtime import TaskRuntime
-from opensquilla.gateway.task_runtime_state import TaskRuntimeState
 from opensquilla.session.models import AgentTaskRecord
 
 PARENT = "agent:main:channel:parent"
@@ -71,7 +70,6 @@ async def test_task_runtime_exposes_runtime_task_lookup_facade() -> None:
 
     try:
         handle = await runtime.enqueue(_make_envelope(), "hello")
-        assert isinstance(runtime._runtime_state, TaskRuntimeState)
         task = runtime.get_runtime_task(handle.task_id)
         assert task is not None
         assert task.task_id == handle.task_id

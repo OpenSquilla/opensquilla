@@ -56,7 +56,7 @@ class _TaskRuntime:
         self.synthesis_status = AgentTaskStatus.SUCCEEDED
         self.sent: list[tuple[str, str, dict[str, Any] | None]] = []
         self.stream_event_sink = None
-        self._tasks: dict[str, Any] = {}
+        self.runtime_tasks: dict[str, Any] = {}
 
     async def send(
         self,
@@ -79,7 +79,13 @@ class _TaskRuntime:
         raise KeyError(task_id)
 
     def get_runtime_task(self, task_id: str):
-        return self._tasks.get(task_id)
+        return self.runtime_tasks.get(task_id)
+
+    def register_runtime_task(self, task_id: str, task: Any) -> None:
+        self.runtime_tasks[task_id] = task
+
+    def clear_runtime_tasks(self) -> None:
+        self.runtime_tasks.clear()
 
     async def emit_text_delta(self, text: str) -> None:
         assert self.stream_event_sink is not None
@@ -184,21 +190,24 @@ async def test_synthesis_done_text_delivers_when_no_text_delta_emitted() -> None
 async def test_parent_wake_uses_parent_task_route_when_session_route_changes() -> None:
     events: list[tuple[str, dict[str, Any]]] = []
     runtime = _TaskRuntime()
-    runtime._tasks[PARENT_TASK] = SimpleNamespace(
-        envelope=RouteEnvelope(
-            source_kind=SourceKind.CHANNEL,
-            source_name="slack",
-            agent_id="main",
-            session_key=PARENT,
-            channel_name="slack",
-            channel_id="C-old",
-            thread_id="T-old",
-            reply_target=ReplyTarget(
-                kind="channel",
+    runtime.register_runtime_task(
+        PARENT_TASK,
+        SimpleNamespace(
+            envelope=RouteEnvelope(
+                source_kind=SourceKind.CHANNEL,
+                source_name="slack",
+                agent_id="main",
+                session_key=PARENT,
                 channel_name="slack",
-                to="C-old",
+                channel_id="C-old",
                 thread_id="T-old",
-            ),
+                reply_target=ReplyTarget(
+                    kind="channel",
+                    channel_name="slack",
+                    to="C-old",
+                    thread_id="T-old",
+                ),
+            )
         )
     )
     adapter = _Adapter()
@@ -270,21 +279,24 @@ async def test_parent_wake_freezes_session_route_before_synthesis_finishes() -> 
 async def test_parent_wake_uses_target_captured_before_parent_task_eviction() -> None:
     events: list[tuple[str, dict[str, Any]]] = []
     runtime = _TaskRuntime()
-    runtime._tasks[PARENT_TASK] = SimpleNamespace(
-        envelope=RouteEnvelope(
-            source_kind=SourceKind.CHANNEL,
-            source_name="slack",
-            agent_id="main",
-            session_key=PARENT,
-            channel_name="slack",
-            channel_id="C-old",
-            thread_id="T-old",
-            reply_target=ReplyTarget(
-                kind="channel",
+    runtime.register_runtime_task(
+        PARENT_TASK,
+        SimpleNamespace(
+            envelope=RouteEnvelope(
+                source_kind=SourceKind.CHANNEL,
+                source_name="slack",
+                agent_id="main",
+                session_key=PARENT,
                 channel_name="slack",
-                to="C-old",
+                channel_id="C-old",
                 thread_id="T-old",
-            ),
+                reply_target=ReplyTarget(
+                    kind="channel",
+                    channel_name="slack",
+                    to="C-old",
+                    thread_id="T-old",
+                ),
+            )
         )
     )
     adapter = _Adapter()
@@ -306,7 +318,7 @@ async def test_parent_wake_uses_target_captured_before_parent_task_eviction() ->
         parent_task_id=PARENT_TASK,
         task_runtime=runtime,
     )
-    runtime._tasks.clear()
+    runtime.clear_runtime_tasks()
     session_manager.parent.last_to = "C-new"
     session_manager.parent.last_thread_id = "T-new"
 
