@@ -25,20 +25,23 @@ from opensquilla.cli import attachments as _cli_attachments
 from opensquilla.cli.chat_gateway_approvals_workflows import (
     handle_gateway_approvals_command,
 )
+from opensquilla.cli.chat_gateway_control_route_workflows import (
+    handle_gateway_control_route_command,
+)
 from opensquilla.cli.chat_gateway_exact_route_workflows import (
     handle_gateway_exact_route_command,
 )
-from opensquilla.cli.chat_gateway_file_workflows import handle_gateway_file_command
 from opensquilla.cli.chat_gateway_forget_workflows import handle_gateway_forget_command
 from opensquilla.cli.chat_gateway_image_route_workflows import (
     handle_gateway_image_route_command,
 )
+from opensquilla.cli.chat_gateway_io_route_workflows import (
+    handle_gateway_io_route_command,
+)
 from opensquilla.cli.chat_gateway_model_route_workflows import (
     handle_gateway_model_route_command,
 )
-from opensquilla.cli.chat_gateway_path_workflows import handle_gateway_path_command
 from opensquilla.cli.chat_gateway_permissions_workflows import (
-    handle_gateway_permissions_command,
     handle_permissions_command,
 )
 from opensquilla.cli.chat_gateway_session_route_workflows import (
@@ -789,52 +792,29 @@ async def _handle_gateway_slash_command(
     ):
         return True
 
-    if route_name == "path":
-        await handle_gateway_path_command(
-            cmd,
-            parts,
-            state,
-            client=client,
-            elevated_state=elevated_state,
-            stream_response=_stream_response_gateway,
-            path_prompt_and_attachments=_path_prompt_and_attachments,
-            gateway_client_is_local=_gateway_client_is_local,
-            remote_gateway_message=_PATH_REMOTE_GATEWAY_MESSAGE,
-        )
+    if await handle_gateway_io_route_command(
+        route_name,
+        cmd,
+        parts,
+        state,
+        client=client,
+        elevated_state=elevated_state,
+        stream_response=_stream_response_gateway,
+        path_prompt_and_attachments=_path_prompt_and_attachments,
+        gateway_client_is_local=_gateway_client_is_local,
+        remote_gateway_message=_PATH_REMOTE_GATEWAY_MESSAGE,
+        async_file_prompt_and_attachments=_async_file_prompt_and_attachments,
+    ):
         return True
 
-    if route_name == "file":
-        await handle_gateway_file_command(
-            cmd,
-            parts,
-            state,
-            client=client,
-            elevated_state=elevated_state,
-            stream_response=_stream_response_gateway,
-            async_file_prompt_and_attachments=_async_file_prompt_and_attachments,
-        )
-        return True
-
-    if route_name == "permissions":
-        await handle_gateway_permissions_command(
-            cmd,
-            state,
-            elevated_state,
-            client=client,
-            forget_server_approvals=_forget_server_approvals,
-        )
-        return True
-
-    if route_name == "forget":
-        await handle_gateway_forget_command(
-            cmd,
-            client=client,
-            forget_server_approvals=_forget_server_approvals,
-        )
-        return True
-
-    if route_name == "approvals":
-        await handle_gateway_approvals_command(cmd, client)
+    if await handle_gateway_control_route_command(
+        route_name,
+        cmd,
+        state,
+        elevated_state,
+        client=client,
+        forget_server_approvals=_forget_server_approvals,
+    ):
         return True
 
     return False
