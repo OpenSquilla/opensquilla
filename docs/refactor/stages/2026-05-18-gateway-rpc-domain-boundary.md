@@ -128,15 +128,15 @@ Move provider and search RPC method registration into domain-specific Gateway RP
 - [x] Implement the smallest behavior-compatible RPC module split.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -162,8 +162,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `8a3b099`
+- Integration merge: `aa6402b`
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-gateway-rpc-domain-boundary` passed on branch `codex/refactor-gateway-rpc-domain-boundary` at `2fef810`.
   - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_domain_modules.py tests/test_provider_runtime_status.py::test_gateway_delegates_provider_status_wire_shape_to_provider_boundary tests/test_search/test_search_runtime_boundary.py::test_gateway_reads_search_provider_from_runtime_boundary tests/test_search/test_search_runtime_boundary.py::test_gateway_runs_search_queries_through_search_boundary -q` failed as expected because `rpc_providers.py` and `rpc_search.py` did not exist, `rpc_tools.py` still imported provider/search payload helpers, and `gateway/rpc/__init__.py` did not import the new modules.
@@ -173,7 +173,11 @@ Co-authored-by: Codex <noreply@openai.com>
   - Release hygiene spot check: `uv run --extra dev pytest tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths -q` passed, `1 passed in 0.39s`.
   - Whitespace: `git diff --check` passed.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 490 source files; whitespace passed; pytest passed with `2408 passed, 8 skipped, 2 warnings in 55.86s`; gateway smoke start/status/stop passed on `127.0.0.1:61076`.
+  - Integration preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `aa6402b`.
+  - Integration merge: `git merge --no-ff codex/refactor-gateway-rpc-domain-boundary` produced merge commit `aa6402b`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 490 source files; whitespace passed; pytest passed with `2410 passed, 6 skipped, 2 warnings in 27.19s`; gateway smoke start/status/stop passed on `127.0.0.1:61743`.
+  - Agent fallback: `spawn_agent` was retested for a module-level Provider reconnaissance task and still returned `collab spawn failed: agent thread limit reached`. `list_agents` showed only root plus stale shutdown entries, `close_agent` returned `thread ... not found` for those stale entries, and `state_5.sqlite` showed no open spawn edges after a backed-up cleanup of this parent thread's closed edges. This points to current live runtime cache drift, so the stage stays sequential in this thread.
 - Residual risk:
   - Low. This slice moves only RPC registration wrappers; provider/search payload construction and public RPC method names/scopes remain unchanged and are covered by product RPC, public surface, provider, search, and tools visibility tests.
 - Next recommended slice:
-  - Continue Gateway module cleanup with diagnostics/logs or sessions task-runtime families, or pivot to a larger Provider runtime/config module consolidation.
+  - Use a larger module-level slice next: Provider runtime/config consolidation or Gateway sessions task-runtime consolidation. Prefer whole-module ownership and broader focused coverage over helper-by-helper extraction, while preserving the TDD red/green and full-gate workflow.
