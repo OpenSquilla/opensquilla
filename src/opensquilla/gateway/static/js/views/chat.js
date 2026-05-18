@@ -1046,8 +1046,8 @@ const ChatView = (() => {
     if (copyBtn) copyBtn.title = 'Copy session key: ' + key;
   }
 
-  function _runStatusLabel(status) {
-    const labels = {
+  const _CHAT_VIEW_STATE = Object.freeze({
+    runLabels: Object.freeze({
       queued: 'Queued',
       running: 'Running',
       interrupted: 'Interrupted',
@@ -1055,43 +1055,114 @@ const ChatView = (() => {
       timeout: 'Timed out',
       cancelled: 'Cancelled',
       idle: 'Idle',
-    };
-    return labels[status] || 'Idle';
-  }
-
-  function _normalizeRunStatus(status) {
-    const value = String(status || '').toLowerCase();
-    if (value === 'abandoned') return 'interrupted';
-    if (value === 'succeeded' || value === 'success' || value === 'complete') return 'idle';
-    if (['queued', 'running', 'interrupted', 'failed', 'timeout', 'cancelled'].includes(value)) {
-      return value;
-    }
-    return 'idle';
-  }
-
-  // Chip color mapping for the chat header run-status pill. Idle and cancelled
-  // stay muted (plain chip) so finished sessions don't compete with active
-  // ones for attention.
-  function _runStatusChipClass(status) {
-    return {
+    }),
+    // Chip color mapping for the chat header run-status pill. Idle and cancelled
+    // stay muted (plain chip) so finished sessions don't compete with active
+    // ones for attention.
+    runChipClasses: Object.freeze({
       queued: 'chip-warn',
       running: 'chip-ok',
       interrupted: 'chip-warn',
       failed: 'chip-danger',
       timeout: 'chip-warn',
-    }[status] || '';
+    }),
+    terminalStatuses: Object.freeze(['succeeded', 'failed', 'timeout', 'abandoned', 'cancelled']),
+    terminalMessages: Object.freeze({
+      timeout: 'The task timed out before it could finish.',
+      abandoned: 'The task stopped before it could finish.',
+      cancelled: 'The task was cancelled before it finished.',
+      failed: 'The task failed before it could finish.',
+      fallback: 'The task ended before it could finish.',
+    }),
+    runStatusLabel(status) {
+      return _CHAT_VIEW_STATE.runLabels[status] || _CHAT_VIEW_STATE.runLabels.idle;
+    },
+    normalizeRunStatus(status) {
+      const value = String(status || '').toLowerCase();
+      if (value === 'abandoned') return 'interrupted';
+      if (value === 'succeeded' || value === 'success' || value === 'complete') return 'idle';
+      if (['queued', 'running', 'interrupted', 'failed', 'timeout', 'cancelled'].includes(value)) {
+        return value;
+      }
+      return 'idle';
+    },
+    runStatusChipClass(status) {
+      return _CHAT_VIEW_STATE.runChipClasses[status] || '';
+    },
+    sessionRunStatus(source) {
+      source = source || {};
+      const active = source.active_task || source.activeTask || null;
+      const last = source.last_task || source.lastTask || null;
+      const activeStatus = active ? _CHAT_VIEW_STATE.normalizeRunStatus(active.status) : '';
+      const rawStatus = source.run_status || source.runStatus || active?.status || last?.status || '';
+      let status = _CHAT_VIEW_STATE.normalizeRunStatus(rawStatus);
+      if (active && (activeStatus === 'queued' || activeStatus === 'running')) status = activeStatus;
+      const task = active || last || null;
+      return { status, label: _CHAT_VIEW_STATE.runStatusLabel(status), task };
+    },
+    taskTerminalStatus(event) {
+      if (typeof event !== 'string' || !event.startsWith('task.')) return '';
+      const status = event.slice('task.'.length);
+      return _CHAT_VIEW_STATE.terminalStatuses.includes(status)
+        ? status
+        : '';
+    },
+    taskTerminalAsSessionEvent(event, payload) {
+      if (event === 'task.cancelled') {
+        return {
+          event: 'session.event.done',
+          payload: { ...(payload || {}), reason: 'aborted' },
+        };
+      }
+      if (!['task.failed', 'task.timeout', 'task.abandoned'].includes(event)) return null;
+      const status = event.replace('task.', '');
+      const message = _CHAT_VIEW_STATE.taskTerminalMessage(status, payload);
+      return {
+        event: 'session.event.error',
+        payload: {
+          ...(payload || {}),
+          message,
+          code: status,
+        },
+      };
+    },
+    taskTerminalMessage(status, payload) {
+      if (typeof payload?.terminal_message === 'string' && payload.terminal_message.trim()) {
+        return payload.terminal_message.trim();
+      }
+      if (status === 'timeout' || payload?.terminal_reason === 'timeout') {
+        return _CHAT_VIEW_STATE.terminalMessages.timeout;
+      }
+      return _CHAT_VIEW_STATE.terminalMessages[status] || _CHAT_VIEW_STATE.terminalMessages.fallback;
+    },
+    sessionErrorMessage(payload) {
+      if (typeof payload?.terminal_message === 'string' && payload.terminal_message.trim()) {
+        return payload.terminal_message.trim();
+      }
+      const message = typeof payload?.message === 'string' ? payload.message : '';
+      const code = typeof payload?.code === 'string' ? payload.code.toLowerCase() : '';
+      if (code.includes('timeout') || message.toLowerCase().includes('stream idle')) {
+        return _CHAT_VIEW_STATE.terminalMessages.timeout;
+      }
+      if (message) return message;
+      return 'Agent error';
+    },
+  });
+
+  function _runStatusLabel(status) {
+    return _CHAT_VIEW_STATE.runStatusLabel(status);
+  }
+
+  function _normalizeRunStatus(status) {
+    return _CHAT_VIEW_STATE.normalizeRunStatus(status);
+  }
+
+  function _runStatusChipClass(status) {
+    return _CHAT_VIEW_STATE.runStatusChipClass(status);
   }
 
   function _sessionRunStatus(source) {
-    source = source || {};
-    const active = source.active_task || source.activeTask || null;
-    const last = source.last_task || source.lastTask || null;
-    const activeStatus = active ? _normalizeRunStatus(active.status) : '';
-    const rawStatus = source.run_status || source.runStatus || active?.status || last?.status || '';
-    let status = _normalizeRunStatus(rawStatus);
-    if (active && (activeStatus === 'queued' || activeStatus === 'running')) status = activeStatus;
-    const task = active || last || null;
-    return { status, label: _runStatusLabel(status), task };
+    return _CHAT_VIEW_STATE.sessionRunStatus(source);
   }
 
   function _taskGroupId(payload) {
@@ -2834,63 +2905,19 @@ const ChatView = (() => {
   }
 
   function _taskTerminalStatus(event) {
-    if (typeof event !== 'string' || !event.startsWith('task.')) return '';
-    const status = event.slice('task.'.length);
-    return ['succeeded', 'failed', 'timeout', 'abandoned', 'cancelled'].includes(status)
-      ? status
-      : '';
+    return _CHAT_VIEW_STATE.taskTerminalStatus(event);
   }
 
   function _taskTerminalAsSessionEvent(event, payload) {
-    if (event === 'task.cancelled') {
-      return {
-        event: 'session.event.done',
-        payload: { ...(payload || {}), reason: 'aborted' },
-      };
-    }
-    if (!['task.failed', 'task.timeout', 'task.abandoned'].includes(event)) return null;
-    const status = event.replace('task.', '');
-    const message = _taskTerminalMessage(status, payload);
-    return {
-      event: 'session.event.error',
-      payload: {
-        ...(payload || {}),
-        message,
-        code: status,
-      },
-    };
+    return _CHAT_VIEW_STATE.taskTerminalAsSessionEvent(event, payload);
   }
 
   function _taskTerminalMessage(status, payload) {
-    if (typeof payload?.terminal_message === 'string' && payload.terminal_message.trim()) {
-      return payload.terminal_message.trim();
-    }
-    if (status === 'timeout' || payload?.terminal_reason === 'timeout') {
-      return 'The task timed out before it could finish.';
-    }
-    if (status === 'abandoned') {
-      return 'The task stopped before it could finish.';
-    }
-    if (status === 'cancelled') {
-      return 'The task was cancelled before it finished.';
-    }
-    if (status === 'failed') {
-      return 'The task failed before it could finish.';
-    }
-    return 'The task ended before it could finish.';
+    return _CHAT_VIEW_STATE.taskTerminalMessage(status, payload);
   }
 
   function _sessionErrorMessage(payload) {
-    if (typeof payload?.terminal_message === 'string' && payload.terminal_message.trim()) {
-      return payload.terminal_message.trim();
-    }
-    const message = typeof payload?.message === 'string' ? payload.message : '';
-    const code = typeof payload?.code === 'string' ? payload.code.toLowerCase() : '';
-    if (code.includes('timeout') || message.toLowerCase().includes('stream idle')) {
-      return 'The task timed out before it could finish.';
-    }
-    if (message) return message;
-    return 'Agent error';
+    return _CHAT_VIEW_STATE.sessionErrorMessage(payload);
   }
 
   function _noteStreamSeq(payload) {
