@@ -336,9 +336,11 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 
 ### Task 7: Integration Branch Merge and Cleanup
 
-- [ ] Merge child into integration with `git merge --no-ff codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
-- [ ] Run full integration `scripts/refactor_gate.sh`.
-- [ ] Update this completion record with worker commits, child hash, integration hash, verification output, residual risk, and next recommended slice.
+- [x] Merge child into integration with `git merge --no-ff codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
+  - Integration merge commit: `453ec668a6f57d481bb704029d9252eafbc41932 Merge branch 'codex/refactor-knowledge-services-rpc-cli-boundary-batch' into codex/refactor-architecture`.
+- [x] Run full integration `scripts/refactor_gate.sh`.
+  - Result: ruff passed; mypy succeeded across 522 source files; whitespace check passed; pytest `2522 passed, 6 skipped, 2 warnings`; gateway smoke start/status/stop/status succeeded; `Refactor gate complete.`
+- [x] Update this completion record with worker commits, child hash, integration hash, verification output, residual risk, and next recommended slice.
 - [ ] Commit the stage record update on integration with the required co-author trailer.
 - [ ] Remove `../opensquilla-refactor-active`.
 - [ ] Remove worker worktrees created for this batch.
@@ -377,9 +379,10 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 - Child integration commits:
   - Base plan: `a33b2eb Record knowledge services boundary batch plan`.
   - Worker merges: `84ffd3b`, `12b8ce7`, `3dd9ebe`, `66f7432`.
-  - Stage-record update: pending this commit.
+  - Stage-record update: `4c35d4b Record knowledge services boundary gate`.
 - Integration merge:
-  - Pending merge into `codex/refactor-architecture`.
+  - `453ec668a6f57d481bb704029d9252eafbc41932 Merge branch 'codex/refactor-knowledge-services-rpc-cli-boundary-batch' into codex/refactor-architecture`.
+  - Final integration stage-record update: pending this commit.
 - Verification evidence:
   - `scheduler-cron-boundary` RED: focused scheduler/Gateway cron suite -> `2 failed, 31 passed` before scheduler-domain request assembly helpers existed.
   - `scheduler-cron-boundary` GREEN: same focused suite -> `33 passed`; touched-file ruff and diff-check passed.
@@ -393,6 +396,7 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
   - Combined focused suite after worker merges: `271 passed, 1 skipped`.
   - Targeted mypy after worker merges: `Success: no issues found in 86 source files`.
   - Child `scripts/refactor_gate.sh`: ruff passed; mypy succeeded across 522 source files; whitespace check passed; pytest `2520 passed, 8 skipped, 2 warnings`; gateway smoke start/status/stop/status succeeded; `Refactor gate complete.`
+  - Integration `scripts/refactor_gate.sh`: ruff passed; mypy succeeded across 522 source files; whitespace check passed; pytest `2522 passed, 6 skipped, 2 warnings`; gateway smoke start/status/stop/status succeeded; `Refactor gate complete.`
 - Residual risk:
   - Workers ran focused tests only; main thread child gate covered full-suite integration after merge.
   - Search keeps compatibility re-exports from `opensquilla.search.execution` to avoid breaking existing imports; a later cleanup can remove them only with a public import audit.
