@@ -132,15 +132,15 @@ payloads, and task-runtime drain behavior.
       existing feature coverage.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
@@ -169,8 +169,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `308ba53`.
+- Integration merge: `fe1e83468ab4d163813ce7f9a41170e3b3d4f04d`.
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-session-lifecycle-service-boundary` passed on branch `codex/refactor-session-lifecycle-service-boundary` at `c46abcb`.
   - Red: `uv run --extra dev pytest tests/test_session/test_session_lifecycle_service.py tests/test_gateway/test_rpc_session_lifecycle_boundary.py tests/test_gateway/test_force_reset_drain.py tests/test_gateway/test_rpc_sessions.py::TestSessionsReset tests/test_gateway/test_rpc_sessions.py::TestSessionsDelete tests/test_gateway/test_rpc_sessions.py::TestSessionsCompact tests/test_gateway/test_rpc_sessions.py::TestSessionsContextCompact -q` failed during collection with `ModuleNotFoundError: No module named 'opensquilla.session.lifecycle_service'`.
@@ -180,5 +180,9 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched mypy: `uv run --extra dev mypy src/opensquilla/session/lifecycle_service.py src/opensquilla/gateway/rpc_session_lifecycle.py --show-error-codes` passed with no issues in 2 source files.
   - Whitespace: `git diff --check` passed.
   - Full child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 515 source files; whitespace passed; pytest passed with `2476 passed, 8 skipped, 2 warnings in 49.04s`; gateway smoke start/status/stop/status passed on `127.0.0.1:61239`.
+  - Integration merge: `git merge --no-ff codex/refactor-session-lifecycle-service-boundary` produced merge commit `fe1e834`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 515 source files; whitespace passed; pytest passed with `2478 passed, 6 skipped, 2 warnings in 26.51s`; gateway smoke start/status/stop/status passed on `127.0.0.1:61375`.
 - Residual risk:
+  - Low to medium. The helper module is Gateway-free and covered directly, but lifecycle handlers still intentionally own flush-specific control flow and payload construction because moving that would be a separate higher-risk slice.
 - Next recommended slice:
+  - Continue with a session lifecycle flush outcome boundary: isolate reset/compact flush unavailable, permission, and disk-error receipt construction behind a session-domain helper while preserving current `RpcHandlerError` codes and payload keys.
