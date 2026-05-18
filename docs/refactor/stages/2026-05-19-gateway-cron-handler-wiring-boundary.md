@@ -216,16 +216,32 @@ still made explicitly under `superpowers:dispatching-parallel-agents`.
 
 ## Steps
 
-- [ ] Run `scripts/refactor_preflight.sh --allow-dirty`.
-- [ ] Commit this stage plan on the active child branch.
-- [ ] Create external worker worktree from the active child branch.
+- [x] Run `scripts/refactor_preflight.sh --allow-dirty`.
+  - Result: preflight passed on active child worktree at `7ec9fc9`, with this
+    plan file present as an intentional dirty change.
+- [x] Commit this stage plan on the active child branch.
+  - Commit: `6d8e413` (`Plan gateway cron handler wiring boundary`).
+- [x] Create external worker worktree from the active child branch.
+  - Worker worktree: `../opensquilla-refactor-agent-cron-handler`.
+  - Worker branch: `codex/refactor-gateway-cron-handler-worker`.
 - [x] Worker writes failing boundary tests and records RED output.
 - [x] Worker implements `gateway/cron_handler_wiring.py` and replaces the
       inline boot cron registration block with a short delegator call.
-- [ ] Main thread reviews diff for behavior compatibility and boundary scope.
+- [x] Main thread reviews diff for behavior compatibility and boundary scope.
+  - Worker commit: `f1cfb49` (`Refactor gateway cron handler wiring boundary`).
+  - Active child merge commit: `6c5bfe0` (`Merge gateway cron handler worker`).
 - [x] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
-- [ ] Commit child verification/stage record update with:
+  - Focused GREEN: `22 passed in 3.01s`.
+  - Touched-file `ruff check`: passed.
+  - `uv run --extra dev mypy src/opensquilla/gateway --show-error-codes`:
+    success, no issues in 92 source files; existing pyproject unused-section
+    notes only.
+  - `git diff --check`: passed.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
+  - Result: ruff passed; mypy no issues in 549 source files; whitespace passed;
+    pytest `2654 passed, 8 skipped, 2 warnings in 54.37s`; gateway smoke
+    start/status/stop/status passed.
+- [x] Commit child verification/stage record update with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
@@ -265,8 +281,9 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Worker commit: pending branch commit; final worker response records hash.
+- Worker commit: `f1cfb49` (`Refactor gateway cron handler wiring boundary`).
 - Active child support commits:
+  - `6c5bfe0` (`Merge gateway cron handler worker`).
 - Child verification commit:
 - Integration merge:
 - Integration record:
@@ -277,8 +294,19 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched checks passed: ruff for `boot.py`,
     `cron_handler_wiring.py`, and the new boundary test; mypy for
     `src/opensquilla/gateway`; `git diff --check`.
+  - Main-thread focused GREEN:
+    `uv run --extra dev pytest tests/test_gateway/test_cron_handler_wiring_boundary.py tests/test_gateway/test_router_boot.py::test_dream_boot_does_not_register_when_auto_schedule_is_off tests/test_gateway/test_router_boot.py::test_dream_boot_pauses_existing_jobs_when_auto_schedule_is_off tests/test_gateway/test_router_boot.py::test_dream_boot_pauses_existing_jobs_when_disabled tests/test_gateway/test_cron_result_delivery_boundary.py tests/test_scheduler/test_dream_handler.py -q`
+    -> 22 passed in 3.01s.
+  - Main-thread touched-file checks: ruff passed; gateway mypy no issues in 92
+    source files; `git diff --check` passed.
+  - Active child `scripts/refactor_gate.sh`: ruff passed; mypy no issues in
+    549 source files; whitespace passed; pytest `2654 passed, 8 skipped, 2
+    warnings`; gateway smoke passed.
 - Cleanup evidence:
-- Residual risk:
-  - Full `scripts/refactor_gate.sh` was intentionally left for the main thread
-    unless time permits after worker-focused verification.
-- Next recommended slice:
+- Residual risk: low before integration merge; the stage moves cron handler
+  boot wiring behind a gateway boundary while preserving handler keys, delivery
+  chain dependencies, session event delivery, workspace resolution, Dream cron
+  registration, focused tests, and the full child gate.
+- Next recommended slice: gateway app/server-handle construction wiring is the
+  next visible boot boundary, but it still touches `start_gateway_server`; keep
+  it single-worker unless a scout finds a disjoint module-only slice.
