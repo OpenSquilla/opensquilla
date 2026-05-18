@@ -11,15 +11,15 @@ import structlog
 from opensquilla.gateway import attachment_ingest
 from opensquilla.gateway.agent_tasks import get_agent_task_registry
 from opensquilla.gateway.rpc import RpcContext
-from opensquilla.gateway.rpc_session_management import (
-    require_session_key,
-    session_turn_model,
-)
 from opensquilla.gateway.rpc_session_send_inputs import (
     normalize_memory_capture_controls,
     trusted_elevated_hint,
 )
 from opensquilla.gateway.rpc_session_turn_runtime import enqueue_session_turn_via_runtime
+from opensquilla.gateway.session_management_service import (
+    require_session_key,
+    session_turn_model,
+)
 from opensquilla.gateway.session_services import get_session_lock, get_session_storage
 from opensquilla.paths import media_root_from_config
 from opensquilla.session.keys import normalize_agent_id

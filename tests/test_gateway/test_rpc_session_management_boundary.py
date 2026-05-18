@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GATEWAY = ROOT / "src/opensquilla/gateway"
 RPC_SESSIONS = GATEWAY / "rpc_sessions.py"
 RPC_SESSION_MANAGEMENT = GATEWAY / "rpc_session_management.py"
+SESSION_MANAGEMENT_SERVICE = GATEWAY / "session_management_service.py"
 
 
 def _tree(path: Path) -> ast.Module:
@@ -34,13 +35,17 @@ def _top_level_async_functions(tree: ast.Module) -> dict[str, ast.AsyncFunctionD
     }
 
 
-def test_session_management_module_owns_create_patch_implementation() -> None:
+def test_session_management_service_owns_create_patch_implementation() -> None:
     assert RPC_SESSION_MANAGEMENT.is_file()
+    assert SESSION_MANAGEMENT_SERVICE.is_file()
 
     management_tree = _tree(RPC_SESSION_MANAGEMENT)
-    management_functions = _top_level_functions(management_tree)
     management_async_functions = _top_level_async_functions(management_tree)
     management_imports = _imports_from(management_tree)
+    service_tree = _tree(SESSION_MANAGEMENT_SERVICE)
+    service_functions = _top_level_functions(service_tree)
+    service_async_functions = _top_level_async_functions(service_tree)
+    service_imports = _imports_from(service_tree)
 
     assert {
         "model_value",
@@ -48,12 +53,16 @@ def test_session_management_module_owns_create_patch_implementation() -> None:
         "session_turn_model",
         "create_session_key",
         "require_session_key",
-    } <= management_functions.keys()
+    } <= service_functions.keys()
     assert {
         "agent_registry_has",
+        "create_session",
+        "patch_session",
+    } <= service_async_functions.keys()
+    assert {
         "handle_sessions_create",
         "handle_sessions_patch",
-    } <= management_async_functions.keys()
+    } == set(management_async_functions.keys())
     assert {
         ("opensquilla.gateway.rpc", "RpcContext"),
         ("opensquilla.gateway.rpc", "RpcHandlerError"),
@@ -65,6 +74,10 @@ def test_session_management_module_owns_create_patch_implementation() -> None:
         ("opensquilla.session.rpc_payload", "session_create_response"),
         ("opensquilla.session.rpc_payload", "session_create_stub_response"),
         ("opensquilla.session.rpc_payload", "session_patch_response"),
+    } <= service_imports
+    assert {
+        ("opensquilla.gateway.session_management_service", "create_session"),
+        ("opensquilla.gateway.session_management_service", "patch_session"),
     } <= management_imports
 
 
