@@ -141,7 +141,7 @@ const ChatView = (() => {
   const _THINKING_DELAY_MS = 400;  // don't show for fast responses
   const _THINKING_TTL_MS = 60000;  // 60s auto-hide
   // kept in sync with stream.py WaitingIndicator._verbs
-  const SQUILLA_VERBS = ['Scanning','Ambushing','Burrowing','Pouncing','Punching','Smashing','Spearing','Flashing'];
+  const SQUILLA_VERBS = ['Watching','Tracking','Sensing','Pulsing','Thinking','Drafting','Composing','Polishing'];
   const SQUILLA_DWELL_MS = 2500;
 
   // Inline directive tags — control signals the LLM emits per system prompt

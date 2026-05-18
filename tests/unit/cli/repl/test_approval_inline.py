@@ -12,7 +12,7 @@ These tests pin:
   - Ctrl-C / EOF inside the approval prompt translates to "d" (deny);
   - the typed buffer on the outer Application survives the suspend window;
   - the `_approval_in_flight` Event toggles as expected;
-  - the bottom-toolbar status block renders "thinking…" only when set;
+  - the assistant status header renders "thinking…" only when set;
   - `Live(` has been excised from `stream.py` so stream rendering does not
     own the prompt surface during approval.
 """
@@ -293,23 +293,24 @@ def test_turn_completes_during_approval_does_not_print_until_resume(
     asyncio.run(_drive())
 
 
-def test_toolbar_status_thinking_then_clear(restore_toolbar_status) -> None:
-    """The bottom toolbar renders the status chip iff
-    ``_toolbar_context['status']`` is set; clearing the slot drops the chip."""
+def test_header_status_thinking_then_clear(restore_toolbar_status) -> None:
+    """The assistant header renders status iff ``_toolbar_context['status']`` is set."""
     _toolbar_context["status"] = "thinking…"
-    html = prompt_mod._bottom_toolbar()
-    assert "thinking…" in html.value
+    header = prompt_mod._input_header_fragments()
+    toolbar = prompt_mod._bottom_toolbar()
+    assert "thinking…" in header.value
+    assert "thinking…" not in toolbar.value
 
     _toolbar_context["status"] = None
-    html = prompt_mod._bottom_toolbar()
-    assert "thinking…" not in html.value
+    header = prompt_mod._input_header_fragments()
+    assert "thinking…" not in header.value
 
 
 def test_stream_py_has_no_live_constructor() -> None:
     """Lock the inline approval invariant: no `Live(` in cli/repl/stream.py.
 
     The approval path relies on the pre-token surface being the
-    prompt-toolkit `bottom_toolbar` slot, not a Rich `Live` region. Run
+    prompt-toolkit assistant header slot, not a Rich `Live` region. Run
     `grep` as a subprocess so the assertion fails loudly if a future
     regression re-introduces `Live(`.
     """

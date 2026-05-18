@@ -116,15 +116,18 @@ async def test_summary_context_is_request_only_and_keeps_system_cache_anchor(
     call = provider.calls[0]
     assert call["config"].system == "stable base"
     assert call["config"].cache_breakpoints == [{"text": "stable base", "cache": "true"}]
-    assert [message.content for message in call["messages"][:2]] == [
+    request_context = call["messages"][0].content
+    assert "[Request context for this turn]" in request_context
+    assert [message.content for message in call["messages"][1:3]] == [
         "old question",
         "old answer",
     ]
-    request_context = call["messages"][2].content
     assert "[Compacted Session Summaries]" in request_context
     assert "summary outside transcript" in request_context
     assert "<memory_context>volatile recall</memory_context>" in request_context
-    assert call["messages"][-1] == Message(role="user", content="current question")
+    assert call["messages"][-1].role == "user"
+    assert call["messages"][-1].content.startswith("current question")
+    assert "[Runtime context for this turn]" in call["messages"][-1].content
     assert all(
         "summary outside transcript" not in message.content
         for message in agent._history

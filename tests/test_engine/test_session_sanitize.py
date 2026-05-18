@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from opensquilla.engine import Agent, AgentConfig, ToolResult
+from opensquilla.engine.history import limit_turns
 from opensquilla.engine.session_sanitize import sanitize_session_messages
 from opensquilla.engine.types import ThinkingLevel
 from opensquilla.memory.session_flush import _usage_from_complete_response
@@ -640,13 +641,68 @@ async def test_agent_runtime_context_is_request_only_and_not_system_prefix() -> 
     assert call["config"].system == "stable system"
     assert call["config"].cache_breakpoints == [{"text": "stable system", "cache": "true"}]
     assert call["messages"][0].role == "user"
+    assert call["messages"][0].content.startswith("hello")
     assert "[Runtime context for this turn]" in call["messages"][0].content
-    assert call["messages"][1] == Message(role="user", content="hello")
+    assert len(call["messages"]) == 1
     assert all(
         "[Runtime context for this turn]" not in message.content
         for message in agent._history
         if isinstance(message.content, str)
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_context_does_not_precede_current_user_text() -> None:
+    provider = CapturingProvider()
+    agent = Agent(
+        provider=provider,
+        config=AgentConfig(
+            system_prompt="stable system",
+            cache_breakpoints=[{"text": "stable system", "cache": "true"}],
+            cache_mode="auto",
+            max_iterations=1,
+        ),
+    )
+    first_prompt = "first prompt " + ("x" * 2000)
+
+    first_events = [event async for event in agent.run_turn(first_prompt)]
+    second_events = [event async for event in agent.run_turn("second prompt")]
+
+    assert any(event.kind == "done" for event in first_events)
+    assert any(event.kind == "done" for event in second_events)
+    first_call = provider.calls[0]["messages"]
+    assert first_call[-1].role == "user"
+    assert first_call[-1].content.startswith(first_prompt)
+    assert "[Runtime context for this turn]" in first_call[-1].content
+    assert not any(
+        isinstance(message.content, str)
+        and message.content.startswith("[Runtime context for this turn]")
+        for message in first_call[:-1]
+    )
+    assert agent._history[0] == Message(role="user", content=first_prompt)
+
+    second_call = provider.calls[1]["messages"]
+    assert second_call[0] == Message(role="user", content=first_prompt)
+    assert second_call[1] == Message(
+        role="assistant",
+        content=[ContentBlockText(text="ok")],
+    )
+    assert second_call[-1].role == "user"
+    assert second_call[-1].content.startswith("second prompt")
+    assert "[Runtime context for this turn]" in second_call[-1].content
+
+
+def test_limit_turns_ignores_synthetic_user_messages_when_counting_turns() -> None:
+    messages = [
+        Message(role="user", content="first real user"),
+        Message(role="assistant", content="first answer"),
+        Message(role="user", content="[Available skills for this turn]\n<skill />"),
+        Message(role="user", content="second real user"),
+        Message(role="assistant", content="second answer"),
+    ]
+
+    assert limit_turns(messages, 2) == messages
+    assert limit_turns(messages, 1) == messages[3:]
 
 
 def test_turn_runner_keeps_dynamic_prompt_out_of_system_when_cache_enabled() -> None:
@@ -728,8 +784,7 @@ def test_agent_adjusts_request_context_indexes_after_compaction() -> None:
         "Understood. Continuing from summary.",
         "old answer",
         "[Request context for this turn]\nvolatile",
-        "[Runtime context for this turn]\nnow",
-        "current question",
+        "current question\n\n[Runtime context for this turn]\nnow",
     ]
 
 
@@ -763,19 +818,18 @@ async def test_agent_request_context_is_request_only_after_history() -> None:
     assert "<memory_context>volatile recall</memory_context>" not in call["config"].system
     assert [message.role for message in call["messages"]] == [
         "user",
+        "user",
         "assistant",
         "user",
         "user",
-        "user",
-        "user",
     ]
-    assert call["messages"][0] == Message(role="user", content="old question")
-    assert call["messages"][1] == Message(role="assistant", content="old answer")
-    assert "[Request context for this turn]" in call["messages"][2].content
-    assert "<memory_context>volatile recall</memory_context>" in call["messages"][2].content
+    assert "[Request context for this turn]" in call["messages"][0].content
+    assert "<memory_context>volatile recall</memory_context>" in call["messages"][0].content
+    assert call["messages"][1] == Message(role="user", content="old question")
+    assert call["messages"][2] == Message(role="assistant", content="old answer")
     assert "[Available skills for this turn]" in call["messages"][3].content
+    assert call["messages"][4].content.startswith("hello")
     assert "[Runtime context for this turn]" in call["messages"][4].content
-    assert call["messages"][5] == Message(role="user", content="hello")
     assert all(
         "<memory_context>volatile recall</memory_context>" not in message.content
         for message in agent._history

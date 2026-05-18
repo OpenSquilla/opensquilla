@@ -15,6 +15,15 @@ def _completions_for(text: str, surface: Surface = Surface.CLI_GATEWAY) -> list[
     return [c.text for c in completer.get_completions(doc, None)]
 
 
+def _completion_meta_for(text: str, surface: Surface = Surface.CLI_GATEWAY) -> dict[str, str]:
+    completer = _SlashCompleter(surface)
+    doc = Document(text, cursor_position=len(text))
+    return {
+        c.text: str(c.display_meta_text)
+        for c in completer.get_completions(doc, None)
+    }
+
+
 def test_empty_buffer_no_completions() -> None:
     results = _completions_for("")
     assert results == []
@@ -54,3 +63,43 @@ def test_standalone_surface_excludes_gateway_only_commands() -> None:
     assert any("usage" in r for r in gateway_results), gateway_results
     # /usage is not in standalone, so fuzzy match should not find it
     assert not any(r == "/usage" for r in standalone_results), standalone_results
+
+
+def test_permissions_argument_completions_show_modes_not_commands() -> None:
+    results = _completions_for("/permissions ")
+
+    assert set(results) == {"off", "on", "bypass", "full", "status"}
+    assert all(not result.startswith("/") for result in results)
+
+
+def test_permissions_argument_completion_filters_by_prefix() -> None:
+    results = _completions_for("/permissions o")
+
+    assert results == ["off", "on"]
+
+
+def test_elevated_alias_uses_permissions_argument_completions() -> None:
+    results = _completions_for("/elevated ")
+
+    assert set(results) == {"off", "on", "bypass", "full", "status"}
+
+
+def test_permissions_argument_completions_include_mode_descriptions() -> None:
+    meta = _completion_meta_for("/permissions ")
+
+    assert "sandbox" in meta["off"].lower()
+    assert "approvals required" in meta["on"].lower()
+    assert "sensitive paths" in meta["bypass"].lower()
+    assert "sensitive paths bypassed" in meta["full"].lower()
+
+
+def test_tool_compress_argument_completions_show_modes_not_commands() -> None:
+    results = _completions_for("/tool-compress s")
+
+    assert results == ["status", "summarize"]
+
+
+def test_commands_without_argument_completions_do_not_fall_back_to_slash_words() -> None:
+    results = _completions_for("/help ")
+
+    assert results == []

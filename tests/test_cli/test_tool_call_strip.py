@@ -100,15 +100,18 @@ def test_two_calls_same_name_print_two_lines() -> None:
         assert "exec_command" in line
 
 
-def test_third_call_prints_cumulative_line() -> None:
+def test_third_call_prints_compact_repeat_line() -> None:
     lines = _captured_tool_lines(
         [("exec_command", "id-1"), ("exec_command", "id-2"), ("exec_command", "id-3")]
     )
-    # Row 1, row 2, ×3 (cumulative); flush() at end emits "×3 total Xs"
-    assert any("×3" in line and "cumulative" in line for line in lines), lines
-    # The cumulative line must appear before any total line
-    cumulative_idx = next(i for i, line in enumerate(lines) if "cumulative" in line)
-    assert cumulative_idx == 2
+    # Row 1, row 2, ×3; flush() at end emits "×3 total Xs".
+    repeat_lines = [
+        line for line in lines if "×3" in line and "total" not in line
+    ]
+    assert len(repeat_lines) == 1, lines
+    assert "cumulative" not in repeat_lines[0]
+    assert lines.index(repeat_lines[0]) == 2
+    assert not any("total" in line for line in lines)
 
 
 def test_fourth_call_same_name_suppressed() -> None:
@@ -120,17 +123,19 @@ def test_fourth_call_same_name_suppressed() -> None:
             ("exec_command", "id-4"),
         ]
     )
-    # Row 1, row 2, ×3 cumulative — row 4 suppressed, flush emits total
-    # No 4th normal row printed — only the coalesced cumulative on row 3
-    cumulative_lines = [line for line in lines if "cumulative" in line]
-    assert len(cumulative_lines) == 1, f"Expected exactly 1 cumulative line, got: {lines}"
+    # Row 1, row 2, ×3 — row 4 suppressed, flush emits total.
+    repeat_lines = [
+        line for line in lines if "×3" in line and "total" not in line
+    ]
+    assert len(repeat_lines) == 1, f"Expected exactly 1 repeat line, got: {lines}"
+    assert all("cumulative" not in line for line in lines)
     # The ×N total line (from flush) mentions ×4
     total_lines = [line for line in lines if "total" in line]
     assert len(total_lines) == 1
     assert "×4" in total_lines[0]
 
 
-def test_name_change_after_run_of_3_flushes_total_line() -> None:
+def test_name_change_after_run_of_3_keeps_single_repeat_line() -> None:
     lines = _captured_tool_lines(
         [
             ("exec_command", "id-1"),
@@ -139,8 +144,13 @@ def test_name_change_after_run_of_3_flushes_total_line() -> None:
             ("read_file", "id-4"),  # name change triggers flush
         ]
     )
-    # row1, row2, ×3 cumulative, ×3 total Xs, then read_file row
-    assert any("×3" in line and "total" in line for line in lines), lines
+    # row1, row2, ×3, then read_file row. Exactly 3 calls do not need a
+    # second final total line repeating the same count.
+    repeat_lines = [
+        line for line in lines if "×3" in line and "total" not in line
+    ]
+    assert len(repeat_lines) == 1, lines
+    assert not any("×3" in line and "total" in line for line in lines), lines
     assert any("read_file" in line for line in lines)
 
 

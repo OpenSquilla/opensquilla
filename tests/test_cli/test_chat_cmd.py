@@ -155,6 +155,38 @@ def test_file_is_gateway_only() -> None:
     assert "/file" not in _handler_words(Surface.CLI_STANDALONE)
 
 
+def test_interactive_chat_clear_screen_only_on_terminal(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeConsole:
+        is_terminal = True
+
+        def clear(self) -> None:
+            calls.append("clear")
+
+    monkeypatch.setattr(chat_cmd, "console", FakeConsole())
+
+    chat_cmd._clear_screen_for_interactive_chat()
+
+    assert calls == ["clear"]
+
+
+def test_interactive_chat_clear_screen_skips_non_terminal(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeConsole:
+        is_terminal = False
+
+        def clear(self) -> None:
+            calls.append("clear")
+
+    monkeypatch.setattr(chat_cmd, "console", FakeConsole())
+
+    chat_cmd._clear_screen_for_interactive_chat()
+
+    assert calls == []
+
+
 @pytest.mark.asyncio
 async def test_prompt_user_uses_surface_specific_completions(monkeypatch) -> None:
     completion_words: dict[str, set[str]] = {}

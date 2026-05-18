@@ -29,6 +29,10 @@ def _serialize(cmd: CommandDef, surface: Surface) -> dict[str, Any]:
         "usage": cmd.usage,
         "description": cmd.description,
         "aliases": list(cmd.aliases),
+        "argument_choices": [
+            {"value": choice.value, "description": choice.description}
+            for choice in cmd.argument_choices
+        ],
         "execution": {
             "kind": execution.kind.value,
             "action": execution.action,

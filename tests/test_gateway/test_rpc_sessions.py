@@ -116,6 +116,7 @@ class FakeSessionManager:
     def __init__(self, sessions: list[FakeSession] | None = None):
         self._storage = FakeStorage(sessions)
         self.created_messages: list[tuple[str, str, str]] = []
+        self.removed_messages: list[tuple[str, str]] = []
         self.applied_intents: list[tuple[str, str]] = []
         self.truncate_calls: list[tuple[str, int]] = []
         self.compact_calls: list[tuple[str, int, object | None]] = []
@@ -124,8 +125,17 @@ class FakeSessionManager:
         self.compact_summary_source = "fallback"
         self.transcript: list[Any] = []
 
-    async def append_message(self, key: str, role: str = "user", content: str = "") -> None:
+    async def append_message(self, key: str, role: str = "user", content: str = "") -> Any:
         self.created_messages.append((key, role, content))
+        return SimpleNamespace(
+            message_id=f"msg-{len(self.created_messages)}",
+            role=role,
+            content=content,
+        )
+
+    async def remove_message(self, key: str, message_id: str) -> bool:
+        self.removed_messages.append((key, message_id))
+        return True
 
     async def create(
         self,
@@ -624,6 +634,41 @@ class TestSessionsSend:
         assert ctx_with_sessions.session_manager.applied_intents == [
             (session.session_key, "continue")
         ]
+
+    @pytest.mark.asyncio
+    async def test_send_passes_persisted_user_message_id_to_task_runtime(
+        self, dispatcher, session
+    ):
+        class RecordingTaskRuntime:
+            def __init__(self) -> None:
+                self.enqueue_calls: list[dict[str, Any]] = []
+
+            async def enqueue(self, envelope, message: str, **kwargs: Any):
+                self.enqueue_calls.append(
+                    {"envelope": envelope, "message": message, **kwargs}
+                )
+                return SimpleNamespace(
+                    task_id="task-1",
+                    session_key=envelope.session_key,
+                    status="queued",
+                )
+
+        runtime = RecordingTaskRuntime()
+        manager = FakeSessionManager([session])
+        ctx = make_ctx(session_manager=manager, task_runtime=runtime)
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.send",
+            {"key": session.session_key, "message": "hello"},
+            ctx,
+        )
+
+        assert res.ok is True
+        assert runtime.enqueue_calls[0]["persisted_user_message_id"] == "msg-1"
+        assert runtime.enqueue_calls[0]["envelope"].metadata.get(
+            "persisted_user_message_id"
+        ) is None
 
     def test_legacy_session_error_payload_is_terminal_message_normalized(self):
         payload = _normalize_terminal_event_payload(

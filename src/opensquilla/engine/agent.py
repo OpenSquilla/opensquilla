@@ -1370,7 +1370,10 @@ class Agent:
 
         # Build initial message list
         turn_messages: list[Message] = list(history)
-        request_context_insert_index = len(turn_messages)
+        # Keep large request-scoped context at a stable provider prefix. If
+        # history is allowed to move ahead of it after the first turn,
+        # prefix-based provider caches can no longer reuse that block.
+        request_context_insert_index = 0
         # Insert this turn's skills context BEFORE the user content so it
         # joins turn_messages permanently (persists into self._history at
         # turn end). Re-inserting a fresh skills_ctx into request_messages
@@ -2791,8 +2794,39 @@ class Agent:
             if request_idx <= runtime_idx:
                 runtime_idx += 1
         runtime_idx = max(0, min(runtime_idx, len(result)))
-        result.insert(runtime_idx, runtime_context_message)
+        if runtime_idx < len(result) and result[runtime_idx].role == "user":
+            result[runtime_idx] = Agent._append_runtime_context_to_user_message(
+                result[runtime_idx],
+                runtime_context_message,
+            )
+        else:
+            result.insert(runtime_idx, runtime_context_message)
         return result
+
+    @staticmethod
+    def _append_runtime_context_to_user_message(
+        message: Message,
+        runtime_context_message: Message,
+    ) -> Message:
+        runtime_content = runtime_context_message.content
+        if not isinstance(runtime_content, str):
+            return runtime_context_message
+        if isinstance(message.content, str):
+            return Message(
+                role=message.role,
+                content=f"{message.content}\n\n{runtime_content}",
+                reasoning_content=message.reasoning_content,
+            )
+        if isinstance(message.content, list):
+            return Message(
+                role=message.role,
+                content=[
+                    *message.content,
+                    ContentBlockText(text=f"\n\n{runtime_content}"),
+                ],
+                reasoning_content=message.reasoning_content,
+            )
+        return runtime_context_message
 
     @staticmethod
     def _cache_breakpoints_without_runtime_context(
@@ -2969,6 +3003,7 @@ class Agent:
                     indexed_chunk_count=getattr(receipt, "indexed_chunk_count", None),
                 )
                 self._flush_done_this_cycle = False
+                return None
 
         # --- Compaction ---
         entries = [

@@ -20,6 +20,8 @@ import io
 import time
 
 import pytest
+from prompt_toolkit.formatted_text import to_formatted_text
+from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.input.base import DummyInput
 from prompt_toolkit.output import DummyOutput
 
@@ -43,6 +45,39 @@ def _fresh_chat_app() -> ChatApplication:
         input=DummyInput(),
         output=DummyOutput(),
     )
+
+
+class _RecordingOutput(DummyOutput):
+    def __init__(self) -> None:
+        super().__init__()
+        self.writes: list[str] = []
+
+    def write_raw(self, data: str) -> None:
+        self.writes.append(data)
+
+    def write(self, data: str) -> None:
+        self.writes.append(data)
+
+    def flush(self) -> None:
+        return None
+
+
+def _input_prefix_plain_text(chat_app: ChatApplication) -> str:
+    root = chat_app.application.layout.container
+    body = getattr(root, "content", root)
+    input_row = body.children[0]
+    prefix_window = input_row.children[0]
+    fragments = to_formatted_text(prefix_window.content.text())
+    return "".join(fragment[1] for fragment in fragments)
+
+
+def _input_prefix_width(chat_app: ChatApplication) -> int | None:
+    root = chat_app.application.layout.container
+    body = getattr(root, "content", root)
+    input_row = body.children[0]
+    prefix_window = input_row.children[0]
+    width = prefix_window.width() if callable(prefix_window.width) else prefix_window.width
+    return width.preferred
 
 
 # --------------------------------------------------------------------------- #
@@ -140,6 +175,110 @@ def test_turn_completes_during_approval_does_not_print_until_resume(
         assert "CHUNK\n" in buffer.getvalue()
 
     asyncio.run(_drive())
+
+
+def test_running_application_write_through_uses_terminal_region(monkeypatch) -> None:
+    """When the prompt is live, write_through must wait for real terminal output.
+
+    ``patch_stdout`` queues writes on a background thread; using it as the
+    final streaming path lets prompt redraws overtake the first response bytes.
+    A running ``ChatApplication`` should instead suspend its own prompt,
+    write directly to the prompt-toolkit output, and only then return.
+    """
+    async def _drive() -> None:
+        output = _RecordingOutput()
+        console_buffer = io.StringIO()
+        monkeypatch.setattr(cli_ui.console, "file", console_buffer, raising=True)
+
+        with create_pipe_input() as pipe:
+            chat_app = ChatApplication(
+                surface=Surface.CLI_GATEWAY,
+                toolbar_context={
+                    "model": None,
+                    "session_id": None,
+                    "suppress": None,
+                    "status": None,
+                },
+                bottom_toolbar=lambda: "",
+                style=None,
+                input=pipe,
+                output=output,
+            )
+            app_task = asyncio.create_task(chat_app.application.run_async())
+            await asyncio.sleep(0.05)
+            try:
+                await asyncio.wait_for(
+                    chat_app.write_through("◢ squilla\n嗨，小胖虎！\n"),
+                    timeout=1.0,
+                )
+            finally:
+                chat_app.application.exit()
+                try:
+                    await asyncio.wait_for(app_task, timeout=1.0)
+                except (TimeoutError, asyncio.CancelledError):
+                    app_task.cancel()
+
+        assert "嗨，小胖虎" in "".join(output.writes)
+        assert console_buffer.getvalue() == ""
+
+    asyncio.run(_drive())
+
+
+def test_write_through_reuses_active_stream_region(monkeypatch) -> None:
+    """Nested output during a streamed turn must not wait for finalize.
+
+    The assistant stream holds one prompt-toolkit terminal region open for the
+    whole turn so token bytes are not erased by prompt redraws. Slash-command
+    and approval output that lands during that region must reuse it; otherwise
+    the secondary writer parks behind the stream's output lock and can deadlock
+    before the renderer reaches finalize.
+    """
+
+    async def _drive() -> None:
+        chat_app = _fresh_chat_app()
+        buffer = io.StringIO()
+        monkeypatch.setattr(cli_ui.console, "file", buffer, raising=True)
+
+        async with chat_app.stream_output() as write:
+            write("first ")
+            nested = asyncio.create_task(chat_app.write_through("nested "))
+            await asyncio.wait_for(nested, timeout=0.25)
+            write("last")
+
+        assert buffer.getvalue() == "first nested last"
+
+    asyncio.run(_drive())
+
+
+def test_empty_prompt_during_waiting_is_not_rendered_as_user_message() -> None:
+    chat_app = _fresh_chat_app()
+
+    chat_app.set_toolbar("status", "Watching · 2.0s")
+
+    prefix = _input_prefix_plain_text(chat_app)
+    assert "you" not in prefix
+    assert prefix == "› "
+    assert _input_prefix_width(chat_app) == 2
+
+
+def test_empty_idle_prompt_is_not_rendered_as_user_message() -> None:
+    chat_app = _fresh_chat_app()
+
+    prefix = _input_prefix_plain_text(chat_app)
+    assert "you" not in prefix
+    assert prefix == "› "
+    assert _input_prefix_width(chat_app) == 2
+
+
+def test_waiting_prompt_restores_user_label_once_text_is_entered() -> None:
+    chat_app = _fresh_chat_app()
+
+    chat_app.set_toolbar("status", "Watching · 2.0s")
+    chat_app.application.current_buffer.text = "queued"
+
+    prefix = _input_prefix_plain_text(chat_app)
+    assert "you" in prefix
+    assert _input_prefix_width(chat_app) == 7
 
 
 # --------------------------------------------------------------------------- #

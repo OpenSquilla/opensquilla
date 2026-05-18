@@ -25,7 +25,11 @@ from rich.table import Table
 
 from opensquilla.cli import attachments as _cli_attachments
 from opensquilla.cli.repl.commands import is_exit_command, render_help_table
-from opensquilla.cli.repl.prompt import echo_user_input, interactive_session, prompt_approval
+from opensquilla.cli.repl.prompt import (
+    interactive_session,
+    prompt_approval,
+    user_input_echo_payload,
+)
 from opensquilla.cli.repl.session_state import ChatSessionState, messages_to_markdown
 from opensquilla.cli.repl.signal_handlers import install_chat_signal_handlers
 from opensquilla.cli.repl.slash_policy import SlashCategory, classify
@@ -645,7 +649,7 @@ async def _run_concurrent_repl(
                 # accept handler clears the buffer without echoing, so
                 # without this the assistant reply appears with no
                 # question above it.
-                echo_user_input(user_input)
+                await _echo_user_input(chat_app, user_input)
 
                 category = classify(user_input)
 
@@ -758,6 +762,58 @@ async def _run_concurrent_repl(
                 pass
 
 
+def _quiet_logs_for_interactive_chat() -> None:
+    """Filter chat-process log output to WARNING+ during the interactive REPL.
+
+    The chat surface shares a single TTY with two log streams:
+
+    * structlog events from OpenSquilla itself (default ``PrintLoggerFactory``
+      writes to stderr at ``INFO``).
+    * stdlib ``logging`` events from third-party deps that initialise on first
+      use — most visibly ``jieba``, whose default logger emits a multi-line
+      ``Building prefix dict.../Loading model.../Prefix dict has been built``
+      block at ``DEBUG`` on first segmentation call.
+
+    Both streams interleave with the streamed model reply and bury the
+    conversation. Raising the minimum level on both surfaces keeps the chat
+    pane focused on the conversation while still surfacing real warnings and
+    errors. Override via ``OPENSQUILLA_LOG_LEVEL`` (``debug`` / ``info`` /
+    ``warning`` / ``error``).
+    """
+    import logging  # noqa: PLC0415 — keep top-level imports minimal
+
+    import structlog  # noqa: PLC0415
+
+    level_name = os.environ.get("OPENSQUILLA_LOG_LEVEL", "warning").strip().upper()
+    level = getattr(logging, level_name, logging.WARNING)
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+    )
+    logging.getLogger().setLevel(level)
+    # ``jieba`` (CJK tokenizer, used by the memory layer) installs its own
+    # ``StreamHandler`` on ``default_logger`` and calls ``setLevel(DEBUG)``
+    # inside ``jieba/__init__.py``. A pre-import ``setLevel`` would be
+    # overridden when jieba later imports; force the import here, then pin
+    # the level back down and detach the in-tree handler so the init
+    # chatter ("Building prefix dict ...") cannot reach the TTY at all.
+    try:
+        import jieba  # noqa: F401, PLC0415
+    except ImportError:
+        pass
+    else:
+        jieba_logger = logging.getLogger("jieba")
+        jieba_logger.setLevel(level)
+        jieba_logger.propagate = False
+        for handler in list(jieba_logger.handlers):
+            jieba_logger.removeHandler(handler)
+
+
+def _clear_screen_for_interactive_chat() -> None:
+    """Start the persistent chat surface on a clean terminal page."""
+    if console.is_terminal:
+        console.clear()
+
+
 def run_chat(
     model: str = typer.Option("", "--model", "-m", help="Model override (provider/model)"),
     session_id: str = typer.Option("", "--session", "-s", help="Resume session ID"),
@@ -783,6 +839,8 @@ def run_chat(
             err=True,
         )
         raise typer.Exit(2)
+    _quiet_logs_for_interactive_chat()
+    _clear_screen_for_interactive_chat()
     if standalone:
         console.print(
             Panel(
@@ -1915,6 +1973,21 @@ def _render_gateway_task_group_status(
     event: dict[str, Any],
     renderer: StreamingRenderer,
 ) -> None:
+    status_item = _gateway_task_group_status(event_name, event)
+    if status_item is None:
+        return
+    message, style = status_item
+    status = getattr(renderer, "status", None)
+    if callable(status):
+        status(message, style=style)
+    else:
+        console.print(f"[{style}]{message}[/]")
+
+
+def _gateway_task_group_status(
+    event_name: str,
+    event: dict[str, Any],
+) -> tuple[str, str] | None:
     phase = event_name.rsplit(".", 1)[-1]
     style = "dim"
     if phase == "waiting":
@@ -1935,12 +2008,97 @@ def _render_gateway_task_group_status(
         message = f"background synthesis failed{suffix}"
         style = "yellow"
     else:
+        return None
+    return message, style
+
+
+async def _arender_gateway_task_group_status(
+    event_name: str,
+    event: dict[str, Any],
+    renderer: StreamingRenderer,
+) -> None:
+    status_item = _gateway_task_group_status(event_name, event)
+    if status_item is None:
+        return
+    message, style = status_item
+    await _renderer_status(renderer, message, style=style)
+
+
+async def _renderer_status(renderer: Any, message: str, *, style: str = "dim") -> None:
+    astatus = getattr(renderer, "astatus", None)
+    if callable(astatus):
+        await astatus(message, style=style)
         return
     status = getattr(renderer, "status", None)
     if callable(status):
         status(message, style=style)
     else:
         console.print(f"[{style}]{message}[/]")
+
+
+async def _renderer_tool_start(
+    renderer: Any,
+    name: str,
+    args: dict | None,
+    tool_use_id: str | None,
+) -> None:
+    atool_start = getattr(renderer, "atool_start", None)
+    if callable(atool_start):
+        await atool_start(name, args, tool_use_id)
+        return
+    renderer.tool_start(name, args, tool_use_id)
+
+
+async def _renderer_tool_finished(
+    renderer: Any,
+    tool_use_id: str | None,
+    *,
+    success: bool,
+) -> None:
+    atool_finished = getattr(renderer, "atool_finished", None)
+    if callable(atool_finished):
+        await atool_finished(tool_use_id, success=success)
+        return
+    renderer.tool_finished(tool_use_id, success=success)
+
+
+async def _renderer_error(renderer: Any, message: str) -> None:
+    aerror = getattr(renderer, "aerror", None)
+    if callable(aerror):
+        await aerror(message)
+        return
+    renderer.error(message)
+
+
+async def _renderer_finalize(
+    renderer: Any,
+    usage: UsageSummary | None = None,
+    *,
+    cancelled: bool = False,
+) -> None:
+    afinalize = getattr(renderer, "afinalize", None)
+    if callable(afinalize):
+        await afinalize(usage, cancelled=cancelled)
+        return
+    renderer.finalize(usage, cancelled=cancelled)
+
+
+async def _renderer_close(renderer: Any) -> None:
+    aclose = getattr(renderer, "aclose", None)
+    if callable(aclose):
+        await aclose()
+
+
+async def _echo_user_input(chat_app: Any, text: str) -> None:
+    payload = user_input_echo_payload(text)
+    if not payload:
+        return
+    write_through = getattr(chat_app, "write_through", None)
+    if callable(write_through):
+        await write_through(payload)
+        return
+    console.file.write(payload)
+    console.file.flush()
 
 
 def _artifact_event_payload(event: Any) -> dict[str, Any]:
@@ -1990,64 +2148,66 @@ async def _stream_response_gateway(
 
     with StreamingRenderer(chat_app=chat_app) as renderer:
         try:
-            async for event in client.send_message(
-                session_key, message, attachments=attachments, elevated=elevated
-            ):
-                event_name = event.get("event", "")
-                if event_name == "session.event.text_delta":
-                    await renderer.aappend_text(event.get("text", ""))
-                elif event_name == "session.event.tool_use_start":
-                    renderer.tool_start(
-                        event.get("tool_name") or event.get("toolName") or "tool",
-                        event.get("input") or event.get("arguments"),
-                        event.get("tool_use_id") or event.get("toolUseId"),
-                    )
-                elif event_name == "session.event.tool_result":
-                    await _maybe_handle_approval(
-                        event.get("result"),
-                        renderer,
-                        client.resolve_approval,
-                        elevated_state=elevated_state,
-                        surface=approval_surface,
-                    )
-                    if not _is_approval_or_blocked_result(event.get("result")):
-                        renderer.tool_finished(
+            try:
+                async for event in client.send_message(
+                    session_key, message, attachments=attachments, elevated=elevated
+                ):
+                    event_name = event.get("event", "")
+                    if event_name == "session.event.text_delta":
+                        await renderer.aappend_text(event.get("text", ""))
+                    elif event_name == "session.event.tool_use_start":
+                        await _renderer_tool_start(
+                            renderer,
+                            event.get("tool_name") or event.get("toolName") or "tool",
+                            event.get("input") or event.get("arguments"),
                             event.get("tool_use_id") or event.get("toolUseId"),
-                            success=_tool_result_success_from_status(
-                                event.get("execution_status") or event.get("executionStatus"),
-                                legacy_is_error=bool(
-                                    event.get("is_error") or event.get("isError")
-                                ),
-                            ),
                         )
-                elif event_name == "session.event.artifact":
-                    artifact = _artifact_event_payload(event)
-                    artifacts.append(artifact)
-                    status = getattr(renderer, "status", None)
-                    if callable(status):
-                        status(_artifact_status_line(artifact))
-                    else:
-                        console.print(_artifact_status_line(artifact))
-                elif event_name.startswith("session.event.task_group."):
-                    _render_gateway_task_group_status(event_name, event, renderer)
-                elif event_name == "session.event.error":
-                    message_text = event.get("message", "unknown")
-                    renderer.error(message_text)
-                    return TurnResult(
-                        text=renderer.buffer,
-                        usage=usage,
-                        error=message_text,
-                        artifacts=artifacts,
-                    )
-                elif event_name == "session.event.done":
-                    usage = UsageSummary.from_gateway_payload(event)
-                    cancelled = event.get("reason") == "aborted"
-                    model_after = event.get("routed_model") or event.get("model") or None
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            _clear_current_cancel()
-            await client.abort_session(session_key)
-            cancelled = True
-        renderer.finalize(usage, cancelled=cancelled)
+                    elif event_name == "session.event.tool_result":
+                        await _maybe_handle_approval(
+                            event.get("result"),
+                            renderer,
+                            client.resolve_approval,
+                            elevated_state=elevated_state,
+                            surface=approval_surface,
+                        )
+                        if not _is_approval_or_blocked_result(event.get("result")):
+                            await _renderer_tool_finished(
+                                renderer,
+                                event.get("tool_use_id") or event.get("toolUseId"),
+                                success=_tool_result_success_from_status(
+                                    event.get("execution_status")
+                                    or event.get("executionStatus"),
+                                    legacy_is_error=bool(
+                                        event.get("is_error") or event.get("isError")
+                                    ),
+                                ),
+                            )
+                    elif event_name == "session.event.artifact":
+                        artifact = _artifact_event_payload(event)
+                        artifacts.append(artifact)
+                        await _renderer_status(renderer, _artifact_status_line(artifact))
+                    elif event_name.startswith("session.event.task_group."):
+                        await _arender_gateway_task_group_status(event_name, event, renderer)
+                    elif event_name == "session.event.error":
+                        message_text = event.get("message", "unknown")
+                        await _renderer_error(renderer, message_text)
+                        return TurnResult(
+                            text=renderer.buffer,
+                            usage=usage,
+                            error=message_text,
+                            artifacts=artifacts,
+                        )
+                    elif event_name == "session.event.done":
+                        usage = UsageSummary.from_gateway_payload(event)
+                        cancelled = event.get("reason") == "aborted"
+                        model_after = event.get("routed_model") or event.get("model") or None
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                _clear_current_cancel()
+                await client.abort_session(session_key)
+                cancelled = True
+            await _renderer_finalize(renderer, usage, cancelled=cancelled)
+        finally:
+            await _renderer_close(renderer)
     return TurnResult(
         text=renderer.buffer,
         usage=usage,
@@ -2133,61 +2293,66 @@ async def _stream_response_turnrunner(
 
     with StreamingRenderer(chat_app=chat_app) as renderer:
         try:
-            stream = turn_runner.run(
-                message, session_key, tool_context=tool_ctx, model=model, timeout=timeout
-            )
-            async for event in _wrap_cli_turn_stream(stream, svc):
-                if isinstance(event, TextDeltaEvent):
-                    await renderer.aappend_text(event.text)
-                elif isinstance(event, RunHeartbeatEvent):
-                    renderer.pulse()
-                elif isinstance(event, ToolUseStartEvent):
-                    renderer.tool_start(event.tool_name, None, event.tool_use_id)
-                elif isinstance(event, ToolResultEvent):
-                    await _maybe_handle_approval(
-                        event.result,
-                        renderer,
-                        resolver,
-                        surface=approval_surface,
-                    )
-                    if not _is_approval_or_blocked_result(event.result):
-                        renderer.tool_finished(
+            try:
+                stream = turn_runner.run(
+                    message, session_key, tool_context=tool_ctx, model=model, timeout=timeout
+                )
+                async for event in _wrap_cli_turn_stream(stream, svc):
+                    if isinstance(event, TextDeltaEvent):
+                        await renderer.aappend_text(event.text)
+                    elif isinstance(event, RunHeartbeatEvent):
+                        renderer.pulse()
+                    elif isinstance(event, ToolUseStartEvent):
+                        await _renderer_tool_start(
+                            renderer,
+                            event.tool_name,
+                            None,
                             event.tool_use_id,
-                            success=_tool_result_success_from_status(
-                                event.execution_status,
-                                legacy_is_error=event.is_error,
-                            ),
                         )
-                elif isinstance(event, ArtifactEvent):
-                    artifact = _artifact_event_payload(event)
-                    artifacts.append(artifact)
-                    status = getattr(renderer, "status", None)
-                    if callable(status):
-                        status(_artifact_status_line(artifact))
-                    else:
-                        console.print(_artifact_status_line(artifact))
-                elif isinstance(event, WarningEvent):
-                    console.print(f"[yellow]{event.message}[/yellow]")
-                elif isinstance(event, ErrorEvent):
-                    message_text = _turn_stream_error_message(event)
-                    renderer.error(message_text)
-                    return TurnResult(
-                        text=renderer.buffer,
-                        usage=usage,
-                        error=message_text,
-                        artifacts=artifacts,
-                    )
-                elif isinstance(event, DoneEvent):
-                    usage = UsageSummary.from_done_event(event)
-                    model_after = usage.model or None
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            _clear_current_cancel()
-            cancelled = True
-        except TimeoutError as exc:
-            message_text = _timeout_exception_message(exc)
-            renderer.error(message_text)
-            return TurnResult(text=renderer.buffer, error=message_text)
-        renderer.finalize(usage, cancelled=cancelled)
+                    elif isinstance(event, ToolResultEvent):
+                        await _maybe_handle_approval(
+                            event.result,
+                            renderer,
+                            resolver,
+                            surface=approval_surface,
+                        )
+                        if not _is_approval_or_blocked_result(event.result):
+                            await _renderer_tool_finished(
+                                renderer,
+                                event.tool_use_id,
+                                success=_tool_result_success_from_status(
+                                    event.execution_status,
+                                    legacy_is_error=event.is_error,
+                                ),
+                            )
+                    elif isinstance(event, ArtifactEvent):
+                        artifact = _artifact_event_payload(event)
+                        artifacts.append(artifact)
+                        await _renderer_status(renderer, _artifact_status_line(artifact))
+                    elif isinstance(event, WarningEvent):
+                        await _renderer_status(renderer, event.message, style="yellow")
+                    elif isinstance(event, ErrorEvent):
+                        message_text = _turn_stream_error_message(event)
+                        await _renderer_error(renderer, message_text)
+                        return TurnResult(
+                            text=renderer.buffer,
+                            usage=usage,
+                            error=message_text,
+                            artifacts=artifacts,
+                        )
+                    elif isinstance(event, DoneEvent):
+                        usage = UsageSummary.from_done_event(event)
+                        model_after = usage.model or None
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                _clear_current_cancel()
+                cancelled = True
+            except TimeoutError as exc:
+                message_text = _timeout_exception_message(exc)
+                await _renderer_error(renderer, message_text)
+                return TurnResult(text=renderer.buffer, error=message_text)
+            await _renderer_finalize(renderer, usage, cancelled=cancelled)
+        finally:
+            await _renderer_close(renderer)
     return TurnResult(
         text=renderer.buffer,
         usage=usage,
@@ -2248,30 +2413,38 @@ async def _handle_image_command_turnrunner(
     usage: UsageSummary | None = None
     with StreamingRenderer(chat_app=chat_app) as renderer:
         try:
-            stream = turn_runner.run(
-                prompt,
-                session_key,
-                tool_context=tool_ctx,
-                model=model,
-                attachments=attachments,
-                timeout=timeout,
-            )
-            async for event in _wrap_cli_turn_stream(stream, svc):
-                if isinstance(event, TextDeltaEvent):
-                    await renderer.aappend_text(event.text)
-                elif isinstance(event, RunHeartbeatEvent):
-                    renderer.pulse()
-                elif isinstance(event, ToolUseStartEvent):
-                    renderer.tool_start(event.tool_name, None, event.tool_use_id)
-                elif isinstance(event, ErrorEvent):
-                    message_text = _turn_stream_error_message(event)
-                    renderer.error(message_text)
-                    return TurnResult(text=renderer.buffer, usage=usage, error=message_text)
-                elif isinstance(event, DoneEvent):
-                    usage = UsageSummary.from_done_event(event)
-        except TimeoutError as exc:
-            message_text = _timeout_exception_message(exc)
-            renderer.error(message_text)
-            return TurnResult(text=renderer.buffer, error=message_text)
-        renderer.finalize(usage)
+            try:
+                stream = turn_runner.run(
+                    prompt,
+                    session_key,
+                    tool_context=tool_ctx,
+                    model=model,
+                    attachments=attachments,
+                    timeout=timeout,
+                )
+                async for event in _wrap_cli_turn_stream(stream, svc):
+                    if isinstance(event, TextDeltaEvent):
+                        await renderer.aappend_text(event.text)
+                    elif isinstance(event, RunHeartbeatEvent):
+                        renderer.pulse()
+                    elif isinstance(event, ToolUseStartEvent):
+                        await _renderer_tool_start(
+                            renderer,
+                            event.tool_name,
+                            None,
+                            event.tool_use_id,
+                        )
+                    elif isinstance(event, ErrorEvent):
+                        message_text = _turn_stream_error_message(event)
+                        await _renderer_error(renderer, message_text)
+                        return TurnResult(text=renderer.buffer, usage=usage, error=message_text)
+                    elif isinstance(event, DoneEvent):
+                        usage = UsageSummary.from_done_event(event)
+            except TimeoutError as exc:
+                message_text = _timeout_exception_message(exc)
+                await _renderer_error(renderer, message_text)
+                return TurnResult(text=renderer.buffer, error=message_text)
+            await _renderer_finalize(renderer, usage)
+        finally:
+            await _renderer_close(renderer)
     return TurnResult(text=renderer.buffer, usage=usage)

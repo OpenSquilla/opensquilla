@@ -19,13 +19,28 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.auto_suggest import AutoSuggest
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import Completer
-from prompt_toolkit.formatted_text import to_formatted_text
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import HTML, to_formatted_text
 from prompt_toolkit.history import FileHistory, History
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.layout import (
+    ConditionalContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    Layout,
+    VSplit,
+    Window,
+)
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.menus import CompletionsMenu
 
+from opensquilla.cli.repl.paste import (
+    pasted_content_summary,
+    should_collapse_pasted_content,
+)
 from opensquilla.engine.commands import Surface
 
 
@@ -69,6 +84,7 @@ _EOF_SENTINEL: object = object()
 # Ctrl-C behaves as the existing single-press cancel-or-clear. Module-
 # level so tests can monkeypatch it if they need a tighter window.
 _DOUBLE_CTRL_C_WINDOW_S: float = 1.5
+_ACTIVE_INPUT_PREFIX_WIDTH: int = 7
 
 
 def _build_key_bindings() -> KeyBindings:
@@ -105,6 +121,7 @@ def _build_key_bindings() -> KeyBindings:
         chat_app = getattr(app, "_chat_application", None)
         if chat_app is not None:
             chat_app._invoke_cancel_callback()
+            chat_app._clear_pasted_content()
         app.current_buffer.reset()
         if chat_app is not None:
             chat_app._record_ctrl_c_and_maybe_shutdown()
@@ -116,6 +133,7 @@ def _build_key_bindings() -> KeyBindings:
         app = event.app
         chat_app = getattr(app, "_chat_application", None)
         if chat_app is not None:
+            chat_app._clear_pasted_content()
             chat_app._emit_eof()
         # Reset the buffer so a fresh prompt repaints after the consumer
         # decides what to do with the EOF signal.
@@ -130,6 +148,15 @@ def _build_key_bindings() -> KeyBindings:
         chat_app = getattr(app, "_chat_application", None)
         if chat_app is not None:
             chat_app._invoke_cancel_callback()
+
+    @bindings.add(Keys.BracketedPaste)
+    def _bracketed_paste(event) -> None:  # type: ignore[no-untyped-def]
+        app = event.app
+        chat_app = getattr(app, "_chat_application", None)
+        if chat_app is not None:
+            chat_app._insert_pasted_content(event.current_buffer, event.data)
+            return
+        event.current_buffer.insert_text(event.data)
 
     return bindings
 
@@ -149,7 +176,7 @@ class ChatApplication:
         self,
         *,
         surface: Surface = Surface.CLI_GATEWAY,
-        toolbar_context: dict[str, str | None],
+        toolbar_context: dict[str, object | None],
         bottom_toolbar,
         style=None,
         input: Input | None = None,
@@ -202,6 +229,15 @@ class ChatApplication:
         # press is the "second of a double". Reset to `None` after a
         # double-press fires so a third press resets the window correctly.
         self._last_ctrl_c_at: float | None = None
+        # Set while a streamed assistant turn owns one prompt-toolkit
+        # terminal region. Related writes (slash output, approval resume
+        # text, tool rows) reuse the same region instead of waiting behind
+        # the stream's output lock and risking a deadlock before finalize.
+        self._active_stream_writer: Callable[[str], None] | None = None
+        # Large bracketed paste payloads are represented in the visible
+        # input buffer by stable markers and expanded only when submitted.
+        self._pasted_content: dict[str, str] = {}
+        self._next_paste_index = 1
 
         self._buffer = Buffer(
             multiline=False,
@@ -222,13 +258,44 @@ class ChatApplication:
                 return []
             return to_formatted_text(rendered)
 
-        input_window = Window(BufferControl(buffer=self._buffer), height=Dimension(min=1))
+        # Persistent left-side prompt prefix. While the buffer is empty,
+        # render a neutral caret instead of ``you`` so the live input row
+        # does not look like an already-submitted blank user message in
+        # the transcript. As soon as the user starts typing, the row
+        # switches to the ordinary ``◢ you`` speaker marker.
+        from opensquilla.cli.ui import ACCENT, ACCENT_DEEP  # noqa: PLC0415
+
+        def _input_prefix_fragments():  # type: ignore[no-untyped-def]
+            if not self._buffer.text:
+                return to_formatted_text(
+                    HTML(f"<style fg='{ACCENT_DEEP}'>› </style>")
+                )
+            return to_formatted_text(
+                HTML(
+                    f"<style fg='{ACCENT}'>◢ </style>"
+                    f"<style fg='{ACCENT}'><b>you</b></style>"
+                    f"<style fg='{ACCENT}'>  </style>"
+                )
+            )
+
+        def _input_prefix_width():  # type: ignore[no-untyped-def]
+            return Dimension.exact(_ACTIVE_INPUT_PREFIX_WIDTH if self._buffer.text else 2)
+
+        input_window = VSplit(
+            [
+                Window(
+                    FormattedTextControl(_input_prefix_fragments),
+                    width=_input_prefix_width,
+                ),
+                Window(BufferControl(buffer=self._buffer), height=Dimension(min=1)),
+            ]
+        )
         toolbar_window = Window(
             FormattedTextControl(_toolbar_fragments),
             height=Dimension.exact(1),
             style="class:bottom-toolbar",
         )
-        children: list[Window] = []
+        children: list = []
         if input_header is not None:
             def _header_fragments():  # type: ignore[no-untyped-def]
                 try:
@@ -239,21 +306,42 @@ class ChatApplication:
                     return []
                 return to_formatted_text(rendered)
 
+            def _header_visible() -> bool:  # type: ignore[no-untyped-def]
+                return bool("".join(fragment[1] for fragment in _header_fragments()))
+
             children.append(
-                Window(
-                    FormattedTextControl(_header_fragments),
-                    height=Dimension.exact(1),
+                ConditionalContainer(
+                    Window(
+                        FormattedTextControl(_header_fragments),
+                        height=Dimension.exact(1),
+                    ),
+                    filter=Condition(_header_visible),
                 )
             )
         children.append(input_window)
         children.append(toolbar_window)
-        layout = Layout(HSplit(children))
+        root = FloatContainer(
+            content=HSplit(children),
+            floats=[
+                Float(
+                    left=_ACTIVE_INPUT_PREFIX_WIDTH,
+                    ycursor=True,
+                    content=CompletionsMenu(
+                        max_height=8,
+                        scroll_offset=1,
+                        display_arrows=True,
+                    ),
+                )
+            ],
+        )
+        layout = Layout(root)
 
         self._app: Application[None] = Application(
             layout=layout,
             key_bindings=_build_key_bindings(),
             style=style,
             full_screen=False,
+            refresh_interval=0.1,
             input=input,
             output=output,
         )
@@ -464,14 +552,71 @@ class ChatApplication:
         """
         if not payload:
             return
+        active_stream_writer = self._active_stream_writer
+        if active_stream_writer is not None:
+            await self.wait_approval_idle()
+            if self._active_stream_writer is active_stream_writer:
+                active_stream_writer(payload)
+                return
         # Local import: `opensquilla.cli.ui` re-exports `console` from
         # `opensquilla.ui`. Lazy so the module-level import graph stays flat
         # and tests that monkeypatch `console.file` see the patched object.
+        from prompt_toolkit.application.run_in_terminal import in_terminal  # noqa: PLC0415
+
         from opensquilla.cli.ui import console  # noqa: PLC0415
 
         async with self.acquire_output():
+            if self._app.is_running:
+                async with in_terminal():
+                    self._app.output.write_raw(payload)
+                    self._app.output.flush()
+                return
             console.file.write(payload)
             console.file.flush()
+
+    @asynccontextmanager
+    async def stream_output(self):
+        """Hold a single terminal region open for one streamed assistant turn.
+
+        Token streams cannot safely enter/exit ``in_terminal()`` per chunk:
+        each exit redraws the prompt and can erase a partial response line
+        that has not ended with ``\n`` yet. This context hides the prompt once,
+        yields a synchronous payload writer for the whole turn, and restores
+        the prompt only after the renderer finalizes.
+        """
+        from prompt_toolkit.application.run_in_terminal import in_terminal  # noqa: PLC0415
+
+        from opensquilla.cli.ui import console  # noqa: PLC0415
+
+        async with self.acquire_output():
+            if self._app.is_running:
+                async with in_terminal():
+                    def _write(payload: str) -> None:
+                        if not payload:
+                            return
+                        self._app.output.write_raw(payload)
+                        self._app.output.flush()
+
+                    self._active_stream_writer = _write
+                    try:
+                        yield _write
+                    finally:
+                        if self._active_stream_writer is _write:
+                            self._active_stream_writer = None
+                    return
+
+            def _write(payload: str) -> None:
+                if not payload:
+                    return
+                console.file.write(payload)
+                console.file.flush()
+
+            self._active_stream_writer = _write
+            try:
+                yield _write
+            finally:
+                if self._active_stream_writer is _write:
+                    self._active_stream_writer = None
 
     async def submit_iter(self) -> AsyncIterator[str]:
         """Yield each submitted line; terminates on Ctrl-D / EOF.
@@ -503,11 +648,29 @@ class ChatApplication:
     # ------------------------------------------------------------------ #
 
     def _on_accept(self, buffer: Buffer) -> bool:
-        text = buffer.text
+        text = self._expand_pasted_content(buffer.text)
         self._submit_queue.put_nowait(text)
+        self._clear_pasted_content()
         # Returning False clears the buffer; the Application keeps running so
         # the next line can be accepted without re-entering an outer loop.
         return False
+
+    def _insert_pasted_content(self, buffer: Buffer, text: str) -> None:
+        if not should_collapse_pasted_content(text):
+            buffer.insert_text(text)
+            return
+        marker = pasted_content_summary(text, index=self._next_paste_index)
+        self._next_paste_index += 1
+        self._pasted_content[marker] = text
+        buffer.insert_text(marker)
+
+    def _expand_pasted_content(self, text: str) -> str:
+        for marker, content in self._pasted_content.items():
+            text = text.replace(marker, content)
+        return text
+
+    def _clear_pasted_content(self) -> None:
+        self._pasted_content.clear()
 
     def _emit_eof(self) -> None:
         if self._eof_seen:

@@ -21,6 +21,8 @@ from prompt_toolkit.completion import (
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.input.base import DummyInput
+from prompt_toolkit.layout import FloatContainer
+from prompt_toolkit.layout.menus import CompletionsMenuControl
 from prompt_toolkit.output.base import DummyOutput
 
 from opensquilla.cli.repl import prompt as prompt_mod
@@ -52,6 +54,24 @@ def test_chat_application_buffer_accepts_completer_kwarg() -> None:
     app = _make_chat_app(completer=completer)
     # The Buffer instance carries the completer the caller passed.
     assert app._buffer.completer is completer
+
+
+def test_chat_application_layout_renders_completion_menu() -> None:
+    app = _make_chat_app(completer=WordCompleter(["/help"], ignore_case=True))
+
+    root = app.application.layout.container
+    assert isinstance(root, FloatContainer)
+    [completion_float] = root.floats
+    assert completion_float.left == 7
+    assert completion_float.xcursor is False
+    assert completion_float.ycursor is True
+    assert any(
+        isinstance(
+            getattr(getattr(float_.content, "content", None), "content", None),
+            CompletionsMenuControl,
+        )
+        for float_ in root.floats
+    )
 
 
 def test_chat_application_buffer_accepts_auto_suggest_and_history() -> None:

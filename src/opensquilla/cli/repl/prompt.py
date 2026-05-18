@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import Completer, FuzzyCompleter, WordCompleter
+from prompt_toolkit.completion import Completer, Completion, FuzzyCompleter, WordCompleter
 from prompt_toolkit.formatted_text import HTML, AnyFormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
@@ -20,10 +20,11 @@ from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import Style
 
 from opensquilla.cli.repl.commands import slash_words
+from opensquilla.cli.repl.paste import display_text_for_echo
 from opensquilla.cli.ui import (
     ACCENT,
     ACCENT_DEEP,
-    ACCENT_INK,
+    ACCENT_DIM,
     ACCENT_SOFT,
     console,
 )
@@ -50,11 +51,11 @@ _toolbar_context: dict[str, object | None] = {
     "model": None,
     "session_id": None,
     "suppress": None,
-    # Transient status surfaced in the bottom toolbar before the first
-    # streamed chunk lands. Holds a live WaitingIndicator instance (see
-    # cli/repl/stream.py) whose toolbar_text() is read on every redraw
-    # so the Braille spinner advances frame-by-frame. May also be a plain
-    # string for ad-hoc callers using ChatApplication.set_toolbar().
+    # Transient status surfaced in the assistant input header before the
+    # first streamed chunk lands. Holds a live WaitingIndicator instance
+    # (see cli/repl/stream.py) whose toolbar_text() is read on every
+    # redraw so the Braille spinner advances frame-by-frame. May also be
+    # a plain string for ad-hoc callers using ChatApplication.set_toolbar().
     # Cleared (set to None) when the stream starts or the turn ends.
     "status": None,
 }
@@ -89,6 +90,7 @@ class _SlashCompleter(Completer):
     """Fuzzy completer that only fires when the buffer starts with '/'."""
 
     def __init__(self, surface: Surface) -> None:
+        self._surface = surface
         words = slash_words(surface)
         meta_dict = _build_meta_dict(surface)
         inner = WordCompleter(words, meta_dict=meta_dict, ignore_case=True, WORD=True)
@@ -98,6 +100,23 @@ class _SlashCompleter(Completer):
         text = document.text_before_cursor
         if not text.startswith("/"):
             return
+        command, separator, rest = text.partition(" ")
+        if separator:
+            command_def = DEFAULT_REGISTRY.find(command, surface=self._surface)
+            if command_def is None or not command_def.argument_choices:
+                return
+            prefix = rest.lstrip()
+            if any(char.isspace() for char in prefix):
+                return
+            start_position = -len(prefix)
+            for choice in command_def.argument_choices:
+                if choice.value.startswith(prefix.lower()):
+                    yield Completion(
+                        choice.value,
+                        start_position=start_position,
+                        display_meta=choice.description,
+                    )
+            return
         yield from self._fuzzy.get_completions(document, complete_event)
 
 
@@ -106,13 +125,19 @@ def _html_escape(text: str) -> str:
 
 
 _PROMPT_STYLE = Style.from_dict({
-    "completion-menu.completion": f"bg:{ACCENT_INK} {ACCENT_SOFT}",
-    "completion-menu.completion.current": f"bg:{ACCENT} {ACCENT_INK} bold",
-    "completion-menu.meta.completion": f"bg:{ACCENT_INK} {ACCENT_DEEP} italic",
-    "completion-menu.meta.completion.current": f"bg:{ACCENT} {ACCENT_INK} italic",
-    "completion-menu.multi-column-meta": f"bg:{ACCENT_INK} {ACCENT_DEEP}",
-    "scrollbar.background": f"bg:{ACCENT_INK}",
-    "scrollbar.button": f"bg:{ACCENT_DEEP}",
+    "completion-menu.completion": "bg:#101010 #f0e8df",
+    "completion-menu.completion.current": f"bg:{ACCENT} #101010 bold",
+    "completion-menu.meta.completion": "bg:#101010 #8c8279",
+    "completion-menu.meta.completion.current": f"bg:{ACCENT} #101010",
+    "completion-menu.multi-column-meta": "bg:#101010 #8c8279",
+    "scrollbar.background": "bg:#101010",
+    "scrollbar.button": f"bg:{ACCENT_DIM}",
+    # prompt-toolkit's default ``bottom-toolbar`` class is reverse-video
+    # grey; the idle model/session text was rendering as black-on-grey
+    # instead of dim orange-on-default. Pin the background to terminal
+    # default so the dim foreground we set in HTML wins.
+    "bottom-toolbar": "noreverse bg:default",
+    "bottom-toolbar.text": "noreverse bg:default",
 })
 
 
@@ -120,30 +145,9 @@ _PREFIX_RE = re.compile(r"^\[(?P<model>.+?) (?P<mode>\w+)\] (?P<role>\w+) ▸ $"
 
 
 def _bottom_toolbar() -> HTML:
-    """Two-state bottom bar.
-
-    Idle: model and session render as a single dim line, separated by
-    middle dots, no background chips. Active: a single coloured chip
-    holds the live spinner / verb / elapsed produced by the renderer's
-    ``WaitingIndicator``. The split keeps the bar quiet while the user
-    is reading or typing, and uses the lone chip as the unambiguous
-    "agent is working" signal.
-    """
+    """Idle metadata bar: model and session, no background chips."""
     if _toolbar_context.get("suppress"):
         return HTML("")
-
-    status_obj = _toolbar_context.get("status")
-    if status_obj is None:
-        status_text = ""
-    elif hasattr(status_obj, "toolbar_text"):
-        status_text = status_obj.toolbar_text()
-    else:
-        status_text = str(status_obj)
-
-    if status_text:
-        return HTML(
-            f"<style bg='{ACCENT}' fg='{ACCENT_INK}'> {_html_escape(status_text)} </style>"
-        )
 
     model = str(_toolbar_context.get("model") or "")
     session_id = str(_toolbar_context.get("session_id") or "")
@@ -178,9 +182,19 @@ def _format_prefix(prefix: str) -> AnyFormattedText:
     )
 
 
-def _chrome_top(label: str = "you") -> None:
+def _chrome_top(label: str = "you", *, accent: str = ACCENT) -> None:
+    """Print the inline ``◢ label  `` speaker marker.
+
+    Layout: a leading blank line for breathing room, then a coloured
+    ``◢`` plus a bold label, then two spaces. Caller writes the speaker's
+    content immediately after on the same row; the trailing newline is
+    omitted so the first character lands flush against the marker.
+    """
     console.print()
-    console.rule(f"[{ACCENT}]◢[/] {label}", style="dim", characters="─", align="left")
+    console.print(
+        f"[{accent}]◢[/] [bold {accent}]{label}[/]  ",
+        end="",
+    )
 
 
 def _chrome_bottom() -> None:
@@ -188,32 +202,32 @@ def _chrome_bottom() -> None:
 
 
 def _input_header_fragments() -> AnyFormattedText:
-    """Persistent `◢ you ────…` header rendered above the live input area.
-
-    Mirrors the styling of `_chrome_top("you")` so the always-visible
-    chrome and the per-turn scrollback echo read as one design. The
-    callable resolves the terminal width on every redraw so the fill
-    dashes track terminal resizes (prompt-toolkit invalidates on
-    SIGWINCH; the chat REPL installs the resize handler that triggers
-    that invalidation).
-    """
-    from prompt_toolkit.application import get_app
-
-    try:
-        width = get_app().output.get_size().columns
-    except Exception:
-        width = 80
-    label = " you "
-    # `◢` measures as 1 column in monospace fonts that ship the
-    # geometric-shapes block; the dash fill subtracts the label width
-    # plus the marker and clamps to zero so narrow terminals do not
-    # produce negative repeat counts.
-    base_width = 1 + len(label)
-    dashes = "─" * max(0, width - base_width)
+    """Render pre-token waiting feedback on the assistant reply row."""
+    status_obj = _toolbar_context.get("status")
+    if status_obj is None:
+        return HTML("")
+    if hasattr(status_obj, "toolbar_text"):
+        status_text = status_obj.toolbar_text()
+    else:
+        status_text = str(status_obj)
+    if not status_text:
+        return HTML("")
     return HTML(
-        f"<style fg='{ACCENT}'>◢</style>"
-        f"<style fg='{ACCENT_DEEP}'>{label}{dashes}</style>"
+        f"<style fg='{ACCENT}'>◢ </style>"
+        f"<b><style fg='{ACCENT}'>squilla</style></b>"
+        f"<style fg='{ACCENT}'>  </style>"
+        f"<style fg='{ACCENT_SOFT}'>{_html_escape(status_text)}</style>"
     )
+
+
+def user_input_echo_payload(text: str) -> str:
+    """Render a submitted input line for the chat scrollback."""
+    if not text.strip():
+        return ""
+    with console.capture() as capture:
+        _chrome_top("you")
+        console.print(display_text_for_echo(text))
+    return capture.get()
 
 
 def echo_user_input(text: str) -> None:
@@ -228,10 +242,10 @@ def echo_user_input(text: str) -> None:
     Empty lines are skipped because rendering a bare ``you`` rule for a
     blank Enter adds noise without information.
     """
-    if not text.strip():
-        return
-    _chrome_top("you")
-    console.print(text)
+    payload = user_input_echo_payload(text)
+    if payload:
+        console.file.write(payload)
+        console.file.flush()
 
 
 def _prompt_session(surface: Surface | str = Surface.CLI_GATEWAY) -> PromptSession[str]:

@@ -29,6 +29,8 @@ def test_footer_renders_per_turn_only_with_snapshot(renderer):
     snap = SessionTotalsSnapshot(input_tokens=100, output_tokens=200, cost_usd=0.5)
     footer = renderer.footer(_usage(session_totals=snap), elapsed=1.5)
     assert "11 in / 22 out" in footer       # per-turn
+    assert "4 think" in footer
+    assert "4 reasoning" not in footer
     assert "100" not in footer               # NOT session-total in footer
     assert "$0.000123" in footer
     assert "∑" not in footer            # cumulative segment fully removed

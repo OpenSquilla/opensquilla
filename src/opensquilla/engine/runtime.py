@@ -3812,11 +3812,13 @@ class TurnRunner:
         )
 
         if self._pre_compaction_flush_enabled():
-            await self._await_pre_compaction_flush_grace(
+            flush_ok = await self._await_pre_compaction_flush_grace(
                 transcript,
                 session_key,
                 event_prefix="t3_upgrade_compaction",
             )
+            if not flush_ok:
+                return _T3_FLUSH_FAILED
 
         try:
             compaction_config = None
@@ -3910,11 +3912,13 @@ class TurnRunner:
             ratio=ratio,
         )
         if self._pre_compaction_flush_enabled():
-            await self._await_pre_compaction_flush_grace(
+            flush_ok = await self._await_pre_compaction_flush_grace(
                 transcript,
                 session_key,
                 event_prefix="preflight_compaction",
             )
+            if not flush_ok:
+                return
         compaction_config = None
         if compaction_provider is not None or compaction_model:
             from opensquilla.session.compaction import build_compaction_config_from_provider
@@ -3987,26 +3991,39 @@ class TurnRunner:
         session_key: str,
         *,
         event_prefix: str,
-    ) -> None:
+    ) -> bool:
         if self._session_flush_service is None:
             log.warning(
                 f"{event_prefix}.flush_unavailable",
                 session_key=session_key,
                 error="flush_service_unavailable",
             )
-            return
+            return False
 
         task = self._active_pre_compaction_flush_tasks.get(session_key)
         if task is not None:
             if task.done():
+                try:
+                    receipt = task.result()
+                except asyncio.CancelledError:
+                    log.debug(f"{event_prefix}.flush_cancelled", session_key=session_key)
+                    return False
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        f"{event_prefix}.flush_failed",
+                        session_key=session_key,
+                        error=str(exc),
+                    )
+                    return False
                 self._consume_pre_compaction_flush_task(session_key, task, event_prefix)
+                return self._flush_receipt_allows_destructive_compaction(receipt)
             else:
                 log.debug(
                     f"{event_prefix}.flush_skipped",
                     session_key=session_key,
                     reason="already_running",
                 )
-                return
+                return False
 
         from opensquilla.session.keys import parse_agent_id
 
@@ -4042,7 +4059,7 @@ class TurnRunner:
                 timeout_seconds=grace_timeout,
                 background_timeout_seconds=background_timeout,
             )
-            return
+            return False
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -4053,7 +4070,7 @@ class TurnRunner:
                 session_key=session_key,
                 error=str(exc),
             )
-            return
+            return False
 
         if self._active_pre_compaction_flush_tasks.get(session_key) is task:
             self._active_pre_compaction_flush_tasks.pop(session_key, None)
@@ -4064,6 +4081,7 @@ class TurnRunner:
             duration_ms=int((time.monotonic() - flush_t0) * 1000),
             background=False,
         )
+        return self._flush_receipt_allows_destructive_compaction(receipt)
 
     def _consume_pre_compaction_flush_task(
         self,

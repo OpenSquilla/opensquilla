@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from opensquilla.engine.types import ErrorEvent
-from opensquilla.gateway.boot import _emit_task_runtime_stream_events
+from opensquilla.gateway.boot import (
+    TaskRuntimeStreamError,
+    _emit_task_runtime_stream_events,
+    dispatch_task_runtime_turn,
+)
+from opensquilla.gateway.config import GatewayConfig
 from opensquilla.gateway.routing import RouteEnvelope, SourceKind
 from opensquilla.gateway.task_runtime import SubagentCompletionEvent, TaskRuntime
 from opensquilla.session.models import AgentTaskRecord, AgentTaskStatus
@@ -213,3 +219,65 @@ async def test_task_runtime_stream_error_emits_terminal_message_and_preserves_ra
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_task_runtime_rolls_back_persisted_user_on_provider_budget_error() -> None:
+    emitted: list[tuple[str, str, dict[str, Any]]] = []
+
+    class RecordingSessionManager:
+        def __init__(self) -> None:
+            self.removed: list[tuple[str, str]] = []
+
+        async def get_session(self, session_key: str) -> Any:  # noqa: ARG002
+            return None
+
+        async def remove_message(self, session_key: str, message_id: str) -> bool:
+            self.removed.append((session_key, message_id))
+            return True
+
+    class ProviderBudgetErrorRunner:
+        async def run(self, message: str, session_key: str, **kwargs: Any):  # noqa: ARG002
+            yield ErrorEvent(
+                message='{"fallback_reason":"provider_request_budget_exhausted"}',
+                code="provider_request_budget_exhausted",
+            )
+
+    async def _emitter(session_key: str, event_name: str, payload: dict[str, Any]) -> None:
+        emitted.append((session_key, event_name, payload))
+
+    manager = RecordingSessionManager()
+    run = SimpleNamespace(
+        agent_id="main",
+        task_id="task-1",
+        session_key="agent:main:test",
+        message="large paste",
+        envelope=_make_envelope("agent:main:test"),
+        attachments=[],
+        input_provenance={},
+        run_kind="interactive",
+        no_memory_capture=False,
+        ingress_pipeline_steps=[],
+        semantic_message=None,
+        persisted_user_message_id="msg-1",
+        stream_event_sink=None,
+    )
+
+    with pytest.raises(TaskRuntimeStreamError) as exc_info:
+        await dispatch_task_runtime_turn(
+            run,
+            config=GatewayConfig(
+                agent_stream_heartbeat_interval_seconds=0.0,
+                agent_stream_idle_timeout_seconds=1.0,
+            ),
+            session_manager=manager,
+            turn_runner=ProviderBudgetErrorRunner(),
+            event_emitter=_emitter,
+        )
+
+    assert exc_info.value.code == "provider_request_budget_exhausted"
+    assert manager.removed == [("agent:main:test", "msg-1")]
+    payload = emitted[0][2]
+    assert payload["code"] == "provider_request_budget_exhausted"
+    assert "too large" in payload["terminal_message"]
+    assert "failed before" not in payload["terminal_message"]

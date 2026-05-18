@@ -846,6 +846,30 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
         async with _persist_lock:
             await _persist_user_message()
 
+    async def _rollback_persisted_user_message(reason: str) -> tuple[str | None, bool]:
+        message_id = getattr(persisted_entry, "message_id", None)
+        if not message_id or not hasattr(ctx.session_manager, "remove_message"):
+            return message_id, False
+        try:
+            removed = await ctx.session_manager.remove_message(key, message_id)
+        except Exception as rb_exc:  # noqa: BLE001 — rollback is best-effort
+            log.warning(
+                "sessions.send.rollback_failed",
+                session_key=key,
+                message_id=message_id,
+                reason=reason,
+                error=str(rb_exc),
+            )
+            return message_id, False
+        if removed:
+            log.info(
+                "sessions.send.rollback_succeeded",
+                session_key=key,
+                message_id=message_id,
+                reason=reason,
+            )
+        return message_id, bool(removed)
+
     task_runtime = getattr(ctx, "task_runtime", None)
     if task_runtime is not None:
         requested_mode = (
@@ -865,6 +889,7 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
                 run_kind=run_kind,
                 no_memory_capture=bool(capture_controls["no_memory_capture"]),
                 semantic_message=semantic_message_text,
+                persisted_user_message_id=getattr(persisted_entry, "message_id", None),
             )
         except Exception as exc:
             # Ensure the uuid eviction does NOT fire on this
@@ -882,19 +907,7 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
             # storage error under load), surface a non-retryable error and
             # hand the orphan message_id to the client as an idempotency
             # token — clients must dedup before retrying.
-            orphan_id = getattr(persisted_entry, "message_id", None)
-            rollback_ok = False
-            if orphan_id and hasattr(ctx.session_manager, "remove_message"):
-                try:
-                    rollback_ok = await ctx.session_manager.remove_message(key, orphan_id)
-                except Exception as rb_exc:  # noqa: BLE001 — rollback is best-effort
-                    log.warning(
-                        "sessions.send.rollback_failed",
-                        session_key=key,
-                        message_id=orphan_id,
-                        error=str(rb_exc),
-                    )
-                    rollback_ok = False
+            orphan_id, rollback_ok = await _rollback_persisted_user_message("queue_full")
 
             if rollback_ok:
                 raise RpcHandlerError(
@@ -1028,6 +1041,13 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
                 event_dict = asdict(event)
                 event_kind = event_dict.pop("kind", event.__class__.__name__)
                 if event_kind in ("done", "error"):
+                    if (
+                        event_kind == "error"
+                        and event_dict.get("code") == "provider_request_budget_exhausted"
+                    ):
+                        await _rollback_persisted_user_message(
+                            "provider_request_budget_exhausted"
+                        )
                     await _emit_terminal_once(f"session.event.{event_kind}", event_dict)
                 else:
                     await _emit_to_subscribers(ctx, key, f"session.event.{event_kind}", event_dict)

@@ -32,6 +32,7 @@ async def start_turn_via_runtime(
     run_kind: str = "default",
     no_memory_capture: bool = False,
     semantic_message: str | None = None,
+    persisted_user_message_id: str | None = None,
     stream_event_sink: Callable[[Any], Awaitable[None]] | None = None,
 ) -> TaskHandle:
     """Enqueue a turn. Exceptions propagate — recovery is surface-specific.
@@ -61,6 +62,8 @@ async def start_turn_via_runtime(
         kwargs["no_memory_capture"] = True
     if semantic_message is not None:
         kwargs["semantic_message"] = semantic_message
+    if persisted_user_message_id is not None:
+        kwargs["persisted_user_message_id"] = persisted_user_message_id
     if stream_event_sink is not None:
         kwargs["stream_event_sink"] = stream_event_sink
     return await runtime.enqueue(envelope, message, **kwargs)

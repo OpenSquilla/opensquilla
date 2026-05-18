@@ -58,6 +58,14 @@ def parse_surface(value: str) -> Surface:
 ParamsFactory = Callable[[Any], dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class ArgumentChoice:
+    """One user-visible argument option for slash-command completion."""
+
+    value: str
+    description: str
+
+
 class ExecutionKind(StrEnum):
     """How a surface executes a slash command."""
 
@@ -89,6 +97,7 @@ class CommandDef:
     description: str
     execution: Mapping[Surface, CommandExecution]
     aliases: tuple[str, ...] = ()
+    argument_choices: tuple[ArgumentChoice, ...] = ()
 
     @property
     def surfaces(self) -> frozenset[Surface]:
@@ -298,6 +307,12 @@ _COMMANDS: tuple[CommandDef, ...] = (
         usage="/tool-compress [off|truncate|summarize|status]",
         description="Show or set tool result compression mode.",
         execution={_T: _local("tool-compress.status"), _S: _local("tool-compress.status")},
+        argument_choices=(
+            ArgumentChoice("off", "Disable tool result compression."),
+            ArgumentChoice("truncate", "Truncate long tool results."),
+            ArgumentChoice("status", "Show current compression mode."),
+            ArgumentChoice("summarize", "Summarize long tool results."),
+        ),
     ),
     CommandDef(
         name="/save",
@@ -332,6 +347,16 @@ _COMMANDS: tuple[CommandDef, ...] = (
         description="Show or set host-exec approval mode.",
         execution={_T: _local("permissions.show")},
         aliases=("/elevated",),
+        argument_choices=(
+            ArgumentChoice("off", "Sandboxed exec; approvals return to prompt mode."),
+            ArgumentChoice("on", "Host exec, approvals required."),
+            ArgumentChoice(
+                "bypass",
+                "Host exec, approvals auto-granted; sensitive paths still blocked.",
+            ),
+            ArgumentChoice("full", "Host exec, approvals skipped; sensitive paths bypassed."),
+            ArgumentChoice("status", "Show current permissions mode."),
+        ),
     ),
     CommandDef(
         name="/forget",

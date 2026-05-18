@@ -35,6 +35,30 @@ def test_web_catalog_includes_usage_rpc_execution() -> None:
     }
 
 
+def test_cli_gateway_catalog_serializes_argument_choices() -> None:
+    payload = asyncio.run(_list_for_surface("cli_gateway"))
+    permissions = next(cmd for cmd in payload["commands"] if cmd["name"] == "/permissions")
+
+    assert permissions["argument_choices"] == [
+        {
+            "value": "off",
+            "description": "Sandboxed exec; approvals return to prompt mode.",
+        },
+        {"value": "on", "description": "Host exec, approvals required."},
+        {
+            "value": "bypass",
+            "description": (
+                "Host exec, approvals auto-granted; sensitive paths still blocked."
+            ),
+        },
+        {
+            "value": "full",
+            "description": "Host exec, approvals skipped; sensitive paths bypassed.",
+        },
+        {"value": "status", "description": "Show current permissions mode."},
+    ]
+
+
 def test_channel_catalog_serialization_omits_rpc_params() -> None:
     payload = asyncio.run(_list_for_surface("channel"))
 

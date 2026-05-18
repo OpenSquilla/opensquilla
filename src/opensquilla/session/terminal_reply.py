@@ -40,6 +40,15 @@ def build_terminal_reply(
         or "stream idle" in error_message
     ):
         return "The task timed out before it could finish."
+    if (
+        "provider_request_budget_exhausted" in reason
+        or "provider_request_budget_exhausted" in error_class
+        or "provider_request_budget_exhausted" in error_message
+    ):
+        return (
+            "The request is too large for the provider context window. "
+            "Start a new session or send less text."
+        )
     if status == AgentTaskStatus.CANCELLED.value or reason.startswith("cancelled"):
         return "The task was cancelled before it finished."
     if status == AgentTaskStatus.ABANDONED.value or reason == "shutdown_timeout":

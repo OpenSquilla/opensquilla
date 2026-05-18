@@ -67,6 +67,9 @@ _SANDBOX_NETWORK_FAILURE_MARKERS: tuple[str, ...] = (
     "failed to resolve",
     "curl: (6)",
 )
+_SHELL_NULL_REDIRECT_RE = re.compile(
+    r"(?:(?<=^)|(?<=[\s;|&]))\d*[<>]{1,2}\s*/dev/null(?=$|[\s;|&])"
+)
 PROCESS_ACTIONS: frozenset[str] = frozenset(
     {"eof", "kill", "list", "log", "poll", "remove", "submit", "write"}
 )
@@ -156,6 +159,10 @@ def _elevated_mode() -> str | None:
     return _context_elevated_mode()
 
 
+def _without_shell_null_redirections(command: str) -> str:
+    return _SHELL_NULL_REDIRECT_RE.sub(" ", command)
+
+
 def _sensitive_shell_block(
     tool_name: str,
     command: str,
@@ -167,7 +174,8 @@ def _sensitive_shell_block(
 
     from opensquilla.sandbox.sensitive_paths import build_block_envelope, sensitive_path_in_text
 
-    checked_text = f"{workdir} {command}" if workdir else command
+    checked_command = _without_shell_null_redirections(command)
+    checked_text = f"{workdir} {checked_command}" if workdir else checked_command
     marker = sensitive_path_in_text(checked_text)
     if marker is not None:
         return json.dumps(

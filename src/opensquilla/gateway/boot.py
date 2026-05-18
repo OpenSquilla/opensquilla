@@ -62,6 +62,14 @@ _LOG_LEVELS = {
 }
 
 
+class TaskRuntimeStreamError(RuntimeError):
+    """Terminal error raised after a turn stream emits an error event."""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 # fmt: off
 def _make_channel_rpc_context_factory(svc: ServiceContainer, config: GatewayConfig, *, subscription_manager: Any, channel_manager_ref: Any, turn_runner: Any, heartbeat_service: Any, diagnostics_state: Any | None = None) -> Any:  # noqa: E501
     from opensquilla.channels.command_registry import build_channel_rpc_context
@@ -533,14 +541,40 @@ async def dispatch_task_runtime_turn(
     heartbeat_interval = _optional_positive_timeout(
         config, "agent_stream_heartbeat_interval_seconds", 15.0
     )
-    await _emit_task_runtime_stream_events(
-        raw_stream,
-        run.session_key,
-        event_emitter,
-        idle_timeout=stream_idle_timeout,
-        heartbeat_interval=heartbeat_interval,
-        stream_event_sink=getattr(run, "stream_event_sink", None),
-    )
+    try:
+        await _emit_task_runtime_stream_events(
+            raw_stream,
+            run.session_key,
+            event_emitter,
+            idle_timeout=stream_idle_timeout,
+            heartbeat_interval=heartbeat_interval,
+            stream_event_sink=getattr(run, "stream_event_sink", None),
+        )
+    except TaskRuntimeStreamError as exc:
+        if exc.code == "provider_request_budget_exhausted":
+            message_id = getattr(run, "persisted_user_message_id", None)
+            remove_message = getattr(session_manager, "remove_message", None)
+            if isinstance(message_id, str) and message_id and callable(remove_message):
+                try:
+                    removed = remove_message(run.session_key, message_id)
+                    if inspect.isawaitable(removed):
+                        removed = await removed
+                    if removed:
+                        log.info(
+                            "task_runtime.user_message_rolled_back",
+                            session_key=run.session_key,
+                            message_id=message_id,
+                            reason=exc.code,
+                        )
+                except Exception as rb_exc:  # noqa: BLE001 - preserve terminal error
+                    log.warning(
+                        "task_runtime.user_message_rollback_failed",
+                        session_key=run.session_key,
+                        message_id=message_id,
+                        reason=exc.code,
+                        error=str(rb_exc),
+                    )
+        raise
 
 
 def build_task_runtime_run_kwargs(
@@ -637,6 +671,7 @@ async def _emit_task_runtime_stream_events(
     from opensquilla.engine.stream_wrappers import wrap_stream
 
     error_message: str | None = None
+    error_code: str | None = None
     async for event in wrap_stream(
         raw_stream,
         idle_timeout=idle_timeout,
@@ -670,6 +705,7 @@ async def _emit_task_runtime_stream_events(
                 raw_message if isinstance(raw_message, str) and raw_message else "Agent error"
             )
             code = event_dict.get("code")
+            error_code = str(code) if code else None
             code_text = str(code or "").lower()
             is_timeout = "timeout" in code_text or "stream idle" in error_message.lower()
             terminal_payload = {
@@ -692,7 +728,7 @@ async def _emit_task_runtime_stream_events(
             message = event_dict.get("error_message")
             error_message = message if isinstance(message, str) and message else "Agent error"
     if error_message is not None:
-        raise RuntimeError(error_message)
+        raise TaskRuntimeStreamError(error_message, code=error_code)
 
 
 def _env_bool(name: str) -> bool | None:

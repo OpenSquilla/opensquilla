@@ -34,6 +34,23 @@ async def test_exec_command_blocks_nested_sensitive_workdir() -> None:
 
 
 @pytest.mark.asyncio
+async def test_exec_command_allows_dev_null_redirection() -> None:
+    result = await shell.exec_command("printf ok 2>/dev/null")
+
+    assert result == "exit_code=0\nok"
+
+
+def test_dev_null_redirection_does_not_hide_sensitive_operand() -> None:
+    payload = shell._sensitive_shell_block(
+        "exec_command",
+        "cat /dev/sda 2>/dev/null",
+    )
+
+    assert payload is not None
+    assert json.loads(payload)["sensitive_path"] == "/dev"
+
+
+@pytest.mark.asyncio
 async def test_background_process_blocks_sensitive_workdir(tmp_path: Path) -> None:
     sensitive_dir = tmp_path / ".env"
 

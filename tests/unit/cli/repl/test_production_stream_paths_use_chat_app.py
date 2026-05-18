@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import io
+from contextlib import asynccontextmanager
 from typing import Any
 
+import pytest
 from prompt_toolkit.input.base import DummyInput
 from prompt_toolkit.output import DummyOutput
 
@@ -296,3 +298,122 @@ def test_production_stream_blocks_during_approval_in_flight(monkeypatch) -> None
         assert "CHUNK" in captured.getvalue()
 
     asyncio.run(_drive())
+
+
+def test_gateway_tool_rows_and_footer_share_chat_app_write_path(monkeypatch) -> None:
+    """Tool/status/footer bytes must use the same output path as text deltas.
+
+    The interactive REPL has prompt-toolkit redraws running while streamed
+    text arrives. If tool rows or footer lines bypass ``chat_app.write_through``
+    they can race the prompt redraw and visually overwrite the first visible
+    text after a tool call. This regression drives the gateway event order from
+    a real chat turn: tool row first, then CJK text chunks.
+    """
+    from opensquilla.cli import ui as cli_ui
+
+    chat_app = _fresh_chat_app(surface=Surface.CLI_GATEWAY)
+    direct_output = io.StringIO()
+    locked_writes: list[str] = []
+
+    @asynccontextmanager
+    async def record_stream_output():
+        locked_writes.append("[open]")
+
+        def write(payload: str) -> None:
+            locked_writes.append(payload)
+
+        try:
+            yield write
+        finally:
+            locked_writes.append("[close]")
+
+    chat_app.stream_output = record_stream_output  # type: ignore[method-assign]
+    monkeypatch.setattr(cli_ui.console, "file", direct_output, raising=True)
+
+    events: list[dict[str, Any]] = [
+        {
+            "event": "session.event.tool_use_start",
+            "tool_name": "skill_view",
+            "tool_use_id": "tool-1",
+        },
+        {"event": "session.event.text_delta", "text": "明天"},
+        {"event": "session.event.text_delta", "text": "的天气，你想查哪个城市？"},
+        {
+            "event": "session.event.tool_result",
+            "tool_use_id": "tool-1",
+            "execution_status": {"status": "success"},
+        },
+        {
+            "event": "session.event.done",
+            "model": "deepseek/deepseek-v4-flash-20260423",
+            "input_tokens": 3,
+            "output_tokens": 9,
+        },
+    ]
+    client = _FakeGatewayClient(events)
+
+    async def _drive() -> chat_cmd.TurnResult:
+        return await chat_cmd._stream_response_gateway(
+            client,
+            "session-key",
+            "明天天气怎么样",
+            elevated_state=None,
+            chat_app=chat_app,
+        )
+
+    result = asyncio.run(_drive())
+
+    locked_output = "".join(locked_writes)
+    assert result.text == "明天的天气，你想查哪个城市？"
+    assert locked_writes[0] == "[open]"
+    assert locked_writes[-1] == "[close]"
+    assert "skill_view" in locked_output
+    assert "明天的天气" in locked_output
+    assert "deepseek-v4-flash" in locked_output
+    assert direct_output.getvalue() == ""
+
+
+def test_gateway_stream_region_closes_when_upstream_raises(monkeypatch) -> None:
+    """Unexpected stream failures must not leave the prompt region suspended."""
+    from opensquilla.cli import ui as cli_ui
+
+    chat_app = _fresh_chat_app(surface=Surface.CLI_GATEWAY)
+    direct_output = io.StringIO()
+    locked_writes: list[str] = []
+
+    @asynccontextmanager
+    async def record_stream_output():
+        locked_writes.append("[open]")
+
+        def write(payload: str) -> None:
+            locked_writes.append(payload)
+
+        try:
+            yield write
+        finally:
+            locked_writes.append("[close]")
+
+    class RaisingClient(_FakeGatewayClient):
+        async def send_message(self, *args: Any, **kwargs: Any):
+            yield {"event": "session.event.text_delta", "text": "partial"}
+            raise RuntimeError("stream broke")
+
+    chat_app.stream_output = record_stream_output  # type: ignore[method-assign]
+    monkeypatch.setattr(cli_ui.console, "file", direct_output, raising=True)
+
+    async def _drive() -> None:
+        with pytest.raises(RuntimeError, match="stream broke"):
+            await chat_cmd._stream_response_gateway(
+                RaisingClient([]),
+                "session-key",
+                "hello",
+                elevated_state=None,
+                chat_app=chat_app,
+            )
+
+    asyncio.run(_drive())
+
+    assert locked_writes[0] == "[open]"
+    assert locked_writes[-1] == "[close]"
+    assert "partial" in "".join(locked_writes)
+    assert direct_output.getvalue() == ""

@@ -8,14 +8,15 @@ from rich.console import Console
 from rich.panel import Panel
 
 from opensquilla.cli.repl import stream as stream_module
+from opensquilla.cli.repl.prompt import user_input_echo_payload
 from opensquilla.cli.repl.stream import StreamingRenderer, UsageSummary, WaitingIndicator
 
 
 def test_verb_cycles_by_dwell_seconds() -> None:
     ind = WaitingIndicator(started_at=100.0)
-    assert ind._verb(0.0) == "Scanning"
-    assert ind._verb(2.6) == "Ambushing"
-    assert ind._verb(5.1) == "Burrowing"
+    assert ind._verb(0.0) == "Watching"
+    assert ind._verb(2.6) == "Tracking"
+    assert ind._verb(5.1) == "Sensing"
     n = len(WaitingIndicator._verbs)
     assert ind._verb(n * 2.5 + 0.1) == ind._verb(0.1)
 
@@ -35,10 +36,62 @@ def test_toolbar_text_contains_frame_verb_and_elapsed() -> None:
     ind = WaitingIndicator(started_at=started)
     with patch("opensquilla.cli.repl.stream.time.monotonic", return_value=started + 3.0):
         text = ind.toolbar_text()
-    # Block prefix + spinner frame + verb (3.0 / 2.5 = 1 → _verbs[1]) + elapsed.
-    assert text.startswith("▌ ")
-    assert "Ambushing" in text
+    # Spinner frame + verb (3.0 / 2.5 = 1 → _verbs[1]) + elapsed.
+    assert text.startswith(f"{WaitingIndicator._spinner_frames[0]} ")
+    assert "Tracking" in text
     assert "3.0s" in text
+
+
+def test_waiting_status_renders_as_assistant_header_not_toolbar() -> None:
+    """Waiting feedback belongs on the assistant reply row, not the prompt bar."""
+    from prompt_toolkit.formatted_text import to_formatted_text
+
+    from opensquilla.cli.repl import prompt as prompt_mod
+
+    previous_status = prompt_mod._toolbar_context.get("status")
+    try:
+        prompt_mod._toolbar_context["status"] = WaitingIndicator(started_at=100.0)
+        with patch(
+            "opensquilla.cli.repl.stream.time.monotonic",
+            return_value=103.0,
+        ):
+            toolbar_fragments = to_formatted_text(prompt_mod._bottom_toolbar())
+            header_fragments = to_formatted_text(prompt_mod._input_header_fragments())
+    finally:
+        prompt_mod._toolbar_context["status"] = previous_status
+
+    toolbar_text = "".join(fragment[1] for fragment in toolbar_fragments)
+    header_text = "".join(fragment[1] for fragment in header_fragments)
+    header_styles = " ".join(fragment[0] for fragment in header_fragments)
+    assert "Tracking" not in toolbar_text
+    assert header_text.startswith("◢ squilla  ")
+    assert "Tracking" in header_text
+    assert "3.0s" in header_text
+    assert "bg:" not in header_styles
+
+
+def test_user_input_echo_keeps_marker_and_text_on_one_line() -> None:
+    payload = user_input_echo_payload("你好")
+    assert "◢" in payload
+    assert "you" in payload
+    assert "◢ you  \n" not in payload
+    assert "你好" in payload
+
+
+def test_user_input_echo_collapses_large_paste_to_summary() -> None:
+    text = "x" * 801
+    payload = user_input_echo_payload(text)
+    assert "◢" in payload
+    assert "you" in payload
+    assert "[Pasted Content 801 chars]" in payload
+    assert text not in payload
+
+
+def test_user_input_echo_collapses_many_lines_to_summary() -> None:
+    text = "\n".join(f"line {index}" for index in range(11))
+    payload = user_input_echo_payload(text)
+    assert f"[Pasted Content {len(text)} chars]" in payload
+    assert "line 10" not in payload
 
 
 def test_render_contains_verb_and_elapsed_seconds() -> None:
@@ -46,8 +99,8 @@ def test_render_contains_verb_and_elapsed_seconds() -> None:
     ind = WaitingIndicator(started_at=started)
     with patch("opensquilla.cli.repl.stream.time.monotonic", return_value=started + 3.0):
         plain = ind.__rich__().plain
-    # 3.0 / 2.5 = 1 → _verbs[1] == "Ambushing"
-    assert "Ambushing" in plain
+    # 3.0 / 2.5 = 1 → _verbs[1] == "Tracking"
+    assert "Tracking" in plain
     assert "3.0s" in plain
     assert "Ctrl+C cancels" in plain
 
@@ -65,14 +118,13 @@ def test_pulse_restart_preserves_monotonic_elapsed() -> None:
 
 def test_streaming_renderer_uses_toolbar_status_not_rich_live() -> None:
     """Lock down: pre-token feedback is a live ``WaitingIndicator`` parked
-    in the prompt-toolkit ``bottom_toolbar`` slot, not a Rich ``Live``
-    region.
+    in the prompt-toolkit assistant header slot, not a Rich ``Live`` region.
 
     Historical context: a Markdown+Panel Live update loop produced ghost
     panel borders on Windows PowerShell whenever the rendered height grew
     past the visible viewport. Inline approval removed the last remaining
     Live instance and routed waiting feedback through
-    ``_toolbar_context['status']``; the toolbar callable pulls the current
+    ``_toolbar_context['status']``; the header callable pulls the current
     spinner frame on every redraw driven by ``PromptSession.refresh_interval``.
     """
     from opensquilla.cli.repl import prompt as prompt_mod
@@ -100,6 +152,39 @@ def test_streaming_renderer_uses_toolbar_status_not_rich_live() -> None:
         assert prompt_mod._toolbar_context.get("status") is None
     finally:
         prompt_mod._toolbar_context["status"] = previous_status
+
+
+def test_directive_only_stream_does_not_emit_empty_reply_chrome(monkeypatch) -> None:
+    """Control-only chunks should not leave an empty assistant block behind."""
+    buf = io.StringIO()
+    test_console = Console(file=buf, force_terminal=False, width=120, highlight=False)
+    monkeypatch.setattr(stream_module, "console", test_console)
+
+    with StreamingRenderer() as renderer:
+        renderer.append_text("[[reply_to_current]]")
+        renderer.finalize(usage=None)
+
+    output = buf.getvalue()
+    assert output == ""
+    assert renderer.buffer == ""
+
+
+def test_visible_stream_opens_single_assistant_marker(monkeypatch) -> None:
+    """The assistant marker appears once, only when visible text starts."""
+    buf = io.StringIO()
+    test_console = Console(file=buf, force_terminal=False, width=120, highlight=False)
+    monkeypatch.setattr(stream_module, "console", test_console)
+
+    with StreamingRenderer() as renderer:
+        renderer.append_text("[[reply_to_current]]")
+        renderer.append_text("hello")
+        renderer.append_text(" world")
+        renderer.finalize(usage=None)
+
+    output = buf.getvalue()
+    assert output.count("◢ squilla") == 1
+    assert "hello world" in output
+    assert renderer.buffer == "hello world"
 
 
 def test_append_text_writes_plain_to_console_stream(monkeypatch) -> None:
