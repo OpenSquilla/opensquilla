@@ -180,7 +180,7 @@ Co-authored-by: Codex <noreply@openai.com>
 - [x] Merge child into integration with `git merge --no-ff`.
 - [x] Run `scripts/refactor_gate.sh` in integration.
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run `git worktree prune`, and verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
+- [x] Remove `../opensquilla-refactor-active`, run `git worktree prune`, and verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
 
 ## Child gate
 
@@ -219,6 +219,7 @@ Co-authored-by: Codex <noreply@openai.com>
   - Architecture correction: first full `scripts/refactor_gate.sh` run failed at `tests/test_ci/test_architecture_import_contracts.py::test_package_imports_do_not_add_new_edges` because `opensquilla.session.management_service` statically imported `opensquilla.gateway.rpc`, producing `session->gateway`; the service now uses structural typing and lazy exception lookup to avoid that package edge.
   - Full child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 514 source files; whitespace passed; pytest passed with `2466 passed, 8 skipped, 2 warnings in 29.44s`; gateway smoke start/status/stop passed on port `58144`.
   - Integration merge gate: `scripts/refactor_gate.sh` passed after merge `443abcb`; ruff passed; mypy passed with no issues in 514 source files; whitespace passed; pytest passed with `2471 passed, 6 skipped, 2 warnings in 25.98s`; gateway smoke start/status/stop/status passed on `127.0.0.1:58521`.
+  - Cleanup: current worktree inventory contains no active/provider/session refactor worker worktrees beyond the integration worktree; `git diff --check HEAD^ HEAD` passed for the latest integration record.
 - Residual risk:
   - Low to medium. The public RPC behavior remains covered and compatibility import facades preserve old Gateway paths, but `opensquilla.session.management_service` still performs lazy lookup of Gateway RPC exception classes at raise sites to avoid a static package edge.
 - Next recommended slice:
