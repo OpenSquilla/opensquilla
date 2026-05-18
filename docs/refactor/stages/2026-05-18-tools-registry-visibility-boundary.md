@@ -131,15 +131,15 @@ Separate tool visibility/profile/context policy from the registry implementation
 - [x] Implement the smallest behavior-compatible visibility boundary move.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -165,8 +165,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `d262d39afc5a1c9e0fbeb09d989dfe8a38572b28`.
+- Integration merge: `cd3ac83611e4cafba2c98007f7d236bb593fb8b3`.
 - Verification evidence:
 - Red: `uv run --extra dev pytest tests/test_tools/test_registry_visibility_boundary.py -q` failed as expected during collection with `ModuleNotFoundError: No module named 'opensquilla.tools.visibility'`.
 - Focused green: `uv run --extra dev pytest tests/test_tools/test_registry_visibility_boundary.py tests/test_tools/test_registry_visibility.py tests/test_gateway/test_rpc_tools_visibility.py -q` passed with `28 passed in 1.28s`.
@@ -175,5 +175,10 @@ Co-authored-by: Codex <noreply@openai.com>
 - Touched ruff: `uv run --extra dev ruff check src/opensquilla/tools/visibility.py src/opensquilla/tools/registry.py tests/test_tools/test_registry_visibility_boundary.py tests/test_tools/test_registry_visibility.py tests/test_gateway/test_rpc_tools_visibility.py` passed.
 - Whitespace: `git diff --check` passed.
 - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 507 source files; whitespace passed; pytest passed with `2447 passed, 8 skipped, 2 warnings in 45.72s`; gateway smoke start/status/stop passed on port `52425`.
+- Release hygiene spot check after stage-doc update: `uv run --extra dev pytest tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths -q` passed with `1 passed in 0.31s`.
+- Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `593eb6a`.
+- Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 507 source files; whitespace passed; pytest passed with `2449 passed, 6 skipped, 2 warnings in 26.57s`; gateway smoke start/status/stop passed on port `52547`.
 - Residual risk:
+  - Low. The slice moves existing profile/context/visibility policy without changing public tool names, schemas, RPC payloads, or dispatch behavior; compatibility imports from `opensquilla.tools.registry` remain available.
 - Next recommended slice:
+  - Continue Tools/Sandbox module-level cleanup by splitting the large tool policy surface into focused policy group/runtime capability helpers, or switch to a larger Channels message-normalization/dispatch-service boundary if tool policy risk should be deferred.
