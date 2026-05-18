@@ -29,6 +29,7 @@ host. See ``docs/adr/006-sandbox-governance.md`` for the active contract.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import inspect
 import json
@@ -51,6 +52,7 @@ from opensquilla.sandbox.governance import (
 from opensquilla.sandbox.policy import LevelHints, build_policy, select_level
 from opensquilla.sandbox.stale_output_cache import StaleOutputCache, get_stale_output_cache
 from opensquilla.sandbox.types import (
+    ALLOW,
     ApprovalDecision,
     DenialReason,
     DenialResult,
@@ -182,21 +184,6 @@ def _apply_host_compatibility(settings: SandboxSettings) -> SandboxSettings:
         log.warning(
             "sandbox.windows_auto_backend_unsupported: "
             "no Windows sandbox backend is available; disabling sandbox for this runtime"
-        )
-        return settings.model_copy(
-            update={
-                "sandbox": False,
-                "security_grading": False,
-            }
-        )
-    if (
-        sys.platform == "darwin"
-        and settings.sandbox
-        and settings.backend == "auto"
-    ):
-        log.warning(
-            "sandbox.macos_auto_backend_unsupported: "
-            "macOS Seatbelt execution is not implemented; disabling sandbox for this runtime"
         )
         return settings.model_copy(
             update={
@@ -541,11 +528,61 @@ def _string_env(value: Any) -> dict[str, str] | None:
     return {str(k): str(v) for k, v in value.items()}
 
 
+async def escalate_backend_denial(
+    result: SandboxResult,
+    request: SandboxRequest,
+    policy: SandboxPolicy,
+    *,
+    runtime: SandboxRuntime | None = None,
+) -> ApprovalDecision:
+    """Escalate a seatbelt backend denial to the approval queue.
+
+    Called post-execution when ``result.backend_notes`` is non-empty.
+    Routes to the existing approval gate with ``require_approval=True`` so
+    the user is asked whether to re-run the command without sandbox
+    restrictions. Returns :data:`ALLOW` on approval or a
+    :class:`DenialResult` with ``retryable=False`` on denial.
+    """
+    fp = action_fingerprint(request)
+    notes_str = "; ".join(result.backend_notes)
+    rt = runtime or get_runtime()
+    if rt is None:
+        return DenialResult(
+            reason=DenialReason.SEATBELT_DENIED,
+            suggested_next_step=SuggestedNextStep.ASK_USER,
+            level=policy.level,
+            action_fingerprint=fp,
+            message=f"Sandbox denied the command ({notes_str}); no runtime to escalate.",
+            retryable=False,
+        )
+
+    session_id = _resolve_session_id(rt, None)
+    escalation_request = dataclasses.replace(request, reason=f"sandbox denied: {notes_str}")
+    escalation_policy = dataclasses.replace(policy, require_approval=True)
+
+    decision = await rt.gate.gate(escalation_request, escalation_policy, session_id=session_id)
+
+    if not isinstance(decision, DenialResult):
+        return ALLOW
+
+    denial = DenialResult(
+        reason=DenialReason.SEATBELT_DENIED,
+        suggested_next_step=SuggestedNextStep.ASK_USER,
+        level=policy.level,
+        action_fingerprint=fp,
+        message=f"Sandbox denied the command ({notes_str}). User did not grant approval.",
+        retryable=False,
+    )
+    await rt.ledger.record_denial(session_id, fp, denial.reason)
+    return denial
+
+
 __all__ = [
     "SandboxRuntime",
     "action_fingerprint",
     "build_request",
     "configure_runtime",
+    "escalate_backend_denial",
     "gate_action",
     "get_runtime",
     "record_success",

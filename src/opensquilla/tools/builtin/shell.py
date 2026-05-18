@@ -22,6 +22,7 @@ from opensquilla.sandbox.backend.noop import NoopBackend
 from opensquilla.sandbox.governance import action_fingerprint
 from opensquilla.sandbox.integration import (
     build_request,
+    escalate_backend_denial,
     gate_action,
     get_runtime,
     run_under_backend,
@@ -450,6 +451,32 @@ async def exec_command(
             sandbox_result = await run_under_backend(backend_request, runtime=runtime)
         except Exception as exc:
             raise ToolError(f"Sandboxed shell execution failed: {exc}") from exc
+        if sandbox_result.backend_notes:
+            escalation = await escalate_backend_denial(
+                sandbox_result, request, policy, runtime=runtime
+            )
+            if isinstance(escalation, DenialResult):
+                return json.dumps(escalation.to_dict())
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=cwd,
+                    env=merged_env,
+                )
+                try:
+                    stdout_bytes, _ = await asyncio.wait_for(
+                        proc.communicate(), timeout=effective_timeout
+                    )
+                except TimeoutError:
+                    proc.kill()
+                    await proc.communicate()
+                    return f"[timeout after {effective_timeout}s]\ncommand: {command}"
+                output = stdout_bytes.decode("utf-8", errors="replace")
+                return f"exit_code={proc.returncode}\n{output}"
+            except Exception as e:
+                return f"[error] {e}"
         output = sandbox_result.stdout
         if sandbox_result.stderr:
             output += sandbox_result.stderr
