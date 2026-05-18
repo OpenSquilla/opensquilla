@@ -127,15 +127,15 @@ Extract gateway `/image` route-name execution into a focused executor without ch
 - [x] Implement the smallest behavior-compatible change.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -161,8 +161,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit: pending
-- Integration merge:
+- Child commit: `adcdd3d` (`Move gateway chat image route behind executor boundary`)
+- Integration merge: `91bbc24` (`Merge CLI chat gateway image route executor boundary`)
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-cli-chat-gateway-image-route-executor-boundary` passed on branch `codex/refactor-cli-chat-gateway-image-route-executor-boundary` at `6e729bd`.
   - Spawn probe: `spawn_agent` succeeded for `/root/gateway_image_route_probe`, but the read-only probe did not return within two wait windows and was closed; main thread continued from current source evidence.
@@ -171,7 +171,10 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_gateway_image_route_workflows.py src/opensquilla/cli/chat_gateway_image_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py tests/test_cli/test_cli_product_completeness.py -q` passed, `225 passed in 2.44s`.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 478 source files; whitespace passed; pytest passed with `2389 passed, 8 skipped, 2 warnings in 50.50s`; gateway smoke start/status/stop passed on `127.0.0.1:51802`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `6e729bd`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-gateway-image-route-executor-boundary` produced merge commit `91bbc24`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 478 source files; whitespace passed; pytest passed with `2391 passed, 6 skipped, 2 warnings in 33.33s`; gateway smoke start/status/stop passed on `127.0.0.1:49231`.
 - Residual risk:
-  - Pending integration merge and integration gate.
+  - Low. This slice only moves `/image` route-name dispatch into a thin executor; the existing image workflow still owns prompt parsing, attachment construction, streaming, transcript updates, usage accounting, and usage/error text.
 - Next recommended slice:
-  - Pending completion; likely continue route executor extraction for `/path` or `/file` depending on which local dependency injection can be moved with the least behavior risk.
+  - Continue route executor extraction for `/path`, because the existing gateway path workflow already owns local/remote checks and prompt attachment behavior while `_handle_gateway_slash_command` still owns the direct route-name branch.
