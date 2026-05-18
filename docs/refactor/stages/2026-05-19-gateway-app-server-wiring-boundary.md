@@ -239,9 +239,13 @@ same boot function and create avoidable conflicts.
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+  - Integration merge: `f8ae0ea`
+- [x] Run `scripts/refactor_gate.sh` in integration.
+  - Integration gate passed: `2659 passed, 6 skipped, 2 warnings in 28.45s`;
+    gateway smoke start/status/stop/status returned `{"ok": true, ...}` and
+    final line was `Refactor gate complete.`
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active` and
       `../opensquilla-refactor-agent-app-server`, run `git worktree prune`,
       and verify no extra refactor worktree directories remain beyond
@@ -279,13 +283,18 @@ Co-authored-by: Codex <noreply@openai.com>
 - Active child support commits:
   - Stage plan: `eb84b77`
   - Worker merge: `257262c`
-- Child verification commit: pending this record update.
-- Integration merge:
-- Integration record:
+- Child verification commit: `9d3d48d`
+- Integration merge: `f8ae0ea`
+- Integration record: pending this record update.
 - Verification evidence: worker RED/GREEN/touched-file checks and full child
   gate recorded above; main-thread focused GREEN, touched-file checks, diff
   review, and full child gate recorded above after merging worker branch.
-- Cleanup evidence: pending main-thread merge and worktree cleanup.
+  Integration `scripts/refactor_gate.sh` passed with `2659 passed, 6 skipped,
+  2 warnings`; gateway smoke completed start/status/stop/status.
+- Cleanup evidence: pending worktree cleanup.
 - Residual risk: low; boot still owns channel startup, router preload
   scheduling, and the final readiness flip after delegating app/server wiring.
-- Next recommended slice:
+- Next recommended slice: continue gateway boot decomposition with a coarse
+  boundary that does not overlap app/server wiring, such as gateway config/auth
+  boot prelude or diagnostics/turn-runner setup, after reassessing parallel
+  ownership boundaries.
