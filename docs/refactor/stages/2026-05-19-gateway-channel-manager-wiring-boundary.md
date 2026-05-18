@@ -234,9 +234,13 @@ parallelism decision was still made explicitly under
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+  - Merge commit: `6dcaf48` (`Merge gateway channel manager wiring boundary`).
+- [x] Run `scripts/refactor_gate.sh` in integration.
+  - Result: ruff passed; mypy no issues in 548 source files; whitespace passed;
+    pytest `2645 passed, 6 skipped, 2 warnings in 29.19s`; gateway smoke
+    start/status/stop/status passed.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active` and
       `../opensquilla-refactor-agent-channel-manager`, run
       `git worktree prune`, and verify no extra refactor worktree directories
@@ -271,8 +275,9 @@ Co-authored-by: Codex <noreply@openai.com>
 - Worker commit: `1dbf4b3` (`Refactor gateway channel manager wiring`).
 - Active child support commits:
   - `8a4f1b7` (`Merge gateway channel manager worker`).
-- Child verification commit:
-- Integration merge:
+- Child verification commit: `a87a9cc` (`Record gateway channel manager child
+  verification`).
+- Integration merge: `6dcaf48` (`Merge gateway channel manager wiring boundary`).
 - Integration record:
 - Verification evidence:
   - RED:
@@ -298,6 +303,9 @@ Co-authored-by: Codex <noreply@openai.com>
     source files; `git diff --check` passed.
   - Active child `scripts/refactor_gate.sh`: ruff passed; mypy no issues in
     548 source files; whitespace passed; pytest `2643 passed, 8 skipped, 2
+    warnings`; gateway smoke passed.
+  - Integration `scripts/refactor_gate.sh`: ruff passed; mypy no issues in 548
+    source files; whitespace passed; pytest `2645 passed, 6 skipped, 2
     warnings`; gateway smoke passed.
 - Cleanup evidence:
 - Residual risk: low; the stage moves channel manager boot wiring behind a
