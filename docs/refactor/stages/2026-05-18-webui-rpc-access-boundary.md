@@ -16,7 +16,7 @@
 - Date: 2026-05-18
 - Integration branch: `codex/refactor-architecture`
 - Child branch: `codex/refactor-webui-rpc-access-boundary`
-- Child worktree: `/Users/cwan0785/opensquilla-refactor-webui-rpc-access-boundary`
+- Child worktree: `../opensquilla-refactor-webui-rpc-access-boundary`
 - Owner: Codex main thread. Agent parallelism was attempted for `webui_rpc_access_probe`, but live `spawn_agent` returned `agent thread limit reached`; this stage proceeds sequentially with the fallback recorded here.
 
 ## Goal
@@ -42,9 +42,9 @@ Create a module-level Web UI RPC access boundary that covers all static views in
   - `tests/test_gateway/test_chat_static_assets.py`
   - `tests/test_gateway/test_status_helper_static.py`
 - Symbols or command surfaces inspected:
-  - Serena `initial_instructions` and `activate_project` succeeded for `/Users/cwan0785/opensquilla-refactor-integration`.
+  - Serena `initial_instructions` and `activate_project` succeeded for the integration worktree.
   - Serena `search_for_pattern` located direct `App.getRpc()` view dependencies across all static views.
-  - Serena child activation for this new worktree failed with stale cached path `/Users/cwan0785/opensquilla-refactor-cli-chat-standalone-file-workflow-boundary`; shell/git checks confirm the child worktree itself exists and is clean.
+  - Serena child activation for this new worktree failed with a stale cached historical child-worktree path; shell/git checks confirm the child worktree itself exists and is clean.
 - Tests inspected:
   - Existing static text-contract tests for chat, onboarding, status helpers, and public release surfaces.
 - Existing boundary pattern this stage follows:
@@ -128,9 +128,9 @@ Create a module-level Web UI RPC access boundary that covers all static views in
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -156,8 +156,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `1d0c9e3` (`Extract Web UI RPC access boundary`)
+- Integration merge: `46a2144` (`Merge Web UI RPC access boundary`)
 - Verification evidence:
   - Strict preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-webui-rpc-access-boundary` reported the expected dirty-worktree error after the stage plan and RED test were written.
   - Planning preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-webui-rpc-access-boundary` passed on branch `codex/refactor-webui-rpc-access-boundary` at `83e8c2b`.
@@ -169,6 +169,12 @@ Co-authored-by: Codex <noreply@openai.com>
   - Whitespace: `git diff --check` passed.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2404 passed, 8 skipped, 2 warnings in 50.16s`; gateway smoke start/status/stop passed on `127.0.0.1:58942`.
   - Browser smoke: local gateway started on `127.0.0.1:59009`; Playwright opened `/control/chat`, page title was `OpenSquilla Control`, status rendered `Connected`, and console messages at warning level reported `Errors: 0, Warnings: 0`; gateway then stopped and status returned `not_started`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `83e8c2b`.
+  - Integration merge: `git merge --no-ff codex/refactor-webui-rpc-access-boundary` produced merge commit `46a2144`.
+  - Integration gate first pass: `scripts/refactor_gate.sh` passed ruff, mypy, and whitespace, then pytest failed only on `tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths` because this stage document included developer-machine absolute paths.
+  - Integration doc hygiene fix: developer-machine absolute paths in this document were replaced with relative or generic worktree references.
+  - Release hygiene retry: `uv run --extra dev pytest tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths -q` passed, `1 passed in 0.30s`.
+  - Integration gate final: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2406 passed, 6 skipped, 2 warnings in 26.89s`; gateway smoke start/status/stop passed on `127.0.0.1:59411`.
 - Residual risk:
   - Low. The slice changes the static view RPC client acquisition boundary only; method names, params, low-level `RpcClient`, `App.getRpc()` compatibility, fetch upload, and approval HTTP calls are unchanged.
 - Next recommended slice:
