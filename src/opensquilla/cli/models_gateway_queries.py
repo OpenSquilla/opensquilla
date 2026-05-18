@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 from opensquilla.cli.gateway_rpc import run_gateway_sync
+
+
+class ModelListRequestParams(TypedDict):
+    """Gateway model list request params owned by the CLI query boundary."""
+
+    provider: str | None
+    capabilities: list[str] | None
+
+
+def model_list_request_params(
+    *,
+    provider: str | None,
+    capabilities: list[str] | None,
+) -> ModelListRequestParams:
+    """Build gateway request params for model listing."""
+
+    return {"provider": provider, "capabilities": capabilities}
 
 
 def list_models_from_gateway(
@@ -15,10 +32,12 @@ def list_models_from_gateway(
 ) -> list[dict[str, Any]]:
     """List available models from the running gateway."""
 
+    params = model_list_request_params(provider=provider, capabilities=capabilities)
+
     async def _with_client(client: Any) -> list[dict[str, Any]]:
         return cast(
             list[dict[str, Any]],
-            await client.list_models(provider=provider, capabilities=capabilities),
+            await client.list_models(**params),
         )
 
     return cast(
