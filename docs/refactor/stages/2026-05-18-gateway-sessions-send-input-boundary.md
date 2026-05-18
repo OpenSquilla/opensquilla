@@ -125,15 +125,15 @@ Extract non-handler input normalization from `rpc_sessions.py` into a dedicated 
 - [x] Implement the smallest behavior-compatible change.
 - [x] Run focused tests and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -159,8 +159,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit: pending
-- Integration merge:
+- Child commit: `e039571` (`Move session send input normalization behind gateway boundary`)
+- Integration merge: `14b812f` (`Merge gateway sessions send input boundary`)
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-gateway-sessions-send-input-boundary` passed on branch `codex/refactor-gateway-sessions-send-input-boundary` at `0a89118`.
   - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py::TestSessionsSend::test_gateway_sessions_send_delegates_input_normalization_to_gateway_boundary tests/test_gateway/test_rpc_sessions_attachments.py::test_rpc_session_attachment_helpers_delegate_to_send_input_boundary -q` failed as expected because `rpc_session_send_inputs.py` did not exist.
@@ -168,7 +168,10 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/gateway/rpc_sessions.py src/opensquilla/gateway/rpc_session_send_inputs.py tests/test_gateway/test_rpc_sessions.py tests/test_gateway/test_rpc_sessions_attachments.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py tests/test_gateway/test_rpc_sessions_attachments.py tests/test_gateway/test_uploads_endpoint.py tests/test_session/test_session_rpc_payload.py -q` passed, `156 passed in 1.71s`.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 481 source files; whitespace passed; pytest passed with `2390 passed, 8 skipped, 2 warnings in 61.14s`; gateway smoke start/status/stop passed on `127.0.0.1:53169`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `0a89118`.
+  - Integration merge: `git merge --no-ff codex/refactor-gateway-sessions-send-input-boundary` produced merge commit `14b812f`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 481 source files; whitespace passed; pytest passed with `2392 passed, 6 skipped, 2 warnings in 50.56s`; gateway smoke start/status/stop passed on `127.0.0.1:53804`.
 - Residual risk:
-  - Pending integration merge and integration gate.
+  - Low. Compatibility wrappers keep existing `_validate_attachments` and `_resolve_attachments` imports alive, and full child/integration gates passed.
 - Next recommended slice:
-  - Pending completion; likely continue Phase 2/3 with a sessions runtime or gateway RPC payload boundary selected from current-state evidence.
+  - Continue Phase 2/3 with a larger but still isolated Session/Gateway runtime/service boundary slice; parallel read-only scouts are also checking Provider/Engine and Tools/Web UI/Channels candidates from current integration state.
