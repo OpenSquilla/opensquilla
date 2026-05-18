@@ -25,10 +25,10 @@ from opensquilla.gateway.channel_artifacts import (
 from opensquilla.gateway.channel_dispatch import (
     _deliver_runtime_channel_reply,
     _dispatch_combined_message_after_debounce,
-    _ingest_channel_message_attachments,
     _run_turn_batch_path,
     _run_turn_with_streaming,
 )
+from opensquilla.gateway.channel_message_io import ingest_channel_message_attachments
 from opensquilla.gateway.channel_streaming import RuntimeChannelStreamRelay
 from opensquilla.gateway.config import AgentEntryConfig, GatewayConfig
 from opensquilla.gateway.routing import build_channel_route_envelope
@@ -873,6 +873,13 @@ async def test_channel_batch_turn_uses_agent_registry_model() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_ingest_resolves_adapter_bytes_to_engine_attachment() -> None:
+    from opensquilla.gateway import channel_dispatch
+
+    assert (
+        channel_dispatch._ingest_channel_message_attachments
+        is ingest_channel_message_attachments
+    )
+
     class ResolvingChannel(_FakeChannel):
         channel_id = "test"
 
@@ -897,7 +904,7 @@ async def test_channel_ingest_resolves_adapter_bytes_to_engine_attachment() -> N
         ],
     )
 
-    result = await _ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
+    result = await ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
 
     assert result.text == "read"
     assert result.failures == []
@@ -942,7 +949,7 @@ async def test_channel_ingest_hard_rejects_aggregate_attachment_cap() -> None:
     )
 
     with pytest.raises(AttachmentTotalTooLargeError, match="total raw bytes"):
-        await _ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
+        await ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
 
 
 @pytest.mark.asyncio

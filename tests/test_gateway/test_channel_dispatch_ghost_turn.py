@@ -89,13 +89,16 @@ async def _dispatch_one(
     Returns True on successful dispatch, False on TaskQueueFullError.
     """
     from opensquilla.engine.start_turn import start_turn_via_runtime
+    from opensquilla.gateway import channel_dispatch
     from opensquilla.gateway.channel_dispatch import (
-        _append_channel_user_message,
         _maybe_lock,
     )
+    from opensquilla.gateway.channel_message_io import append_channel_user_message
 
     session_lock = tr._get_session_lock(session_key)
     route_envelope = _make_route_envelope(session_key)
+
+    assert channel_dispatch._append_channel_user_message is append_channel_user_message
 
     try:
         async with _maybe_lock(session_lock):
@@ -109,7 +112,7 @@ async def _dispatch_one(
                 semantic_message="hello",
                 stream_event_sink=None,
             )
-            await _append_channel_user_message(
+            await append_channel_user_message(
                 session_manager=sm,
                 session_key=session_key,
                 text="hello",
@@ -221,13 +224,15 @@ async def test_ac1_4_old_order_creates_ghost_turn() -> None:
     ghost turns; then verify the current order (enqueue-then-append) does not.
     """
     from opensquilla.engine.start_turn import start_turn_via_runtime
+    from opensquilla.gateway import channel_dispatch
     from opensquilla.gateway.channel_dispatch import (
-        _append_channel_user_message,
         _maybe_lock,
     )
+    from opensquilla.gateway.channel_message_io import append_channel_user_message
 
     session_key = "s:ghost-test"
     route_envelope = _make_route_envelope(session_key)
+    assert channel_dispatch._append_channel_user_message is append_channel_user_message
 
     # ── OLD (buggy) order: append THEN enqueue ────────────────────────────
     sm_old = _FakeSessionManager()
@@ -237,7 +242,7 @@ async def test_ac1_4_old_order_creates_ghost_turn() -> None:
 
     try:
         # Bug: append first, then attempt enqueue
-        await _append_channel_user_message(
+        await append_channel_user_message(
             session_manager=sm_old,
             session_key=session_key,
             text="ghost message",
