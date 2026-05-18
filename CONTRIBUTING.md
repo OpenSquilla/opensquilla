@@ -2,6 +2,12 @@
 
 Thanks for improving OpenSquilla. Keep pull requests small, focused, and covered by tests that outside contributors can run without private access.
 
+## Target Branch
+
+Open pull requests against `dev` by default. OpenSquilla uses `dev` as the active integration branch for feature work, bug fixes, tests, and contributor changes.
+
+Use `main` only for maintainer-directed release, documentation-only preview, or hotfix work. When in doubt, target `dev`; maintainers will route release-ready changes from `dev` to `main`.
+
 ## Default Checks
 
 Install development dependencies:
