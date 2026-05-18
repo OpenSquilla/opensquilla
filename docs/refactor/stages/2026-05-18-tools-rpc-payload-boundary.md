@@ -104,15 +104,15 @@ Extract `tools.catalog` and `tools.effective` RPC payload construction from `too
 - [x] Implement the smallest behavior-compatible change.
 - [x] Run focused tests and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -138,8 +138,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit: pending
-- Integration merge:
+- Child commit: `27d4393`.
+- Integration merge: `85a89cd`.
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-tools-rpc-payload-boundary` passed on branch `codex/refactor-tools-rpc-payload-boundary` at `5afdc58`.
   - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_tools_visibility.py::test_tools_rpc_delegates_payloads_to_tools_boundary tests/test_provider_image_generation_runtime_boundary.py::test_gateway_reads_image_generation_capability_from_runtime_boundary -q` failed as expected because `tools/rpc_payload.py` did not exist and `rpc_tools.py` imported payload builders from `tools.registry`.
@@ -147,7 +147,10 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/gateway/rpc_tools.py src/opensquilla/tools/registry.py src/opensquilla/tools/rpc_payload.py tests/test_gateway/test_rpc_tools_visibility.py tests/test_provider_image_generation_runtime_boundary.py tests/test_tools/test_registry_visibility.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_gateway/test_rpc_tools_visibility.py tests/test_tools/test_registry_visibility.py tests/test_provider_image_generation_runtime_boundary.py::test_gateway_reads_image_generation_capability_from_runtime_boundary tests/test_public_tool_surface.py -q` passed, `30 passed in 0.85s`.
   - Final child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 486 source files; whitespace passed; pytest passed with `2398 passed, 8 skipped, 2 warnings in 53.25s`; gateway smoke start/status/stop passed on `127.0.0.1:54120`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `5afdc58`.
+  - Integration merge: `git merge --no-ff codex/refactor-tools-rpc-payload-boundary` created merge commit `85a89cd`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 486 source files; whitespace passed; pytest passed with `2400 passed, 6 skipped, 2 warnings in 27.16s`; gateway smoke start/status/stop passed on `127.0.0.1:54231`.
 - Residual risk:
-  - Pending integration merge and integration gate.
+  - Low. Tool RPC payload construction now crosses one additional module boundary, but compatibility wrappers in `tools.registry` and public tool-surface tests cover existing imports and public behavior.
 - Next recommended slice:
   - Continue with Channels/Gateway payload boundary after this slice lands.
