@@ -202,17 +202,33 @@ parallelism decision was still made explicitly under
 
 ## Steps
 
-- [ ] Run `scripts/refactor_preflight.sh --allow-dirty`.
-- [ ] Commit this stage plan on the active child branch.
-- [ ] Create external worker worktree from the active child branch.
+- [x] Run `scripts/refactor_preflight.sh --allow-dirty`.
+  - Result: preflight passed on active child worktree at `dc90f46`, then again
+    with this plan file staged as an intentional dirty change.
+- [x] Commit this stage plan on the active child branch.
+  - Commit: `88eaa05` (`Plan gateway channel manager wiring boundary`).
+- [x] Create external worker worktree from the active child branch.
+  - Worker worktree: `../opensquilla-refactor-agent-channel-manager`.
+  - Worker branch: `codex/refactor-gateway-channel-manager-worker`.
 - [x] Worker writes failing boundary tests and records RED output.
 - [x] Worker implements `gateway/channel_manager_wiring.py` and replaces the
       inline boot channel manager construction/start blocks with short
       delegator calls.
-- [ ] Main thread reviews diff for behavior compatibility and boundary scope.
-- [ ] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
-- [ ] Commit child verification/stage record update with:
+- [x] Main thread reviews diff for behavior compatibility and boundary scope.
+  - Worker commit: `1dbf4b3` (`Refactor gateway channel manager wiring`).
+  - Active child merge commit: `8a4f1b7` (`Merge gateway channel manager worker`).
+- [x] Run focused green command and touched-file checks.
+  - Focused GREEN: `11 passed in 3.51s`.
+  - Touched-file `ruff check`: passed.
+  - `uv run --extra dev mypy src/opensquilla/gateway --show-error-codes`:
+    success, no issues in 91 source files; existing pyproject unused-section
+    notes only.
+  - `git diff --check`: passed.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
+  - Result: ruff passed; mypy no issues in 548 source files; whitespace passed;
+    pytest `2643 passed, 8 skipped, 2 warnings in 54.70s`; gateway smoke
+    start/status/stop/status passed.
+- [x] Commit child verification/stage record update with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
@@ -252,8 +268,9 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Worker commit: this commit on `codex/refactor-gateway-channel-manager-worker`
+- Worker commit: `1dbf4b3` (`Refactor gateway channel manager wiring`).
 - Active child support commits:
+  - `8a4f1b7` (`Merge gateway channel manager worker`).
 - Child verification commit:
 - Integration merge:
 - Integration record:
@@ -274,7 +291,20 @@ Co-authored-by: Codex <noreply@openai.com>
     `git diff --check` -> clean.
   - Full `scripts/refactor_gate.sh`: not run by this external worker; main
     thread will run or re-run the child and integration gates.
+  - Main-thread focused GREEN:
+    `uv run --extra dev pytest tests/test_gateway/test_channel_manager_wiring_boundary.py tests/test_gateway/test_router_boot.py::test_start_gateway_server_schedules_router_preload_after_channels tests/test_gateway/test_shutdown_order.py tests/test_gateway/test_channel_rpc_payload_facade.py -q`
+    -> 11 passed in 3.51s.
+  - Main-thread touched-file checks: ruff passed; gateway mypy no issues in 91
+    source files; `git diff --check` passed.
+  - Active child `scripts/refactor_gate.sh`: ruff passed; mypy no issues in
+    548 source files; whitespace passed; pytest `2643 passed, 8 skipped, 2
+    warnings`; gateway smoke passed.
 - Cleanup evidence:
-- Residual risk: focused compatibility coverage passed; residual risk is
-  limited to interactions only covered by the full refactor gate.
-- Next recommended slice:
+- Residual risk: low; the stage moves channel manager boot wiring behind a
+  gateway boundary while preserving injected managers, webhook routes, startup
+  logging, router preload ordering, shutdown ordering, and the full refactor
+  gate.
+- Next recommended slice: cron handler boot registration or gateway app
+  construction wiring are natural follow-ups, but both still touch
+  `start_gateway_server`; keep them single-worker unless a scout identifies a
+  disjoint module-only slice.
