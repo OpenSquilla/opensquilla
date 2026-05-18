@@ -137,9 +137,9 @@ boundary, preserving current error messages and canonicalization behavior.
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
@@ -168,8 +168,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `3912339`.
+- Integration merge: `5a506b108b9aeca9138a4505422ff45eafed1b72`.
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-session-key-normalization-boundary` passed on branch `codex/refactor-session-key-normalization-boundary` at `2a98398`.
   - Red first attempt: the focused command used a non-existent `TestSessionsMessages` node and errored with no tests run; command corrected to `TestSessionsMessagesSubscribe`.
@@ -179,5 +179,9 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched mypy: `uv run --extra dev mypy src/opensquilla/gateway/rpc_session_lifecycle.py src/opensquilla/gateway/rpc_session_read_queries.py --show-error-codes` passed with no issues in 2 source files.
   - Whitespace: `git diff --check` passed.
   - Full child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 514 source files; whitespace passed; pytest passed with `2470 passed, 8 skipped, 2 warnings in 50.27s`; gateway smoke start/status/stop/status passed on `127.0.0.1:60459`.
+  - Integration merge: `git merge --no-ff codex/refactor-session-key-normalization-boundary` produced merge commit `5a506b1`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 514 source files; whitespace passed; pytest passed with `2472 passed, 6 skipped, 2 warnings in 27.58s`; gateway smoke start/status/stop/status passed on `127.0.0.1:60572`.
 - Residual risk:
+  - Low. The duplicated Gateway helper implementations were removed, while all callers still use the same validation and canonicalization behavior through the session-owned helper. The slice intentionally leaves non-parameter list-key canonicalization in the read-query module.
 - Next recommended slice:
+  - Continue with a coarser session lifecycle cleanup batch around reset/delete/compact workflow helpers, preserving current task-runtime drain semantics, epoch events, transcript restoration, and RPC payload keys.
