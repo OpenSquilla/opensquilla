@@ -148,15 +148,15 @@ Separate tools execution-surface assembly from `engine/runtime.py` without chang
 - [x] Implement the behavior-compatible execution-surface boundary.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -182,8 +182,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `bd04ad17a1d8bbaac0b56e432a17d7cdf434ffc2` (`bd04ad1`, `Extract tool execution surface boundary`).
+- Integration merge: `9d976fcf80b8e604ba10da35929f89e324005ffd` (`9d976fc`, `Merge tools execution surface boundary`).
 - Verification evidence:
 - Red: `uv run --extra dev pytest tests/test_tools/test_execution_surface_boundary.py -q` failed during collection with `ModuleNotFoundError: No module named 'opensquilla.tools.execution_surface'`.
 - Focused green: `uv run --extra dev pytest tests/test_tools/test_execution_surface_boundary.py tests/test_tools/test_dispatch_envelope.py tests/test_tools/test_registry_visibility.py tests/test_tools/test_policy_runtime_boundary.py tests/test_public_tool_surface.py tests/test_provider_image_generation.py -q` passed with `42 passed in 1.57s`.
@@ -191,5 +191,8 @@ Co-authored-by: Codex <noreply@openai.com>
 - Touched mypy: `uv run --extra dev mypy src/opensquilla/tools src/opensquilla/engine/runtime.py --show-error-codes` passed with no issues in 35 source files.
 - Whitespace: `git diff --check` passed.
 - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 510 source files; whitespace passed; pytest passed with `2457 passed, 8 skipped, 2 warnings in 63.55s`; gateway smoke start/status/stop passed on port `54427`.
+- Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed at `9d976fc`.
+- Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 510 source files; whitespace passed; pytest passed with `2459 passed, 6 skipped, 2 warnings in 26.43s`; gateway smoke start/status/stop passed on port `54566`.
+- Directory hygiene target: remove `../opensquilla-refactor-active` after this record commit, then run `git worktree prune` and verify no extra `opensquilla-refactor-*` worktrees remain beyond integration.
 - Residual risk: `build_tool_execution_surface` intentionally preserves `build_tool_handler` as the public dispatch primitive, so future slices should avoid moving per-call dispatch internals until envelope and approval tests are expanded for the new owner.
 - Next recommended slice: move gateway/provider runtime composition at module scale, using the existing provider runtime assembly and sync boundary tests as the RED contract.
