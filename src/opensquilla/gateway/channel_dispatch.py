@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-import re
 import weakref
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -28,7 +27,7 @@ from opensquilla.channels.stream_policy import resolve_channel_stream_policy
 from opensquilla.channels.types import IncomingMessage, OutgoingMessage
 from opensquilla.engine.start_turn import start_turn_via_runtime
 from opensquilla.engine.types import ErrorEvent, RunHeartbeatEvent, TextDeltaEvent
-from opensquilla.gateway.attachment_ingest import AttachmentIngestResult, ingest_attachments
+from opensquilla.gateway import channel_message_io as _channel_message_io
 from opensquilla.gateway.channel_artifacts import (
     artifact_delivery_key as _artifact_delivery_key,
 )
@@ -53,7 +52,30 @@ from opensquilla.gateway.channel_artifacts import (
 from opensquilla.gateway.channel_artifacts import (
     strip_delivered_artifact_image_references as _strip_delivered_artifact_image_references,
 )
-from opensquilla.paths import media_root_from_config
+from opensquilla.gateway.channel_inflight import (
+    ChannelInFlightSet as _ChannelInFlightSet,
+)
+from opensquilla.gateway.channel_inflight import (
+    compute_channel_cap as _compute_channel_cap,
+)
+from opensquilla.gateway.channel_replies import (
+    DirectiveTagStreamSanitizer as _DirectiveTagStreamSanitizer,
+)
+from opensquilla.gateway.channel_replies import (
+    sanitize_outgoing_message as _sanitize_outgoing_message,
+)
+from opensquilla.gateway.channel_replies import (
+    terminal_payload_from_error_event as _terminal_payload_from_error_event,
+)
+from opensquilla.gateway.channel_replies import (
+    terminal_payload_from_exception as _terminal_payload_from_exception,
+)
+from opensquilla.gateway.channel_replies import (
+    terminal_reply_suffix as _terminal_reply_suffix,
+)
+from opensquilla.gateway.channel_streaming import (
+    RuntimeChannelStreamRelay as _RuntimeChannelStreamRelay,
+)
 from opensquilla.session.terminal_reply import build_terminal_reply
 
 if TYPE_CHECKING:
@@ -61,30 +83,13 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-
-def _terminal_payload_from_exception(exc: BaseException) -> dict[str, str]:
-    is_timeout = isinstance(exc, TimeoutError)
-    return {
-        "status": "timeout" if is_timeout else "failed",
-        "terminal_reason": "timeout" if is_timeout else "error",
-        "error_class": exc.__class__.__name__,
-        "error_message": str(exc),
-    }
-
-
-def _terminal_payload_from_error_event(event: ErrorEvent) -> dict[str, str | None]:
-    code = (event.code or "").lower()
-    is_timeout = "timeout" in code or "stream_idle" in code
-    return {
-        "status": "timeout" if is_timeout else "failed",
-        "terminal_reason": "timeout" if is_timeout else "error",
-        "error_class": event.code,
-        "error_message": event.message,
-    }
-
-
-def _terminal_reply_suffix(message: str) -> str:
-    return f"\n\n({message})"
+_append_channel_user_message = _channel_message_io.append_channel_user_message
+_dump_attachment = _channel_message_io.dump_attachment
+_ingest_channel_message_attachments = _channel_message_io.ingest_channel_message_attachments
+_latest_assistant_text_after = _channel_message_io.latest_assistant_text_after
+_materialize_channel_attachments = _channel_message_io.materialize_channel_attachments
+_read_transcript_rows = _channel_message_io.read_transcript_rows
+_transcript_watermark = _channel_message_io.transcript_watermark
 
 
 def _emit_metric(name: str, value: int = 1, **labels: Any) -> None:
@@ -98,128 +103,8 @@ def _emit_metric(name: str, value: int = 1, **labels: Any) -> None:
     log.info(name, metric=name, value=value, **labels)
 
 
-class _ChannelInFlightSet:
-    """Per-channel in-flight reply task tracker with a configurable cap.
-
-    This is a SEPARATE second-layer semaphore from ``task_runtime._global_sem``.
-    ``task_runtime._global_sem`` gates how many turns run concurrently across
-    all sessions; this cap gates how many *channel reply deliveries* are
-    outstanding on a single channel adapter concurrently.  The two semaphores
-    are independent: a turn can be enqueued in task_runtime but its reply
-    delivery may still be queued here waiting for an in-flight slot.
-
-    Cap formula: ``min(channel_inflight_cap, max(2 × max_concurrency, 1))``
-    This prevents the channel adapter layer from exhausting the global semaphore
-    by ensuring the channel cap never exceeds twice the global concurrency budget.
-
-    Env variable: ``OPENSQUILLA_CHANNEL_INFLIGHT_CAP`` (default 8) is
-    surfaced through ``config.task_runtime.channel_inflight_cap``.
-    """
-
-    def __init__(self, cap: int) -> None:
-        self._cap = cap
-        self._tasks: set[asyncio.Task[Any]] = set()
-
-    @property
-    def cap(self) -> int:
-        return self._cap
-
-    def full(self) -> bool:
-        return len(self._tasks) >= self._cap
-
-    def add(self, task: asyncio.Task[Any]) -> None:
-        self._tasks.add(task)
-
-    def discard(self, task: asyncio.Task[Any]) -> None:
-        self._tasks.discard(task)
-
-    def try_acquire(self, token: object) -> bool:
-        """Atomically check cap and reserve a slot using *token* as the key.
-
-        Returns True and adds *token* to the set if the cap is not yet reached;
-        returns False (no mutation) if the set is already full.  Because asyncio
-        runs on a single thread, this check-then-add pair is atomic — no await
-        occurs between the guard and the mutation.
-        """
-        if len(self._tasks) >= self._cap:  # type: ignore[arg-type]
-            return False
-        self._tasks.add(token)  # type: ignore[arg-type]
-        return True
-
-    def release(self, token: object) -> None:
-        """Release a reservation previously acquired via try_acquire."""
-        self._tasks.discard(token)  # type: ignore[arg-type]
-
-    async def cancel_all(self) -> None:
-        """Cancel every in-flight task and await completion (for shutdown)."""
-        tasks = list(self._tasks)
-        for t in tasks:
-            t.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._tasks.clear()
-
-
-def _compute_channel_cap(config: Any) -> int:
-    """Compute the effective per-channel in-flight cap.
-
-    Formula: ``min(channel_inflight_cap, max(2 × max_concurrency, 1))``
-
-    This avoids the channel adapter layer monopolising the global semaphore
-    (``task_runtime._global_sem``) whose size equals ``max_concurrency``.
-    """
-    task_runtime_cfg = getattr(config, "task_runtime", None) if config is not None else None
-    raw_cap: int = getattr(task_runtime_cfg, "channel_inflight_cap", 8)
-    max_concurrency: int = getattr(task_runtime_cfg, "max_concurrency", 4)
-    formula_cap = max(2 * max_concurrency, 1)
-    return min(raw_cap, formula_cap)
-
-_DIRECTIVE_TAG_RE = re.compile(
-    r"\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*"
-)
-_DIRECTIVE_TAG_BUFFER_LIMIT = 256
 _DEFAULT_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 180.0
-
-
-def _strip_inline_directive_tags(content: str) -> str:
-    return _DIRECTIVE_TAG_RE.sub("", content)
-
-
-def _sanitize_outgoing_message(message: OutgoingMessage) -> OutgoingMessage:
-    cleaned = _strip_inline_directive_tags(message.content)
-    if cleaned == message.content:
-        return message
-    return message.model_copy(update={"content": cleaned})
-
-
-class _DirectiveTagStreamSanitizer:
-    """Strip inline reply directives even when a tag is split across chunks."""
-
-    def __init__(self) -> None:
-        self._pending = ""
-
-    def clean(self, chunk: str) -> str:
-        text = self._pending + chunk
-        self._pending = ""
-        cleaned = _strip_inline_directive_tags(text)
-        start = cleaned.rfind("[[")
-        if start == -1:
-            return cleaned
-        suffix = cleaned[start:]
-        if (
-            "]]" not in suffix
-            and "\n" not in suffix
-            and len(suffix) <= _DIRECTIVE_TAG_BUFFER_LIMIT
-        ):
-            self._pending = suffix
-            return cleaned[:start]
-        return cleaned
-
-    def flush(self) -> str:
-        pending = self._pending
-        self._pending = ""
-        return _strip_inline_directive_tags(pending)
 
 
 def _accepts_keyword_arg(callable_obj: Any, name: str) -> bool:
@@ -1098,138 +983,6 @@ def _streaming_reply_kwargs(channel: Any, msg: IncomingMessage) -> dict[str, Any
     return dict(builder(msg))
 
 
-_STREAM_DONE = object()
-
-
-class _RuntimeChannelStreamRelay:
-    """Bridge one runtime task's stream events into a channel streaming adapter."""
-
-    def __init__(self, channel: Any, inbound: IncomingMessage, config: Any = None) -> None:
-        self._channel = channel
-        self._inbound = inbound
-        self._config = config
-        self._queue: asyncio.Queue[str | object] = asyncio.Queue()
-        self._artifacts: list[dict[str, Any]] = []
-        self.delivered_artifact_keys: set[str] = set()
-        self._task: asyncio.Task[Any] | None = None
-        self._closed = False
-        self.text_emitted = False
-        self.stream_error: BaseException | None = None
-
-    @classmethod
-    def maybe_start(
-        cls,
-        channel: Any,
-        inbound: IncomingMessage,
-        task_runtime: Any,
-        config: Any = None,
-    ) -> _RuntimeChannelStreamRelay | None:
-        if not resolve_channel_stream_policy(channel).relay_stream:
-            return None
-        enqueue = getattr(task_runtime, "enqueue", None)
-        if not callable(enqueue) or not _accepts_keyword_arg(enqueue, "stream_event_sink"):
-            return None
-        relay = cls(channel, inbound, config)
-        relay._task = asyncio.create_task(relay._run())
-        return relay
-
-    async def _run(self) -> Any:
-        try:
-            return await self._channel.send_streaming(
-                self._chunks(),
-                **_streaming_reply_kwargs(self._channel, self._inbound),
-            )
-        except Exception as exc:  # noqa: BLE001 - streaming is best-effort fallback.
-            self.stream_error = exc
-            log.warning(
-                "channel_dispatch.runtime_streaming_failed",
-                channel_type=type(self._channel).__name__,
-                error_type=type(exc).__name__,
-                error=str(exc),
-            )
-            return None
-
-    async def _chunks(self) -> AsyncIterator[str]:
-        sanitizer = _DirectiveTagStreamSanitizer()
-        while True:
-            item = await self._queue.get()
-            if item is _STREAM_DONE:
-                tail = sanitizer.flush()
-                if tail:
-                    yield tail
-                return
-            if isinstance(item, str):
-                chunk = sanitizer.clean(item)
-                if chunk:
-                    yield chunk
-
-    async def emit(self, event: Any) -> None:
-        artifact = _artifact_event_payload(event)
-        if artifact is not None:
-            self._artifacts.append(artifact)
-            return
-        text = _text_delta_from_event(event)
-        if not text:
-            return
-        text = _strip_artifact_markers_from_channel_text(text)
-        if not text:
-            return
-        self.text_emitted = True
-        await self._queue.put(text)
-
-    async def close(self, timeout: float = 10.0) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        artifact_lines = (
-            []
-            if _can_deliver_channel_files(self._channel)
-            else _artifact_fallback_lines(self._artifacts)
-        )
-        if artifact_lines:
-            prefix = "\n\n" if self.text_emitted else ""
-            artifact_text = "\n".join(artifact_lines)
-            await self._queue.put(f"{prefix}{artifact_text}")
-            self.text_emitted = True
-        await self._queue.put(_STREAM_DONE)
-        if self._task is None:
-            return
-        try:
-            await asyncio.wait_for(asyncio.shield(self._task), timeout=timeout)
-        except TimeoutError as exc:
-            self.stream_error = exc
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-        except Exception as exc:  # noqa: BLE001 - error already becomes batch fallback.
-            self.stream_error = exc
-
-        if _can_deliver_channel_files(self._channel):
-            undelivered = await _deliver_artifacts_as_channel_files(
-                self._channel,
-                self._inbound,
-                self._artifacts,
-                self._config,
-            )
-            undelivered_keys = {
-                key for artifact in undelivered if (key := _artifact_delivery_key(artifact))
-            }
-            self.delivered_artifact_keys.update(
-                key
-                for artifact in self._artifacts
-                if (key := _artifact_delivery_key(artifact)) and key not in undelivered_keys
-            )
-            fallback_lines = _artifact_fallback_lines(undelivered)
-            if fallback_lines:
-                await self._channel.send(
-                    _build_reply_message(
-                        self._channel,
-                        "\n".join(fallback_lines),
-                        self._inbound,
-                    )
-                )
-
-
 def _text_delta_from_event(event: Any) -> str:
     if isinstance(event, TextDeltaEvent):
         return event.text
@@ -1240,132 +993,6 @@ def _text_delta_from_event(event: Any) -> str:
     if isinstance(event, dict) and event.get("kind") == "text_delta":
         text = event.get("text", "")
         return text if isinstance(text, str) else ""
-    return ""
-
-
-async def _read_transcript_rows(session_manager: Any, session_key: str) -> list[Any]:
-    read_transcript = getattr(session_manager, "read_transcript", None)
-    if not callable(read_transcript):
-        return []
-    try:
-        rows = await read_transcript(session_key)
-    except Exception:
-        log.warning("channel_dispatch.read_transcript_failed", session_key=session_key)
-        return []
-    return list(rows or [])
-
-
-async def _transcript_watermark(session_manager: Any, session_key: str) -> int:
-    return len(await _read_transcript_rows(session_manager, session_key))
-
-
-def _dump_attachment(attachment: Any) -> dict[str, Any] | None:
-    if isinstance(attachment, dict):
-        return dict(attachment)
-    model_dump = getattr(attachment, "model_dump", None)
-    if callable(model_dump):
-        # Keep Pydantic's Python-mode default so bytes remain bytes for shared ingest.
-        dumped = model_dump()
-        return dict(dumped) if isinstance(dumped, dict) else None
-    return None
-
-
-async def _materialize_channel_attachments(channel: Any, attachments: list[Any]) -> list[Any]:
-    resolver = getattr(channel, "resolve_inbound_attachment", None)
-    if not callable(resolver):
-        return list(attachments or [])
-
-    materialized: list[Any] = []
-    for attachment in attachments or []:
-        try:
-            resolved = resolver(attachment)
-            if inspect.isawaitable(resolved):
-                resolved = await resolved
-            materialized.append(resolved if resolved is not None else attachment)
-        except Exception as exc:  # noqa: BLE001 - failure degrades via shared ingest marker
-            item = _dump_attachment(attachment) or {"name": "attachment"}
-            item["_ingest_error"] = str(exc)
-            materialized.append(item)
-    return materialized
-
-
-async def _ingest_channel_message_attachments(
-    *,
-    channel: Any,
-    msg: IncomingMessage,
-) -> AttachmentIngestResult:
-    materialized = await _materialize_channel_attachments(
-        channel,
-        list(getattr(msg, "attachments", []) or []),
-    )
-    result = await ingest_attachments(
-        msg.content,
-        materialized,
-        failure_mode="mark",
-        mark_bytes_as_staged=True,
-    )
-    for failure in result.failures:
-        log.warning(
-            "channel.attachment_ingest_failed",
-            channel=getattr(channel, "channel_id", None) or type(channel).__name__,
-            attachment_index=failure.index,
-            attachment_name=failure.name,
-            reason=failure.reason,
-            detail=failure.detail,
-        )
-    return result
-
-
-async def _append_channel_user_message(
-    *,
-    session_manager: Any,
-    session_key: str,
-    text: str,
-    attachments: list[dict[str, Any]],
-    config: Any,
-) -> tuple[Any, str]:
-    if attachments:
-        from opensquilla.gateway.transcripts import build_transcript_attachment_envelope
-
-        stamped_text = text
-        if hasattr(session_manager, "stamp_user_text"):
-            stamped = session_manager.stamp_user_text(text)
-            if isinstance(stamped, str):
-                stamped_text = stamped
-
-        attachments_cfg = getattr(config, "attachments", None)
-        persist_enabled = bool(getattr(attachments_cfg, "persist_transcripts", True))
-        media_root = media_root_from_config(config)
-        disk_budget = getattr(attachments_cfg, "transcript_disk_budget_bytes", None)
-        session_id = session_key.split(":")[-1] or session_key
-        envelope, _writes = build_transcript_attachment_envelope(
-            text=stamped_text,
-            attachments=attachments,
-            session_id=session_id,
-            media_root=media_root,
-            persist_enabled=persist_enabled,
-            disk_budget_bytes=disk_budget if isinstance(disk_budget, int) else None,
-        )
-        persisted = await session_manager.append_message(session_key, role="user", content=envelope)
-        return persisted, stamped_text
-
-    persisted = await session_manager.append_message(session_key, role="user", content=text)
-    if persisted is not None and isinstance(persisted.content, str):
-        return persisted, persisted.content
-    return persisted, text
-
-
-async def _latest_assistant_text_after(
-    session_manager: Any,
-    session_key: str,
-    start_index: int,
-) -> str:
-    rows = await _read_transcript_rows(session_manager, session_key)
-    for row in reversed(rows[start_index:]):
-        role = row.get("role") if isinstance(row, dict) else getattr(row, "role", None)
-        content = row.get("content") if isinstance(row, dict) else getattr(row, "content", None)
-        if role == "assistant" and isinstance(content, str) and content:
-            return content
     return ""
 
 
