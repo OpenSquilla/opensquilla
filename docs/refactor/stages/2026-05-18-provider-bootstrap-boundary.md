@@ -16,7 +16,7 @@
 - Date: 2026-05-18
 - Integration branch: `codex/refactor-architecture`
 - Child branch: `codex/refactor-provider-bootstrap-boundary`
-- Child worktree: `/Users/cwan0785/opensquilla-refactor-active-provider-bootstrap`
+- Child worktree: `../opensquilla-refactor-active-provider-bootstrap`
 - Owner: Codex main thread. A read-only Provider probe was spawned after stale agent handles were cleaned; main thread owns edits, merge, gate, and cleanup to keep only one active child directory.
 
 ## Goal
@@ -124,9 +124,9 @@ Extract Provider boot-time runtime startup from the large Gateway boot orchestra
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -152,8 +152,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `053e04b` (`Extract gateway provider bootstrap boundary`)
+- Integration merge: `1e861be` (`Merge provider bootstrap boundary`)
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-provider-bootstrap-boundary` passed on branch `codex/refactor-provider-bootstrap-boundary` at `e613ace`.
   - Red: `uv run --extra dev pytest tests/test_gateway/test_provider_bootstrap_boundary.py tests/test_gateway/test_provider_runtime_sync_boundary.py::test_provider_runtime_sync_owns_gateway_selector_materialization -q` failed as expected with `3 failed` because `src/opensquilla/gateway/provider_bootstrap.py` did not exist.
@@ -163,6 +163,11 @@ Co-authored-by: Codex <noreply@openai.com>
   - Broader Provider/Gateway boot tests: `uv run --extra dev pytest tests/test_gateway/test_router_boot.py tests/test_gateway/test_boot_provider_env.py tests/test_gateway/test_provider_runtime_sync_boundary.py tests/test_gateway/test_provider_bootstrap_boundary.py tests/test_provider_image_generation_runtime_boundary.py tests/test_provider_runtime_status.py tests/test_provider_model_catalog.py tests/test_provider_model_listing.py -q` passed, `51 passed in 1.25s`.
   - First child gate caught a mypy issue: `provider_bootstrap.py` passed `str | None` to `ModelCatalog.fetch_openrouter(...)`; fixed by normalizing absent runtime proxy to `""`.
   - Final child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 495 source files; whitespace passed; pytest passed with `2422 passed, 8 skipped, 2 warnings in 50.57s`; gateway smoke start/status/stop passed on `127.0.0.1:61347`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `e613ace`.
+  - Integration merge: `git merge --no-ff codex/refactor-provider-bootstrap-boundary` produced merge commit `1e861be`.
+  - First integration gate caught a release hygiene issue because the stage doc contained a local absolute worktree path; fixed by recording the worktree path as `../opensquilla-refactor-active-provider-bootstrap`.
+  - Focused release hygiene retest: `uv run --extra dev pytest tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths -q` passed, `1 passed in 0.32s`.
+  - Final integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 495 source files; whitespace passed; pytest passed with `2424 passed, 6 skipped, 2 warnings in 28.71s`; gateway smoke start/status/stop passed on `127.0.0.1:61673`.
 - Residual risk:
   - Low. The slice moves boot-time provider assembly behind a Gateway facade, while selector materialization, runtime secret sync, provider defaults, catalog/pricing best-effort behavior, and image-generation runtime sync retain focused coverage plus the full gate.
 - Next recommended slice:
