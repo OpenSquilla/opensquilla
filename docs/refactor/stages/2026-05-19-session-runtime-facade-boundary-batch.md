@@ -287,15 +287,20 @@ coupling without touching `boot.py` or scheduler internals.
   - Result: ruff passed; mypy no issues in 546 source files; whitespace passed;
     pytest `2635 passed, 8 skipped, 2 warnings in 55.60s`; gateway smoke
     start/status/stop/status passed.
-- [ ] Commit child verification/stage record update with:
+- [x] Commit child verification/stage record update with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+  - Commit: `daec318` (`Record session runtime facade child verification`).
+- [x] Merge child into integration with `git merge --no-ff`.
+  - Merge commit: `a395dca` (`Merge session runtime facade boundary batch`).
+- [x] Run `scripts/refactor_gate.sh` in integration.
+  - Result: ruff passed; mypy no issues in 546 source files; whitespace passed;
+    pytest `2637 passed, 6 skipped, 2 warnings in 28.76s`; gateway smoke
+    start/status/stop/status passed.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active` and worker worktrees, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
@@ -331,8 +336,9 @@ Co-authored-by: Codex <noreply@openai.com>
 - Child merge commits:
   - `9fc6fe6` (`Merge session read service boundary`)
   - `44b4e2b` (`Merge task runtime facade observability boundary`)
-- Child verification commit:
-- Integration merge:
+- Child verification commit: `daec318` (`Record session runtime facade child
+  verification`).
+- Integration merge: `a395dca` (`Merge session runtime facade boundary batch`).
 - Integration record:
 - Verification evidence:
   - Worker RED/GREEN evidence recorded above.
@@ -343,6 +349,9 @@ Co-authored-by: Codex <noreply@openai.com>
   - `git diff --check`: passed.
   - Active child `scripts/refactor_gate.sh`: ruff passed; mypy no issues in 546
     source files; whitespace passed; pytest `2635 passed, 8 skipped, 2
+    warnings`; gateway smoke passed.
+  - Integration `scripts/refactor_gate.sh`: ruff passed; mypy no issues in 546
+    source files; whitespace passed; pytest `2637 passed, 6 skipped, 2
     warnings`; gateway smoke passed.
 - Cleanup evidence:
 - Residual risk: no blocking risk observed; session read helpers moved to the
