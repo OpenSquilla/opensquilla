@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from opensquilla.skills.runtime_facade import load_configured_skill_rows
+from opensquilla.gateway.config import GatewayConfig
+from opensquilla.skills.runtime import create_configured_skill_loader
+from opensquilla.skills.runtime_facade import loaded_skill_rows
 
 
 def load_skill_rows() -> list[dict[str, Any]]:
     """Load local skill rows for the CLI list view."""
 
-    return load_configured_skill_rows()
+    config = GatewayConfig.load(os.environ.get("OPENSQUILLA_GATEWAY_CONFIG_PATH"))
+    skill_setup = create_configured_skill_loader(
+        config.skills,
+        workspace_dir=config.workspace_dir,
+    )
+    return loaded_skill_rows(skill_setup.loader)

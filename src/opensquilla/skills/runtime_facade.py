@@ -62,22 +62,6 @@ class SkillDependencyPreview:
         return json.dumps(self.to_payload())
 
 
-def load_configured_skill_rows() -> list[dict[str, Any]]:
-    """Load local skill rows for the CLI list view."""
-
-    import os
-
-    from opensquilla.gateway.config import GatewayConfig
-    from opensquilla.skills.runtime import create_configured_skill_loader
-
-    config = GatewayConfig.load(os.environ.get("OPENSQUILLA_GATEWAY_CONFIG_PATH"))
-    skill_setup = create_configured_skill_loader(
-        config.skills,
-        workspace_dir=config.workspace_dir,
-    )
-    return loaded_skill_rows(skill_setup.loader)
-
-
 def loaded_skill_rows(loader: Any) -> list[dict[str, Any]]:
     """Build CLI row dictionaries for skills loaded by *loader*."""
 
@@ -410,7 +394,6 @@ __all__ = [
     "SkillDependencyPreview",
     "SkillRuntimeFacadeError",
     "argv_for_install_spec",
-    "load_configured_skill_rows",
     "loaded_skill_dependency_preview",
     "loaded_skill_list_text",
     "loaded_skill_rows",

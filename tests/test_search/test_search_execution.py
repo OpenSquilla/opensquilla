@@ -111,6 +111,26 @@ def test_search_execution_builds_status_rpc_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_execution_preserves_rpc_payload_compatibility_exports() -> None:
+    from opensquilla.search import execution
+
+    register_provider(
+        "execution_ok",
+        OkSearchProvider,
+        SearchProviderSpec(provider_id="execution_ok"),
+    )
+    configure_search("execution_ok", max_results=4)
+
+    assert execution.search_provider_payload() == search_provider_payload()
+    assert execution.search_status_rpc_payload({"provider": "execution_ok"}) == (
+        search_status_rpc_payload({"provider": "execution_ok"})
+    )
+    assert await execution.search_query_rpc_payload({"query": "hello", "limit": 2}) == (
+        await search_query_rpc_payload({"query": "hello", "limit": 2})
+    )
+
+
+@pytest.mark.asyncio
 async def test_search_execution_preserves_failure_and_sensitive_payload_shape() -> None:
     register_provider(
         "execution_fail",

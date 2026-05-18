@@ -165,7 +165,8 @@ def test_boot_delegates_skill_loader_construction_to_skills_runtime() -> None:
 def test_cli_delegates_skill_loader_construction_to_skills_runtime() -> None:
     imports = _runtime_imports_from(CLI_SKILLS_ROWS)
 
-    assert ("opensquilla.skills.runtime_facade", "load_configured_skill_rows") in imports
+    assert ("opensquilla.skills.runtime", "create_configured_skill_loader") in imports
+    assert ("opensquilla.skills.runtime_facade", "loaded_skill_rows") in imports
     assert ("opensquilla.skills.loader", "SkillLoader") not in imports
     assert ("opensquilla.skills.paths", "resolve_skill_layer_dirs") not in imports
 
@@ -173,7 +174,7 @@ def test_cli_delegates_skill_loader_construction_to_skills_runtime() -> None:
 def test_cli_skill_rows_delegate_loaded_skill_rows_to_runtime_facade() -> None:
     imports = _runtime_imports_from(CLI_SKILLS_ROWS)
 
-    assert ("opensquilla.skills.runtime_facade", "load_configured_skill_rows") in imports
+    assert ("opensquilla.skills.runtime_facade", "loaded_skill_rows") in imports
     assert ("opensquilla.skills.eligibility", "EligibilityContext") not in imports
     assert ("opensquilla.skills.eligibility", "check_eligibility") not in imports
 
@@ -187,6 +188,22 @@ def test_skill_tools_delegate_loaded_skill_helpers_to_runtime_facade() -> None:
     assert ("opensquilla.skills.eligibility", "EligibilityContext") not in imports
     assert ("opensquilla.skills.eligibility", "diagnose_eligibility") not in imports
     assert ("opensquilla.skills.resources", "SkillResources") not in imports
+
+
+def test_skills_runtime_facade_has_no_adapter_layer_imports() -> None:
+    imports = _runtime_imports_from(SKILLS_RUNTIME_FACADE)
+
+    assert {
+        module
+        for module, _name in imports
+        if module.startswith(
+            (
+                "opensquilla.gateway",
+                "opensquilla.cli",
+                "opensquilla.tools",
+            )
+        )
+    } == set()
 
 
 def test_skills_public_api_exposes_loader_setup_boundary() -> None:

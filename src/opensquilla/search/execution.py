@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -250,3 +251,27 @@ def _search_error_payload(
     if attempts is not None:
         payload["attempts"] = attempts
     return payload
+
+
+def search_provider_payload() -> dict[str, str]:
+    """Compatibility wrapper for the search RPC provider payload helper."""
+
+    from opensquilla.search.rpc_payload import search_provider_payload as _payload
+
+    return _payload()
+
+
+def search_status_rpc_payload(params: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Compatibility wrapper for the search status RPC payload helper."""
+
+    from opensquilla.search.rpc_payload import search_status_rpc_payload as _payload
+
+    return _payload(params)
+
+
+async def search_query_rpc_payload(params: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Compatibility wrapper for the search query RPC payload helper."""
+
+    from opensquilla.search.rpc_payload import search_query_rpc_payload as _payload
+
+    return await _payload(params)

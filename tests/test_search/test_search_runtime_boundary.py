@@ -127,20 +127,22 @@ def test_search_rpc_payload_boundary_owns_request_and_wire_shape() -> None:
 
     execution_names = _top_level_names(SEARCH_EXECUTION)
     rpc_payload_names = _top_level_names(SEARCH_RPC_PAYLOAD)
-    execution_imports = _imports_from(SEARCH_EXECUTION)
 
     rpc_owned_names = {
         "search_provider_payload",
         "search_status_rpc_payload",
         "search_query_rpc_payload",
     }
-    assert not rpc_owned_names & execution_names
     assert rpc_owned_names <= rpc_payload_names
     assert not {
-        ("opensquilla.search.rpc_payload", "search_provider_payload"),
-        ("opensquilla.search.rpc_payload", "search_status_rpc_payload"),
-        ("opensquilla.search.rpc_payload", "search_query_rpc_payload"),
-    } & execution_imports
+        "_search_status_rpc_params",
+        "_query_limit_from_params",
+        "_search_rpc_payload",
+    } & execution_names
+    # Public imports from search.execution remain as thin compatibility wrappers.
+    assert rpc_owned_names <= execution_names
+    source = SEARCH_EXECUTION.read_text(encoding="utf-8")
+    assert source.count("Compatibility wrapper for the search") == 3
 
 
 def test_search_runtime_sync_from_config_preserves_bootstrap_policy(monkeypatch) -> None:
