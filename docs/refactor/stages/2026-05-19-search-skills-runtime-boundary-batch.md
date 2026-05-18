@@ -78,21 +78,29 @@ or bundled skill assets.
 - `superpowers:writing-plans`:
   - Evidence: read the skill; wrote this stage plan before production edits.
 - `superpowers:test-driven-development`:
-  - Evidence: read the skill; each worker must add a RED boundary/behavior test
-    before implementation and record expected failure.
+  - Evidence: read the skill; workers added RED boundary/behavior tests before
+    implementation. Main-thread review added two extra RED regressions for
+    public Search compatibility exports and Skills facade adapter-layer imports
+    before applying fixes.
 - `superpowers:verification-before-completion`:
-  - Evidence: read the skill; this stage cannot be claimed complete until
-    focused tests, touched-file checks, child `scripts/refactor_gate.sh`,
-    integration `scripts/refactor_gate.sh`, and cleanup audit are recorded.
+  - Evidence: read the skill; child focused tests, touched-file checks, and
+    child `scripts/refactor_gate.sh` are recorded below. Integration gate and
+    cleanup audit still must be recorded after merge.
 - Parallelism decision:
   - `superpowers:dispatching-parallel-agents` used for three read-only audits:
     search, memory, and skills.
   - `superpowers:subagent-driven-development` applies for the implementation
     phase: dispatch Search and Skills workers in parallel with disjoint file
     ownership.
-  - `spawn_agent` probe: audit agents spawned successfully.
-  - External worker fallback: use `scripts/refactor_external_agent.sh` only if
-    same-thread worker spawning fails or a thread limit blocks progress.
+  - `spawn_agent` probe: availability probe returned `spawn_agent available`.
+  - Same-thread workers used:
+    - Search worker commit `f8278b3`.
+    - Skills worker commit `5009e5d`.
+  - Read-only review agents used after worker commits:
+    - Spec reviewer found no implementation boundary violations but required
+      stage-record evidence updates.
+    - Code-quality reviewer found a blocking Search compatibility regression.
+  - External worker fallback was not needed.
 - Historical evidence note:
   - Do not infer Superpowers usage from older stages. This stage records only
     current command/log evidence.
@@ -105,7 +113,7 @@ or bundled skill assets.
 - Responsibilities moving out:
   - Search provider/env/runtime sync duplicated in gateway boot and onboarding
     search RPC.
-  - Search RPC compatibility re-exports from `search.execution`.
+  - Search RPC request/wire-shape ownership from `search.execution`.
   - Loaded-skill row/status/resource/dependency lookup duplicated in CLI and
     tool layers.
 - Responsibilities staying in place:
@@ -122,6 +130,9 @@ or bundled skill assets.
 - Public behavior that must not change:
   - `search.provider`, `search.status`, `search.query`, and onboarding search
     RPC wire keys.
+  - Public imports from `opensquilla.search.execution` stay as thin
+    compatibility wrappers even though RPC payload semantics live in
+    `opensquilla.search.rpc_payload`.
   - DuckDuckGo/Brave provider fallback, diagnostics, proxy, env proxy, and
     sensitive-query redaction behavior.
   - `skill_list`, `skill_view`, `install_skill_deps`, and skills CLI row JSON
@@ -163,7 +174,8 @@ or bundled skill assets.
     `configure_search` directly.
   - helper preserves Brave auto-select, explicit provider config, API key env,
     proxy, env proxy, fallback policy, and diagnostics.
-  - `search.execution` no longer imports/re-exports RPC payload helpers.
+  - `search.execution` no longer owns RPC request/wire-shape helpers; public
+    legacy imports remain as thin compatibility wrappers.
 - Focused GREEN:
   - `uv run --extra dev pytest tests/test_search tests/test_gateway/test_rpc_domain_modules.py tests/test_gateway/test_rpc_product_cli_gaps.py -q`
 
@@ -211,16 +223,65 @@ do not revert unrelated changes, and stop rather than editing outside ownership.
     `search.rpc_payload`.
   - Skills worker boundary tests fail because CLI/tool layers still own loaded
     skill status/resource/dependency helper logic.
+- Actual RED evidence:
+  - Search worker: `uv run --extra dev pytest tests/test_search/test_search_runtime_boundary.py tests/test_search/test_search_execution.py -q`
+    failed as expected with `4 failed, 11 passed`.
+  - Skills worker: `uv run --extra dev pytest tests/test_skills_runtime_boundary.py -q`
+    failed as expected with `5 failed, 8 passed`.
+  - Main-thread review RED: `uv run --extra dev pytest tests/test_search/test_search_execution.py::test_search_execution_preserves_rpc_payload_compatibility_exports -q`
+    failed as expected because `opensquilla.search.execution` had no
+    `search_provider_payload` compatibility export.
+  - Main-thread review RED: `uv run --extra dev pytest tests/test_skills_runtime_boundary.py::test_skills_runtime_facade_has_no_adapter_layer_imports -q`
+    failed as expected because `skills.runtime_facade` imported
+    `opensquilla.gateway.config`.
 - Behavior compatibility coverage:
   - Search runtime, RPC, and CLI product gap tests.
   - Skills runtime, RPC payload, hub deps, default prompt, and static skills view
     tests.
 - Combined focused GREEN:
   - `uv run --extra dev pytest tests/test_search tests/test_gateway/test_rpc_domain_modules.py tests/test_gateway/test_rpc_product_cli_gaps.py tests/test_skills_runtime_boundary.py tests/test_skills_rpc_payload.py tests/test_skills_hub_deps.py tests/test_skills_default_prompt_contract.py tests/test_gateway_static_skills_view.py -q`
+  - Result after worker commits: `75 passed`.
+  - Result after main-thread review fixes: `77 passed`.
 - Additional touched-file checks:
   - `uv run --extra dev ruff check src/opensquilla/search src/opensquilla/skills src/opensquilla/cli/skills_rows.py src/opensquilla/tools/builtin/web.py src/opensquilla/tools/builtin/skill_tools.py src/opensquilla/gateway/rpc_search.py src/opensquilla/gateway/rpc_onboarding_search.py src/opensquilla/gateway/boot.py tests/test_search tests/test_skills_runtime_boundary.py tests/test_skills_rpc_payload.py tests/test_skills_hub_deps.py tests/test_skills_default_prompt_contract.py tests/test_gateway_static_skills_view.py`
   - `uv run --extra dev mypy src/opensquilla/search src/opensquilla/skills src/opensquilla/cli/skills_rows.py src/opensquilla/tools/builtin/web.py src/opensquilla/tools/builtin/skill_tools.py --show-error-codes`
   - `git diff --check`
+  - Result after main-thread review fixes: Ruff passed; mypy reported
+    `Success: no issues found in 44 source files`; `git diff --check` clean.
+
+## Worker and review commits
+
+- Stage plan: `783d65e`.
+- Search worker: `f8278b3`.
+  - GREEN: `uv run --extra dev pytest tests/test_search tests/test_gateway/test_rpc_domain_modules.py tests/test_gateway/test_rpc_product_cli_gaps.py -q`
+  - Result: `33 passed`.
+- Skills worker: `5009e5d`.
+  - GREEN: `uv run --extra dev pytest tests/test_skills_runtime_boundary.py tests/test_skills_rpc_payload.py tests/test_skills_hub_deps.py tests/test_skills_default_prompt_contract.py tests/test_gateway_static_skills_view.py -q`
+  - Result: `42 passed`.
+- Main-thread review fix: `c295956`.
+  - Preserved public Search compatibility wrappers in `search.execution`.
+  - Removed adapter-layer dependency from `skills.runtime_facade`.
+- Gate fix: `b0708fc`.
+  - Kept CLI skill loader construction monkeypatchable by using a module
+    reference to `opensquilla.skills.runtime`.
+
+## Review evidence
+
+- Spec-compliance reviewer:
+  - No blocking implementation/spec boundary issue found.
+  - Required stage-record evidence to be updated before completion.
+- Code-quality reviewer:
+  - Blocking issue found: old imports such as
+    `from opensquilla.search.execution import search_query_rpc_payload` failed.
+  - Fixed in `c295956` with lazy compatibility wrappers and regression
+    coverage.
+- Main-thread additional review:
+  - Found `skills.runtime_facade` importing `opensquilla.gateway.config`.
+  - Fixed in `c295956`; CLI now loads config and passes the configured loader to
+    `loaded_skill_rows`.
+  - First child gate exposed a CLI monkeypatch compatibility regression in
+    `tests/test_cli/test_cli_product_completeness.py::test_cli_skill_rows_use_configured_loader_and_eligibility`.
+  - Fixed in `b0708fc`.
 
 ## Files
 
@@ -240,11 +301,11 @@ do not revert unrelated changes, and stop rather than editing outside ownership.
 - [x] Create fixed child worktree `../opensquilla-refactor-active`.
 - [x] Run child preflight.
 - [x] Run baseline focused command and record result.
-- [ ] Dispatch Search and Skills workers with explicit ownership and TDD RED/GREEN.
-- [ ] Review each worker diff for public API compatibility and import cycles.
-- [ ] Run combined focused GREEN.
-- [ ] Run touched-file Ruff, mypy, and `git diff --check`.
-- [ ] Run `scripts/refactor_gate.sh`.
+- [x] Dispatch Search and Skills workers with explicit ownership and TDD RED/GREEN.
+- [x] Review each worker diff for public API compatibility and import cycles.
+- [x] Run combined focused GREEN.
+- [x] Run touched-file Ruff, mypy, and `git diff --check`.
+- [x] Run `scripts/refactor_gate.sh`.
 - [ ] Commit with:
 
 ```text
@@ -265,6 +326,14 @@ Co-authored-by: Codex <noreply@openai.com>
 - `git diff --check`
 - `uv run --extra dev pytest`
 - gateway smoke through `scripts/refactor_gate.sh`
+- First run: failed in full pytest on
+  `tests/test_cli/test_cli_product_completeness.py::test_cli_skill_rows_use_configured_loader_and_eligibility`.
+- Second run after `b0708fc`: passed.
+  - Ruff: passed.
+  - Mypy: `Success: no issues found in 531 source files`.
+  - Whitespace: clean.
+  - Pytest: `2559 passed, 8 skipped, 2 warnings`.
+  - Gateway smoke: start/status/stop/status passed on `127.0.0.1:64556`.
 
 ## Integration gate
 
@@ -285,8 +354,12 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Child commit:
+  - Pending stage-record commit after this update.
 - Integration merge:
 - Verification evidence:
+  - Child focused: `77 passed`.
+  - Child touched-file Ruff/mypy/diff-check: passed.
+  - Child `scripts/refactor_gate.sh`: passed with `2559 passed, 8 skipped`.
 - Residual risk:
   - Memory runtime/flush orchestration is intentionally left for a later batch
     because it touches gateway boot plus engine/session lifecycle hot paths.
