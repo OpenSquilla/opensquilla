@@ -5,8 +5,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GATEWAY = ROOT / "src/opensquilla/gateway"
+SESSION = ROOT / "src/opensquilla/session"
 RPC_SESSIONS = GATEWAY / "rpc_sessions.py"
 RPC_SESSION_READ_QUERIES = GATEWAY / "rpc_session_read_queries.py"
+SESSION_READ_SERVICE = SESSION / "read_service.py"
 
 
 def _tree(path: Path) -> ast.Module:
@@ -40,15 +42,14 @@ def _top_level_functions(tree: ast.Module) -> dict[str, ast.FunctionDef]:
 
 def test_session_read_queries_module_owns_read_query_implementation() -> None:
     assert RPC_SESSION_READ_QUERIES.is_file()
+    assert SESSION_READ_SERVICE.is_file()
 
     read_tree = _tree(RPC_SESSION_READ_QUERIES)
     read_async_functions = _top_level_async_functions(read_tree)
     read_imports = _imports_from(read_tree)
+    service_async_functions = _top_level_async_functions(_tree(SESSION_READ_SERVICE))
 
     assert {
-        "list_task_rows",
-        "list_task_rows_by_session",
-        "resolve_session_node",
         "handle_sessions_list",
         "handle_sessions_subscribe",
         "handle_sessions_unsubscribe",
@@ -57,9 +58,22 @@ def test_session_read_queries_module_owns_read_query_implementation() -> None:
         "handle_sessions_preview",
         "handle_sessions_resolve",
     } <= read_async_functions.keys()
+    assert {
+        "list_task_rows",
+        "list_task_rows_by_session",
+        "resolve_session_node",
+    } <= service_async_functions.keys()
+    assert {
+        "list_task_rows",
+        "list_task_rows_by_session",
+        "resolve_session_node",
+    }.isdisjoint(read_async_functions.keys())
     assert "require_session_key" not in _top_level_functions(read_tree)
     assert {
         ("opensquilla.session.management_service", "require_session_key"),
+        ("opensquilla.session.read_service", "list_task_rows"),
+        ("opensquilla.session.read_service", "list_task_rows_by_session"),
+        ("opensquilla.session.read_service", "resolve_session_node"),
         ("opensquilla.session.rpc_payload", "messages_subscribe_response"),
         ("opensquilla.session.rpc_payload", "session_list_response"),
         ("opensquilla.session.rpc_payload", "session_list_row"),
