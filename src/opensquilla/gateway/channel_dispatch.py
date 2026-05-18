@@ -28,7 +28,7 @@ from opensquilla.channels.stream_policy import resolve_channel_stream_policy
 from opensquilla.channels.types import IncomingMessage, OutgoingMessage
 from opensquilla.engine.start_turn import start_turn_via_runtime
 from opensquilla.engine.types import ErrorEvent, RunHeartbeatEvent, TextDeltaEvent
-from opensquilla.gateway.attachment_ingest import AttachmentIngestResult, ingest_attachments
+from opensquilla.gateway import channel_message_io as _channel_message_io
 from opensquilla.gateway.channel_artifacts import (
     artifact_delivery_key as _artifact_delivery_key,
 )
@@ -53,13 +53,20 @@ from opensquilla.gateway.channel_artifacts import (
 from opensquilla.gateway.channel_artifacts import (
     strip_delivered_artifact_image_references as _strip_delivered_artifact_image_references,
 )
-from opensquilla.paths import media_root_from_config
 from opensquilla.session.terminal_reply import build_terminal_reply
 
 if TYPE_CHECKING:
     from opensquilla.gateway.event_bridge import EventBridge
 
 log = structlog.get_logger(__name__)
+
+_append_channel_user_message = _channel_message_io.append_channel_user_message
+_dump_attachment = _channel_message_io.dump_attachment
+_ingest_channel_message_attachments = _channel_message_io.ingest_channel_message_attachments
+_latest_assistant_text_after = _channel_message_io.latest_assistant_text_after
+_materialize_channel_attachments = _channel_message_io.materialize_channel_attachments
+_read_transcript_rows = _channel_message_io.read_transcript_rows
+_transcript_watermark = _channel_message_io.transcript_watermark
 
 
 def _terminal_payload_from_exception(exc: BaseException) -> dict[str, str]:
@@ -1240,132 +1247,6 @@ def _text_delta_from_event(event: Any) -> str:
     if isinstance(event, dict) and event.get("kind") == "text_delta":
         text = event.get("text", "")
         return text if isinstance(text, str) else ""
-    return ""
-
-
-async def _read_transcript_rows(session_manager: Any, session_key: str) -> list[Any]:
-    read_transcript = getattr(session_manager, "read_transcript", None)
-    if not callable(read_transcript):
-        return []
-    try:
-        rows = await read_transcript(session_key)
-    except Exception:
-        log.warning("channel_dispatch.read_transcript_failed", session_key=session_key)
-        return []
-    return list(rows or [])
-
-
-async def _transcript_watermark(session_manager: Any, session_key: str) -> int:
-    return len(await _read_transcript_rows(session_manager, session_key))
-
-
-def _dump_attachment(attachment: Any) -> dict[str, Any] | None:
-    if isinstance(attachment, dict):
-        return dict(attachment)
-    model_dump = getattr(attachment, "model_dump", None)
-    if callable(model_dump):
-        # Keep Pydantic's Python-mode default so bytes remain bytes for shared ingest.
-        dumped = model_dump()
-        return dict(dumped) if isinstance(dumped, dict) else None
-    return None
-
-
-async def _materialize_channel_attachments(channel: Any, attachments: list[Any]) -> list[Any]:
-    resolver = getattr(channel, "resolve_inbound_attachment", None)
-    if not callable(resolver):
-        return list(attachments or [])
-
-    materialized: list[Any] = []
-    for attachment in attachments or []:
-        try:
-            resolved = resolver(attachment)
-            if inspect.isawaitable(resolved):
-                resolved = await resolved
-            materialized.append(resolved if resolved is not None else attachment)
-        except Exception as exc:  # noqa: BLE001 - failure degrades via shared ingest marker
-            item = _dump_attachment(attachment) or {"name": "attachment"}
-            item["_ingest_error"] = str(exc)
-            materialized.append(item)
-    return materialized
-
-
-async def _ingest_channel_message_attachments(
-    *,
-    channel: Any,
-    msg: IncomingMessage,
-) -> AttachmentIngestResult:
-    materialized = await _materialize_channel_attachments(
-        channel,
-        list(getattr(msg, "attachments", []) or []),
-    )
-    result = await ingest_attachments(
-        msg.content,
-        materialized,
-        failure_mode="mark",
-        mark_bytes_as_staged=True,
-    )
-    for failure in result.failures:
-        log.warning(
-            "channel.attachment_ingest_failed",
-            channel=getattr(channel, "channel_id", None) or type(channel).__name__,
-            attachment_index=failure.index,
-            attachment_name=failure.name,
-            reason=failure.reason,
-            detail=failure.detail,
-        )
-    return result
-
-
-async def _append_channel_user_message(
-    *,
-    session_manager: Any,
-    session_key: str,
-    text: str,
-    attachments: list[dict[str, Any]],
-    config: Any,
-) -> tuple[Any, str]:
-    if attachments:
-        from opensquilla.gateway.transcripts import build_transcript_attachment_envelope
-
-        stamped_text = text
-        if hasattr(session_manager, "stamp_user_text"):
-            stamped = session_manager.stamp_user_text(text)
-            if isinstance(stamped, str):
-                stamped_text = stamped
-
-        attachments_cfg = getattr(config, "attachments", None)
-        persist_enabled = bool(getattr(attachments_cfg, "persist_transcripts", True))
-        media_root = media_root_from_config(config)
-        disk_budget = getattr(attachments_cfg, "transcript_disk_budget_bytes", None)
-        session_id = session_key.split(":")[-1] or session_key
-        envelope, _writes = build_transcript_attachment_envelope(
-            text=stamped_text,
-            attachments=attachments,
-            session_id=session_id,
-            media_root=media_root,
-            persist_enabled=persist_enabled,
-            disk_budget_bytes=disk_budget if isinstance(disk_budget, int) else None,
-        )
-        persisted = await session_manager.append_message(session_key, role="user", content=envelope)
-        return persisted, stamped_text
-
-    persisted = await session_manager.append_message(session_key, role="user", content=text)
-    if persisted is not None and isinstance(persisted.content, str):
-        return persisted, persisted.content
-    return persisted, text
-
-
-async def _latest_assistant_text_after(
-    session_manager: Any,
-    session_key: str,
-    start_index: int,
-) -> str:
-    rows = await _read_transcript_rows(session_manager, session_key)
-    for row in reversed(rows[start_index:]):
-        role = row.get("role") if isinstance(row, dict) else getattr(row, "role", None)
-        content = row.get("content") if isinstance(row, dict) else getattr(row, "content", None)
-        if role == "assistant" and isinstance(content, str) and content:
-            return content
     return ""
 
 
