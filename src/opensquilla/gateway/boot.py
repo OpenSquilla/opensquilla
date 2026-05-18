@@ -37,6 +37,7 @@ from opensquilla.engine.usage import UsageTracker as _UsageTracker
 from opensquilla.gateway.app import create_gateway_app
 from opensquilla.gateway.config import GatewayConfig, is_public_bind
 from opensquilla.gateway.rpc import get_dispatcher
+from opensquilla.gateway.session_event_delivery import deliver_session_event
 from opensquilla.gateway.session_streams import get_session_streams
 from opensquilla.gateway.websocket import get_registry
 from opensquilla.paths import default_opensquilla_home
@@ -1633,23 +1634,14 @@ async def start_gateway_server(
             if _sub_mgr is None:
                 return
 
-            _registry = get_registry()
-            stream_payload = (
-                get_session_streams().record(session_key, event_name, payload)
-                if event_name.startswith("session.event.")
-                else payload
+            await deliver_session_event(
+                subscription_manager=_sub_mgr,
+                connection_registry=get_registry(),
+                session_key=session_key,
+                event_name=event_name,
+                payload=payload,
+                logger=log,
             )
-            conn_ids = _sub_mgr.get_message_subscribers(session_key)
-            if event_name.startswith("sessions."):
-                conn_ids |= _sub_mgr.get_session_subscribers()
-
-            for conn_id in conn_ids:
-                conn = _registry.get(conn_id)
-                if conn:
-                    try:
-                        await conn.send_event(event_name, stream_payload)
-                    except Exception:
-                        pass
 
         delivery_chain = DeliveryChain(
             channel_manager_ref=lambda: _cm_holder[0],
