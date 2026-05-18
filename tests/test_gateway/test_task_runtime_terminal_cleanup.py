@@ -1,9 +1,8 @@
 """Tests for the TaskRuntime terminal-state dict leak fix.
 
 Verifies that, at terminal state, the four short-lived tracking dicts
-(``_tasks``, ``_running_by_session``, ``_pending_by_session``,
-``_last_envelope_by_session``) drop the task / session_key, while
-``_session_locks`` is intentionally retained to prevent split-brain on
+the short-lived runtime indexes drop the task / session_key, while
+session locks are intentionally retained to prevent split-brain on
 rapid re-enqueue. Also covers exception-path cleanup and a 10 000-task
 tracemalloc-bounded soak.
 """
@@ -88,9 +87,9 @@ def _make_runtime(
 
 @pytest.mark.asyncio
 async def test_terminal_clears_all_dicts() -> None:
-    """After a task succeeds, tracking dicts (except _session_locks) must not contain its key.
+    """After a task succeeds, short-lived tracking state must not contain its key.
 
-    ``_session_locks`` is intentionally NOT cleaned at terminal to prevent
+    Session locks are intentionally NOT cleaned at terminal to prevent
     split-brain under concurrent enqueue. All other dicts are cleaned.
     """
     rt = _make_runtime()
@@ -99,12 +98,11 @@ async def test_terminal_clears_all_dicts() -> None:
     await rt.wait(handle.task_id, timeout=2.0)
 
     sk = env.session_key
-    assert handle.task_id not in rt._tasks
-    assert sk not in rt._running_by_session
-    assert sk not in rt._pending_by_session
-    # _session_locks is intentionally retained: never pop while _execute may
-    # still hold the lock; prevents split-brain on rapid re-enqueue.
-    assert sk not in rt._last_envelope_by_session
+    snapshot = rt.snapshot_runtime_state()
+    assert handle.task_id not in snapshot.task_ids
+    assert sk not in snapshot.running_session_keys
+    assert sk not in snapshot.pending_session_keys
+    assert sk not in snapshot.last_envelope_session_keys
 
 
 # ---------------------------------------------------------------------------
@@ -131,11 +129,11 @@ async def test_cancel_clears_dicts() -> None:
     await rt.wait(handle.task_id, timeout=2.0)
 
     sk = env.session_key
-    assert handle.task_id not in rt._tasks
-    assert sk not in rt._running_by_session
-    assert sk not in rt._pending_by_session
-    # _session_locks is intentionally retained.
-    assert sk not in rt._last_envelope_by_session
+    snapshot = rt.snapshot_runtime_state()
+    assert handle.task_id not in snapshot.task_ids
+    assert sk not in snapshot.running_session_keys
+    assert sk not in snapshot.pending_session_keys
+    assert sk not in snapshot.last_envelope_session_keys
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +142,7 @@ async def test_cancel_clears_dicts() -> None:
 
 @pytest.mark.asyncio
 async def test_session_lock_kept_during_pending() -> None:
-    """_session_locks must NOT be removed while another task is still pending."""
+    """Session locks must NOT be removed while another task is still pending."""
     first_started = asyncio.Event()
     first_release = asyncio.Event()
 
@@ -164,19 +162,19 @@ async def test_session_lock_kept_during_pending() -> None:
 
     sk = env.session_key
     # Session lock must exist because there is still a pending task.
-    assert sk in rt._session_locks
+    assert sk in rt.snapshot_runtime_state().session_lock_keys
 
     # Now let the first task finish.
     first_release.set()
     await rt.wait(handle1.task_id, timeout=2.0)
 
     # The lock should still exist because the second task is still alive.
-    assert sk in rt._session_locks
+    assert sk in rt.snapshot_runtime_state().session_lock_keys
 
     # Wait for second task to finish.
     await rt.wait(handle2.task_id, timeout=2.0)
 
-    # _session_locks is intentionally retained after all tasks complete;
+    # Session locks are intentionally retained after all tasks complete;
     # do not assert its absence here.
 
 
@@ -186,13 +184,11 @@ async def test_session_lock_kept_during_pending() -> None:
 
 @pytest.mark.asyncio
 async def test_exception_path_clears_dicts() -> None:
-    """Even when the turn handler raises, cleanup must run for 4 tracking dicts.
+    """Even when the turn handler raises, cleanup must run for short-lived state.
 
-    ``_session_locks`` is intentionally NOT cleared on terminal: retaining
-    the lock prevents split-brain when a new enqueue races with _execute's
-    post-terminal cleanup. All other 4 dicts (``_tasks``,
-    ``_running_by_session``, ``_pending_by_session``,
-    ``_last_envelope_by_session``) must be cleaned up.
+    Session locks are intentionally NOT cleared on terminal: retaining
+    the lock prevents split-brain when a new enqueue races with post-terminal
+    cleanup. All other task/session runtime indexes must be cleaned up.
     """
 
     async def _failing_handler(_run: Any) -> None:
@@ -204,12 +200,11 @@ async def test_exception_path_clears_dicts() -> None:
     await rt.wait(handle.task_id, timeout=2.0)
 
     sk = env.session_key
-    assert handle.task_id not in rt._tasks
-    assert sk not in rt._running_by_session
-    # _session_locks is intentionally retained after terminal: prevents
-    # split-brain on rapid re-enqueue; lock is cheap and bounded per session_key.
-    assert sk not in rt._pending_by_session
-    assert sk not in rt._last_envelope_by_session
+    snapshot = rt.snapshot_runtime_state()
+    assert handle.task_id not in snapshot.task_ids
+    assert sk not in snapshot.running_session_keys
+    assert sk not in snapshot.pending_session_keys
+    assert sk not in snapshot.last_envelope_session_keys
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +231,7 @@ async def test_no_leak_under_load() -> None:
     tracemalloc.start()
     snap_before = tracemalloc.take_snapshot()
 
-    baseline_tasks = len(rt._tasks)
-    baseline_pending = len(rt._pending_by_session)
-    baseline_running = len(rt._running_by_session)
-    baseline_envelope = len(rt._last_envelope_by_session)
+    baseline = rt.snapshot_runtime_state()
 
     # --- run 10 000 tasks ---
     handles = []
@@ -257,31 +249,35 @@ async def test_no_leak_under_load() -> None:
     snap_after = tracemalloc.take_snapshot()
     tracemalloc.stop()
 
-    after_tasks = len(rt._tasks)
-    after_locks = len(rt._session_locks)
-    after_pending = len(rt._pending_by_session)
-    after_running = len(rt._running_by_session)
-    after_envelope = len(rt._last_envelope_by_session)
+    after = rt.snapshot_runtime_state()
 
     tolerance = 2
-    assert abs(after_tasks - baseline_tasks) <= tolerance, (
-        f"_tasks leaked: baseline={baseline_tasks}, after={after_tasks}"
+    assert abs(after.tasks_count - baseline.tasks_count) <= tolerance, (
+        f"tasks leaked: baseline={baseline.tasks_count}, after={after.tasks_count}"
     )
-    # _session_locks is intentionally NOT cleaned at terminal to prevent
+    # Session locks are intentionally NOT cleaned at terminal to prevent
     # split-brain on rapid re-enqueue.  The dict grows by # unique session_keys
     # (capped at session_count=50 here), not by # tasks.  We verify it is bounded
     # by session_count rather than by num_tasks.
-    assert after_locks <= session_count + tolerance, (
-        f"_session_locks grew beyond unique session count: {after_locks} > {session_count}"
+    assert after.session_locks_count <= session_count + tolerance, (
+        "session locks grew beyond unique session count: "
+        f"{after.session_locks_count} > {session_count}"
     )
-    assert abs(after_pending - baseline_pending) <= tolerance, (
-        f"_pending_by_session leaked: baseline={baseline_pending}, after={after_pending}"
+    assert abs(after.pending_sessions_count - baseline.pending_sessions_count) <= tolerance, (
+        "pending sessions leaked: "
+        f"baseline={baseline.pending_sessions_count}, after={after.pending_sessions_count}"
     )
-    assert abs(after_running - baseline_running) <= tolerance, (
-        f"_running_by_session leaked: baseline={baseline_running}, after={after_running}"
+    assert abs(after.running_sessions_count - baseline.running_sessions_count) <= tolerance, (
+        "running sessions leaked: "
+        f"baseline={baseline.running_sessions_count}, after={after.running_sessions_count}"
     )
-    assert abs(after_envelope - baseline_envelope) <= tolerance, (
-        f"_last_envelope_by_session leaked: baseline={baseline_envelope}, after={after_envelope}"
+    assert (
+        abs(after.last_envelope_sessions_count - baseline.last_envelope_sessions_count)
+        <= tolerance
+    ), (
+        "last-envelope sessions leaked: "
+        f"baseline={baseline.last_envelope_sessions_count}, "
+        f"after={after.last_envelope_sessions_count}"
     )
 
     # Confirm memory allocation delta is reasonable (no catastrophic growth).

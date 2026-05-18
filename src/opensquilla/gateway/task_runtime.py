@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import structlog
@@ -73,6 +73,37 @@ log = structlog.get_logger(__name__)
 #   turn_cancellations_total  (counter) — cumulative cancel/interrupt/timeout
 #   queue_full_errors_total   (counter) — cumulative TaskQueueFullError raises
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TaskRuntimeStateSnapshot:
+    """Read-only snapshot of TaskRuntime's test-observable state."""
+
+    task_ids: frozenset[str]
+    pending_session_keys: frozenset[str]
+    running_session_keys: frozenset[str]
+    last_envelope_session_keys: frozenset[str]
+    session_lock_keys: frozenset[str]
+
+    @property
+    def tasks_count(self) -> int:
+        return len(self.task_ids)
+
+    @property
+    def pending_sessions_count(self) -> int:
+        return len(self.pending_session_keys)
+
+    @property
+    def running_sessions_count(self) -> int:
+        return len(self.running_session_keys)
+
+    @property
+    def last_envelope_sessions_count(self) -> int:
+        return len(self.last_envelope_session_keys)
+
+    @property
+    def session_locks_count(self) -> int:
+        return len(self.session_lock_keys)
 
 
 def _emit_metric(name: str, value: int = 1, **labels: Any) -> None:
@@ -377,6 +408,16 @@ class TaskRuntime:
 
     def get_runtime_task(self, task_id: str) -> _RuntimeTask | None:
         return self._runtime_state.get_task(task_id)
+
+    def snapshot_runtime_state(self) -> TaskRuntimeStateSnapshot:
+        """Return a read-only snapshot for behavior tests and diagnostics."""
+        return TaskRuntimeStateSnapshot(
+            task_ids=frozenset(self._runtime_state.tasks),
+            pending_session_keys=frozenset(self._runtime_state.pending_by_session),
+            running_session_keys=frozenset(self._runtime_state.running_by_session),
+            last_envelope_session_keys=frozenset(self._runtime_state.last_envelope_by_session),
+            session_lock_keys=frozenset(self._session_locks),
+        )
 
     async def shutdown(
         self,

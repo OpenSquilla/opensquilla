@@ -1,6 +1,6 @@
 """Tests for C3 fix: no split-brain lock on rapid re-enqueue after terminal.
 
-AC-C3-1: _session_locks is never popped in _mark_terminal.
+AC-C3-1: session locks are retained at terminal.
 AC-C3-2: rapid enqueue -> terminal -> re-enqueue for same session_key never
           allows two tasks to run concurrently (max_concurrent_per_session == 1).
 """
@@ -60,12 +60,12 @@ def _make_storage() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# AC-C3-1: _session_locks never popped in _mark_terminal
+# AC-C3-1: session locks are retained at terminal
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_session_locks_never_popped_at_terminal() -> None:
-    """After a task reaches terminal state, _session_locks still contains the key."""
+    """After a task reaches terminal state, the session lock key remains observable."""
     async def _instant(_run: Any) -> None:
         pass
 
@@ -78,9 +78,9 @@ async def test_session_locks_never_popped_at_terminal() -> None:
     handle = await rt.enqueue(env, "msg")
     await rt.wait(handle.task_id, timeout=5.0)
 
-    # Lock must still be present — C3 fix ensures we never pop it.
-    assert env.session_key in rt._session_locks, (
-        "_session_locks should retain the entry after terminal (C3 fix)"
+    snapshot = rt.snapshot_runtime_state()
+    assert env.session_key in snapshot.session_lock_keys, (
+        "session locks should retain the entry after terminal (C3 fix)"
     )
 
 
