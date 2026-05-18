@@ -54,6 +54,8 @@ from opensquilla.gateway.channel_artifacts import (
 )
 from opensquilla.gateway.channel_inflight import (
     ChannelInFlightSet as _ChannelInFlightSet,
+)
+from opensquilla.gateway.channel_inflight import (
     compute_channel_cap as _compute_channel_cap,
 )
 from opensquilla.gateway.channel_replies import (
