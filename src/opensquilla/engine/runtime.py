@@ -2674,83 +2674,34 @@ class TurnRunner:
         """Build tool definitions and handler from registry, filtered by ToolContext."""
         if self._tool_registry is None:
             return [], None
-        from opensquilla.tools.dispatch import build_tool_handler
-        from opensquilla.tools.policy import apply_tool_policy_from_config
-        from opensquilla.tools.registry import filter_by_profile, resolve_profile
 
-        if ctx is not None:
-            ctx = apply_tool_policy_from_config(
-                ctx,
-                available_tools=self._tool_registry.list_names(),
-                config=self._config,
-            )
-            ctx = self._apply_runtime_capability_denies(ctx)
-            log.debug(
-                "tool_policy.policy_pre",
-                allowed_tool_count=len(self._tool_registry.to_tool_definitions(ctx)),
-                denied_count=len(ctx.denied_tools),
-                profile=resolve_profile(ctx).value,
-            )
-        log.info(
-            "tool_context_created",
-            caller_kind=ctx.caller_kind if ctx else "none",
-            denied_count=len(ctx.denied_tools) if ctx else 0,
-        )
-        tool_defs = self._tool_registry.to_tool_definitions(ctx)
-        profile = resolve_profile(ctx)
-        tool_defs = filter_by_profile(tool_defs, profile)
-        # layered intentionally — policy first, profile second.
-        log.debug(
-            "tool_policy.profile_post",
-            allowed_tool_count=len(tool_defs),
-            denied_count=len(ctx.denied_tools) if ctx else 0,
-            profile=profile.value,
-        )
-        if metadata is not None:
-            metadata["tool_profile"] = profile.value
-        known_skill_names: set[str] = set()
-        if self._skill_loader is not None:
-            try:
-                known_skill_names = {
-                    skill.name
-                    for skill in self._skill_loader.load_all()
-                    if not getattr(skill, "disable_model_invocation", False)
-                }
-            except Exception:
-                known_skill_names = set()
-        tool_handler = build_tool_handler(
+        from opensquilla.tools.execution_surface import build_tool_execution_surface
+
+        surface = build_tool_execution_surface(
             self._tool_registry,
             ctx,
-            known_skill_names=known_skill_names,
+            config=self._config,
+            session_manager=getattr(self, "_session_manager", None),
+            gateway_config=getattr(self, "_config", None),
+            skill_loader=self._skill_loader,
+            metadata=metadata,
         )
-        return tool_defs, tool_handler
+        return surface.definitions, surface.handler
 
     def _filter_tool_defs_by_capability(self, tool_defs: list) -> list:
         """Compatibility shim; runtime capability filtering is resolved in ToolContext."""
         return tool_defs
 
     def _apply_runtime_capability_denies(self, ctx: ToolContext) -> ToolContext:
-        from opensquilla.tools.policy import (
-            ToolSurfaceCapabilities,
-            detect_runtime_tool_surface_capabilities,
-            resolve_runtime_tool_surface,
+        from opensquilla.tools.execution_surface import (
+            apply_execution_runtime_capability_denies,
         )
 
-        detected = detect_runtime_tool_surface_capabilities(
-            channel_backing=(
-                ctx.caller_kind in {CallerKind.CHANNEL, CallerKind.WEB}
-                and bool(ctx.channel_id)
-            )
+        return apply_execution_runtime_capability_denies(
+            ctx,
+            session_manager=getattr(self, "_session_manager", None),
+            gateway_config=getattr(self, "_config", None),
         )
-        capabilities = ToolSurfaceCapabilities(
-            session_manager=getattr(self, "_session_manager", None) is not None,
-            task_runtime=detected.task_runtime,
-            scheduler=detected.scheduler,
-            gateway_config=getattr(self, "_config", None) is not None,
-            channel_backing=detected.channel_backing,
-            image_generation=detected.image_generation,
-        )
-        return resolve_runtime_tool_surface(ctx, capabilities=capabilities)
 
     @staticmethod
     def _extra_context_for_tool_context(ctx: ToolContext | None) -> dict[str, str]:
