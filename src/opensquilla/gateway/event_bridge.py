@@ -11,7 +11,7 @@ from typing import Any
 
 import structlog
 
-from opensquilla.gateway.session_streams import get_session_streams
+from opensquilla.gateway import session_event_delivery
 
 log = structlog.get_logger(__name__)
 
@@ -45,27 +45,14 @@ class EventBridge:
             return
 
         try:
-            send_payload = payload or {}
-            if event_name.startswith("session.event."):
-                send_payload = get_session_streams().record(session_key, event_name, send_payload)
-
-            subscriber_ids = self._subs.get_message_subscribers(session_key)
-            if event_name.startswith("sessions."):
-                subscriber_ids = subscriber_ids | self._subs.get_session_subscribers()
-            if not subscriber_ids:
-                return
-
-            for conn_id in subscriber_ids:
-                conn = self._registry.get(conn_id)
-                if conn is not None:
-                    try:
-                        await conn.send_event(event_name, send_payload)
-                    except Exception:
-                        log.debug(
-                            "event_bridge.send_failed",
-                            conn_id=conn_id,
-                            event_name=event_name,
-                        )
+            await session_event_delivery.deliver_session_event(
+                subscription_manager=self._subs,
+                connection_registry=self._registry,
+                session_key=session_key,
+                event_name=event_name,
+                payload=payload,
+                logger=log,
+            )
         except Exception as exc:
             log.debug(
                 "event_bridge.emit_failed",

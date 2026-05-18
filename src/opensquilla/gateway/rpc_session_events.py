@@ -6,7 +6,13 @@ from typing import Any
 
 import structlog
 
-from opensquilla.gateway.session_streams import SessionStreamRegistry, get_session_streams
+from opensquilla.gateway.session_event_delivery import (
+    buffer_session_event as buffer_session_event,
+)
+from opensquilla.gateway.session_event_delivery import (
+    deliver_session_event,
+)
+from opensquilla.gateway.session_streams import SessionStreamRegistry
 from opensquilla.session.services import (
     get_session_epoch,
     get_session_storage,
@@ -27,19 +33,6 @@ def optional_stream_seq(params: dict | None) -> int | None:
     except (TypeError, ValueError):
         return None
     return max(0, value)
-
-
-def buffer_session_event(
-    session_key: str,
-    event_name: str,
-    payload: dict[str, Any] | None,
-    *,
-    stream_registry: SessionStreamRegistry | None = None,
-) -> dict[str, Any]:
-    if event_name.startswith("session.event."):
-        registry = stream_registry or get_session_streams()
-        return registry.record(session_key, event_name, payload)
-    return dict(payload or {})
 
 
 async def emit_to_session_subscribers(
@@ -71,30 +64,20 @@ async def emit_to_session_subscribers(
                 except Exception:
                     pass
 
-    send_payload = buffer_session_event(
-        session_key,
-        event_name,
-        payload,
-        stream_registry=stream_registry,
-    )
-
     sub_mgr = getattr(ctx, "subscription_manager", None)
     if sub_mgr is None:
         return
 
     registry = get_registry()
-    conn_ids = sub_mgr.get_message_subscribers(session_key)
-
-    if event_name.startswith("sessions."):
-        conn_ids = conn_ids | sub_mgr.get_session_subscribers()
-
-    for conn_id in conn_ids:
-        conn = registry.get(conn_id)
-        if conn is not None:
-            try:
-                await conn.send_event(event_name, send_payload)
-            except Exception:
-                active_logger.warning("emit.send_failed", conn_id=conn_id, event=event_name)
+    await deliver_session_event(
+        subscription_manager=sub_mgr,
+        connection_registry=registry,
+        session_key=session_key,
+        event_name=event_name,
+        payload=payload,
+        stream_registry=stream_registry,
+        logger=active_logger,
+    )
 
 
 async def increment_and_emit_epoch(
