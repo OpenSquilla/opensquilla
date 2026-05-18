@@ -96,8 +96,8 @@ state.
     implementation and recorded expected failures.
 - `superpowers:verification-before-completion`:
   - Evidence: read the skill; child focused tests, touched-file checks, and
-    child `scripts/refactor_gate.sh` are recorded below. Integration gate and
-    cleanup audit still must be recorded after merge.
+    child `scripts/refactor_gate.sh`, integration `scripts/refactor_gate.sh`,
+    and cleanup audit are recorded below.
 - Parallelism decision:
   - `superpowers:dispatching-parallel-agents` used for three read-only audits:
     memory tool runtime surface, gateway boot/runtime assembly, and
@@ -106,6 +106,11 @@ state.
     dispatch Memory Tool Surface and Memory Gateway Runtime workers in parallel
     with disjoint file ownership.
   - `spawn_agent` probe: availability probe returned `spawn_agent available`.
+  - Post-merge spawn probe from the main thread created read-only agent
+    `019e3cc8-bebf-7a60-b2ee-62023684bef3`; the agent reported clean
+    integration status but no nested `spawn_agent` tool in its own tool
+    surface. Main-thread dispatch remains usable; nested dispatch from workers
+    should not be assumed.
   - Same-thread workers used:
     - Memory Gateway Runtime worker commit `3e289ae`.
     - Memory Tool Surface worker commit `5972473`.
@@ -322,16 +327,16 @@ do not revert unrelated changes, and stop rather than editing outside ownership.
 - [x] Run combined focused GREEN.
 - [x] Run touched-file Ruff, mypy, and `git diff --check`.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit child stage record with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
+- [x] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
 
@@ -356,6 +361,12 @@ Co-authored-by: Codex <noreply@openai.com>
 - `git diff --check HEAD^ HEAD`
 - `uv run --extra dev pytest`
 - gateway smoke through `scripts/refactor_gate.sh`
+- Result after merge commit `8dfc749`: passed.
+  - Ruff: passed.
+  - Mypy: passed.
+  - Whitespace: clean.
+  - Pytest: `2568 passed, 6 skipped, 2 warnings`.
+  - Gateway smoke: start/status/stop/status passed on `127.0.0.1:49700`.
 
 ## Rollback
 
@@ -368,16 +379,29 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Child commit:
-  - Pending stage-record commit after this update.
+  - `86e5ac1` (`Record memory runtime child verification`).
 - Integration merge:
+  - `8dfc749` (`Merge memory runtime orchestration batch`).
 - Verification evidence:
   - Baseline focused: `120 passed`.
   - Combined focused: `120 passed`.
   - Touched-file Ruff/mypy/diff-check: passed.
   - Child `scripts/refactor_gate.sh`: passed with `2566 passed, 8 skipped`.
+  - Integration `scripts/refactor_gate.sh`: passed with
+    `2568 passed, 6 skipped`; gateway smoke passed on `127.0.0.1:49700`.
+- Cleanup evidence:
+  - Removed `../opensquilla-refactor-active`.
+  - Ran `git worktree prune`.
+  - Verified `git worktree list --porcelain` no longer lists the active
+    refactor child worktree.
 - Residual risk:
   - Engine/session flush hot paths intentionally remain out of scope because
     they require a later exclusive runtime/session lifecycle stage.
 - Next recommended slice:
   - Exclusive runtime/session lifecycle memory flush stage, using the audit
-    recommendations for preflight/T3/background flush/session-lock RED tests.
+    recommendations for preflight/T3/background flush/session-lock RED tests:
+    `test_run_skips_generic_preflight_when_t3_upgrade_handled`,
+    `test_lifecycle_reset_flush_runs_under_session_lock`,
+    `test_preflight_compaction_uses_one_transcript_snapshot_for_flush_and_compact`,
+    and
+    `test_agent_background_flush_completion_clears_active_task_without_double_logging_or_retrigger`.
