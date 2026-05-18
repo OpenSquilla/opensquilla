@@ -213,9 +213,26 @@ same boot function and create avoidable conflicts.
 - [x] Worker writes failing boundary tests and records RED output.
 - [x] Worker implements `gateway/app_server_wiring.py` and replaces the inline
       app/server wiring block with a short delegator call.
-- [ ] Main thread reviews diff for behavior compatibility and boundary scope.
+- [x] Main thread reviews diff for behavior compatibility and boundary scope.
+  - Result: reviewed worker diff after `9ed9de8`; changed files were limited to
+    this stage record, `gateway/boot.py`, new `gateway/app_server_wiring.py`,
+    and new `test_app_server_wiring_boundary.py`.
+  - Boundary check: app/server creation and managed uvicorn startup moved to
+    `build_gateway_app_server`; `boot.py` still owns channel startup, router
+    preload scheduling, final readiness flip, and return of `GatewayServer`.
 - [x] Run focused green command and touched-file checks.
+  - Main-thread focused GREEN after merging worker branch:
+    `uv run --extra dev pytest tests/test_gateway/test_app_server_wiring_boundary.py tests/test_gateway/test_router_boot.py::test_start_gateway_server_schedules_router_preload_after_channels tests/test_gateway/test_router_boot.py::test_start_gateway_server_shares_diagnostics_state_between_app_and_turn_runner tests/test_gateway/test_readiness.py -q`
+    passed with `7 passed in 4.22s`.
+  - Main-thread touched-file checks:
+    `uv run --extra dev ruff check src/opensquilla/gateway/boot.py src/opensquilla/gateway/app_server_wiring.py tests/test_gateway/test_app_server_wiring_boundary.py`
+    passed; `uv run --extra dev mypy src/opensquilla/gateway --show-error-codes`
+    passed with no issues in 93 source files; `git diff --check` passed.
 - [x] Run `scripts/refactor_gate.sh` in the active child worktree.
+  - Main-thread child gate after worker merge passed:
+    `2657 passed, 8 skipped, 2 warnings in 58.14s`; gateway smoke
+    start/status/stop/status returned `{"ok": true, ...}` and final line was
+    `Refactor gate complete.`
 - [x] Commit child verification/stage record update with:
 
 ```text
@@ -258,13 +275,16 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Worker commit: this worker implementation commit; hash reported in worker
-  final response.
+  final response: `9ed9de8cd3e92c52547e9e305c74670067b07386`.
 - Active child support commits:
-- Child verification commit:
+  - Stage plan: `eb84b77`
+  - Worker merge: `257262c`
+- Child verification commit: pending this record update.
 - Integration merge:
 - Integration record:
 - Verification evidence: worker RED/GREEN/touched-file checks and full child
-  gate recorded above.
+  gate recorded above; main-thread focused GREEN, touched-file checks, diff
+  review, and full child gate recorded above after merging worker branch.
 - Cleanup evidence: pending main-thread merge and worktree cleanup.
 - Residual risk: low; boot still owns channel startup, router preload
   scheduling, and the final readiness flip after delegating app/server wiring.
