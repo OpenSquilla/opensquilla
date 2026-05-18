@@ -125,15 +125,15 @@ Extract the TaskRuntime-specific enqueue/rejection path from `rpc_sessions.py` w
 - [x] Implement the smallest behavior-compatible change.
 - [x] Run focused tests and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child gate
 
@@ -159,13 +159,18 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `1caf88b` (`Move session runtime enqueue behind gateway boundary`)
+- Integration merge: `d229056` (`Merge gateway session turn runtime boundary`)
 - Verification evidence:
 - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py::TestSessionsSend::test_gateway_sessions_send_delegates_runtime_enqueue_to_gateway_boundary -q` failed as expected because `rpc_session_turn_runtime.py` did not exist.
 - Focused green: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py::TestSessionsSend::test_gateway_sessions_send_delegates_runtime_enqueue_to_gateway_boundary tests/test_gateway/test_rpc_sessions.py::TestSessionsSend::test_gateway_sessions_send_delegates_response_payloads_to_session_boundary tests/test_gateway/test_rpc_sessions.py::TestSessionsSend::test_send_queue_full_rolls_back_and_returns_retryable_details tests/test_gateway/test_rpc_sessions.py::TestSessionsSend::test_send_queue_full_dirty_returns_orphan_details tests/test_gateway/test_uploads_endpoint.py::test_file_uuid_resolved_via_store_returns_material_ref -q` passed, `5 passed in 0.81s`.
 - Touched ruff: `uv run --extra dev ruff check src/opensquilla/gateway/rpc_sessions.py src/opensquilla/gateway/rpc_session_turn_runtime.py tests/test_gateway/test_rpc_sessions.py` passed.
 - Touched tests: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py tests/test_gateway/test_uploads_endpoint.py -q` passed, `107 passed in 1.71s`.
 - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 482 source files; whitespace passed; pytest passed with `2391 passed, 8 skipped, 2 warnings in 62.91s`; gateway smoke start/status/stop passed on `127.0.0.1:55176`.
+- Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `06c7ccb`.
+- Integration merge: `git merge --no-ff codex/refactor-gateway-session-turn-runtime-boundary` produced merge commit `d229056`.
+- Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 482 source files; whitespace passed; pytest passed with `2393 passed, 6 skipped, 2 warnings in 29.58s`; gateway smoke start/status/stop passed on `127.0.0.1:55497`.
 - Residual risk:
+  - Low. The slice preserves the existing RPC handler envelope/session/persistence flow and only moves the TaskRuntime enqueue branch plus its queue-full rollback response handling behind a focused boundary. Legacy background TurnRunner behavior is untouched.
 - Next recommended slice:
+  - Continue the Session/Gateway runtime lane by moving `sessions.reset` TaskRuntime settle/cancel/drain behavior (`_drain_task_runtime_for_reset`) behind a focused boundary with tests that preserve no-false-interrupted semantics and reset drain timeouts.
