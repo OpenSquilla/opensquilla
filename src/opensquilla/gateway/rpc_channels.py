@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from opensquilla.channels.rpc_payload import (
+from opensquilla.gateway.channel_rpc_payloads import (
     channel_logout_rpc_payload,
     channel_restart_rpc_payload,
     channel_status_rpc_payload,
