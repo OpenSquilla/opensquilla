@@ -119,15 +119,15 @@ Extract the session send orchestration family from `rpc_sessions.py` into a focu
 - [x] Implement the smallest behavior-compatible send extraction.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -147,11 +147,12 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Integration Gate
 
-- `uv run --extra dev ruff check src tests`
-- `uv run --extra dev mypy src/opensquilla --show-error-codes`
-- `git diff --check HEAD^ HEAD`
-- `uv run --extra dev pytest`
-- gateway smoke through `scripts/refactor_gate.sh`
+- Integration preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-architecture`
+  - Result: passed on branch `codex/refactor-architecture` at `40df888`.
+- Integration merge: `git merge --no-ff codex/refactor-gateway-session-send-boundary`
+  - Result: merge commit `f0542be`.
+- Full integration gate: `scripts/refactor_gate.sh`
+  - Result: ruff passed; mypy passed; whitespace passed; pytest `2421 passed, 6 skipped, 2 warnings in 28.59s`; gateway smoke passed on port `58423`; `Refactor gate complete.`
 
 ## Rollback
 
@@ -161,10 +162,21 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `6a52c4e`
+- Integration merge: `f0542be`
 - Verification evidence:
+  - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-gateway-session-send-boundary` passed on branch `codex/refactor-gateway-session-send-boundary` at `40df888`.
+  - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_session_send_boundary.py tests/test_gateway/test_rpc_sessions.py::TestSessionsSend tests/test_gateway/test_rpc_sessions_attachments.py tests/test_gateway/test_uploads_endpoint.py -q` failed as expected with `2 failed, 57 passed in 5.62s` because `rpc_session_send.py` did not exist and `rpc_sessions.py` still owned send orchestration.
+  - Focused green: same command passed with `59 passed in 1.06s`.
+  - Touched ruff: `uv run --extra dev ruff check src/opensquilla/gateway/rpc_sessions.py src/opensquilla/gateway/rpc_session_send.py tests/test_gateway/test_rpc_session_send_boundary.py tests/test_gateway/test_rpc_sessions.py tests/test_gateway/test_rpc_sessions_attachments.py tests/test_gateway/test_uploads_endpoint.py` passed.
+  - Whitespace: `git diff --check` passed.
+  - Broader gateway/session check: `uv run --extra dev pytest tests/test_gateway/test_rpc_sessions.py tests/test_gateway/test_rpc_session_send_boundary.py tests/test_gateway/test_rpc_sessions_attachments.py tests/test_gateway/test_uploads_endpoint.py tests/test_gateway/test_rpc_session_management_boundary.py tests/test_gateway/test_rpc_session_read_queries_boundary.py tests/test_gateway/test_rpc_session_lifecycle_boundary.py tests/test_gateway/test_rpc_session_events.py tests/test_gateway/test_rpc_session_services.py tests/test_gateway/test_rpc_public_surface_baseline.py -q` passed with `141 passed in 1.38s`.
+  - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 494 source files; whitespace passed; pytest `2419 passed, 8 skipped, 2 warnings in 27.26s`; gateway smoke start/status/stop passed on `127.0.0.1:58195`.
+  - Integration preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `40df888`.
+  - Integration merge: `git merge --no-ff codex/refactor-gateway-session-send-boundary` produced merge commit `f0542be`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 494 source files; whitespace passed; pytest `2421 passed, 6 skipped, 2 warnings in 28.59s`; gateway smoke start/status/stop passed on `127.0.0.1:58423`.
 - Residual risk:
   - This is a module-level extraction of the existing send orchestration, so behavior risk is concentrated around import-time dispatcher registration and background TurnRunner event emission. Covered by focused send tests, attachment/upload tests, broader gateway session tests, public surface baseline, and full refactor gate.
 - Next recommended slice:
-  - Continue with a larger module-level Gateway sessions cleanup: collapse remaining compatibility-only helpers in `rpc_sessions.py` after confirming no public tests or upload/session callers import them directly, or move the remaining reset/compact lifecycle glue into a broader lifecycle facade slice.
+  - Continue with larger module-level slices instead of one helper at a time. Reuse a small number of active worktrees, then remove merged temporary worktree directories after each integration record to avoid accumulating checkout folders.
+  - Next technical slice: collapse remaining compatibility-only helpers in `rpc_sessions.py` after confirming no public tests or upload/session callers import them directly, or move the remaining reset/compact lifecycle glue into a broader lifecycle facade slice.
