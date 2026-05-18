@@ -133,15 +133,15 @@ Extract channel artifact delivery/rendering concerns from `gateway/channel_dispa
 - [x] Implement the smallest behavior-compatible artifact boundary move.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -167,8 +167,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `a877d880dc0c7a24493f7392197238a96375d391`.
+- Integration merge: `8c90a693b249b31f3f3f7a1c0c1dfbf868731d0b`.
 - Verification evidence:
 - Child RED:
   - `uv run --extra dev pytest tests/test_gateway/test_channel_artifact_delivery_boundary.py -q`
@@ -191,9 +191,16 @@ Co-authored-by: Codex <noreply@openai.com>
   - `mypy`: success, no issues found in 504 source files.
   - `pytest`: `2439 passed, 8 skipped, 2 warnings in 48.69s`.
   - Gateway smoke: start/status/stop/status passed on port `50044`.
+- Integration full gate:
+  - `scripts/refactor_gate.sh`
+  - `ruff`: all checks passed.
+  - `mypy`: success, no issues found in 504 source files.
+  - `pytest`: `2441 passed, 6 skipped, 2 warnings in 26.83s`.
+  - Gateway smoke: start/status/stop/status passed on port `50183`.
 - Directory cleanup:
   - Keep only the fixed active child worktree during implementation.
   - Merge this child back to `codex/refactor-architecture`, record evidence, then remove `../opensquilla-refactor-active` and prune git worktree metadata.
 - Residual risk:
+  - Adapter-specific `send_file` behavior is still covered by existing fake and Feishu-focused tests rather than live channel APIs.
 - Next recommended slice:
   - Use a larger module-level session management slice rather than another tiny helper extraction: move cohesive session create/update/registry-model helpers out of `gateway/rpc_sessions.py` behind an existing or new session-management boundary, with compatibility tests around `sessions.create`, `sessions.patch`, agent registry defaults, and model selection.
