@@ -129,15 +129,15 @@ Extract the related session lifecycle mutation family from `rpc_sessions.py` int
 - [x] Implement the smallest behavior-compatible lifecycle extraction.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -163,8 +163,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit:
-- Integration merge:
+- Child commit: `73456d9`
+- Integration merge: `c27228c`
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-gateway-session-lifecycle-boundary` passed on branch `codex/refactor-gateway-session-lifecycle-boundary` at `34e4334`.
   - Red: `uv run --extra dev pytest tests/test_gateway/test_rpc_session_lifecycle_boundary.py tests/test_gateway/test_force_reset_drain.py tests/test_gateway/test_rpc_sessions.py::TestSessionsAbort tests/test_gateway/test_rpc_sessions.py::TestSessionsReset tests/test_gateway/test_rpc_sessions.py::TestSessionsDelete tests/test_gateway/test_rpc_sessions.py::TestSessionsCompact -q` failed as expected with 2 boundary failures because `rpc_session_lifecycle.py` did not exist and `rpc_sessions.py` did not delegate to it.
@@ -173,6 +173,9 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/gateway/rpc_sessions.py src/opensquilla/gateway/rpc_session_lifecycle.py tests/test_gateway/test_rpc_session_lifecycle_boundary.py tests/test_gateway/test_force_reset_drain.py tests/test_gateway/test_rpc_sessions.py` passed.
   - Whitespace: `git diff --check` passed.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 491 source files; whitespace passed; pytest passed with `2413 passed, 8 skipped, 2 warnings in 53.99s`; gateway smoke start/status/stop passed on `127.0.0.1:51531`.
+  - Integration preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `34e4334`.
+  - Integration merge: `git merge --no-ff codex/refactor-gateway-session-lifecycle-boundary` produced merge commit `c27228c`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 491 source files; whitespace passed; pytest passed with `2415 passed, 6 skipped, 2 warnings in 34.75s`; gateway smoke start/status/stop passed on `127.0.0.1:51718`.
 - Residual risk:
   - Low to medium. The slice moves a large lifecycle handler family but preserves RPC registration wrappers, current response payload builders, reset-drain patch compatibility, and full behavior coverage for the touched session lifecycle tests.
 - Next recommended slice:
