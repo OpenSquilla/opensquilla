@@ -223,15 +223,15 @@ into a neutral runtime module.
 - [x] Run the combined focused GREEN command.
 - [x] Run touched-file Ruff, mypy, and `git diff --check`.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
@@ -303,8 +303,33 @@ Result before child commit:
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `50c5b77a0227` (`Refactor route envelope contract boundaries`).
+- Integration merge: `8bfcdf3e4c00` (`Merge route envelope contract batch`).
 - Verification evidence:
+  - Child full `scripts/refactor_gate.sh`: ruff passed; mypy passed with no
+    issues in 529 source files; whitespace passed; pytest `2548 passed,
+    6 skipped, 2 warnings in 29.81s`; gateway smoke start/status/stop/status
+    passed on `127.0.0.1:60568`.
+  - Integration full `scripts/refactor_gate.sh`: ruff passed; mypy passed with
+    no issues in 529 source files; whitespace passed; pytest `2548 passed,
+    6 skipped, 2 warnings in 27.42s`; gateway smoke start/status/stop/status
+    passed on `127.0.0.1:60702`.
+  - Focused regression included the scheduler-routing import cycle guard in
+    `tests/test_tools/test_builtin_loader.py`, architecture import contracts,
+    session package boundary guard, public release hygiene, route contract
+    tests, gateway normalization tests, scheduler boundary tests, policy-agent
+    tests, sessions gateway boundary tests, and router boot cron/model route
+    checks.
 - Residual risk:
+  - Neutral `runtime.routing` is intentionally structural only. Scheduler keeps
+    cron `ToolContext` construction in the scheduler layer to avoid pulling
+    `tools` into the runtime package or the session package.
+  - Same-thread `spawn_agent` was available for the healthcheck and two
+    reviewers, then hit the thread limit on a third reviewer. External-worker
+    fallback was available but not needed for additional edits after the full
+    child and integration gates passed.
 - Next recommended slice:
+  - Continue with a coarse Tools/Gateway runtime-surface boundary batch:
+    consolidate remaining route-like `ToolContext` construction paths that are
+    already in packages allowed to import `tools`, while keeping `session` and
+    neutral `runtime` free of `tools` imports.
