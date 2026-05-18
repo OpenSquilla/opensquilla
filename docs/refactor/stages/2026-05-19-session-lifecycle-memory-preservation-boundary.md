@@ -387,7 +387,7 @@ git -C ../opensquilla-refactor-integration merge --no-ff \
 git -C ../opensquilla-refactor-integration scripts/refactor_gate.sh
 ```
 
-- [ ] **Step 4: Record evidence and cleanup worktree**
+- [x] **Step 4: Record evidence and cleanup worktree**
 
 ```bash
 git -C ../opensquilla-refactor-integration worktree remove ../opensquilla-refactor-active
@@ -427,7 +427,7 @@ Co-authored-by: Codex <noreply@openai.com>
 - [x] Merge child into integration with `git merge --no-ff`.
 - [x] Run `scripts/refactor_gate.sh` in integration.
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run
+- [x] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
 
@@ -456,6 +456,10 @@ Co-authored-by: Codex <noreply@openai.com>
 
 - Child commit: `a39a268`
 - Integration merge: `251b7f4`
+- Stage record commit: `f36ac80`
+- Cleanup: removed `../opensquilla-refactor-active`, ran `git worktree prune`,
+  and verified no extra `opensquilla-refactor-*` worktrees remain beyond
+  `../opensquilla-refactor-integration`.
 - Verification evidence:
   - RED: `ModuleNotFoundError` for `opensquilla.session.lifecycle_memory`
   - Focused GREEN: `41 passed`
