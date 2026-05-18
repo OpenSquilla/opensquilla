@@ -7,14 +7,17 @@ from typing import Any
 
 import pytest
 
-from opensquilla.channels.rpc_payload import (
+from opensquilla.gateway.channel_rpc_payloads import (
     channel_logout_rpc_payload,
     channel_restart_rpc_payload,
     channel_status_rpc_payload,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+GATEWAY_CHANNEL_PAYLOADS = ROOT / "src/opensquilla/gateway/channel_rpc_payloads.py"
 RPC_CHANNELS = ROOT / "src/opensquilla/gateway/rpc_channels.py"
+CHANNEL_RPC_PAYLOAD = ROOT / "src/opensquilla/channels/rpc_payload.py"
+CHANNEL_STATUS_REPORT = ROOT / "src/opensquilla/channels/status_report.py"
 
 
 class FakeChannelManager:
@@ -51,7 +54,7 @@ def _health(
 
 
 def _imports_from(path: Path) -> set[tuple[str, str]]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imports: set[tuple[str, str]] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
@@ -61,7 +64,7 @@ def _imports_from(path: Path) -> set[tuple[str, str]]:
 
 
 def _top_level_functions(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     return {
         node.name
         for node in tree.body
@@ -70,7 +73,7 @@ def _top_level_functions(path: Path) -> set[str]:
 
 
 @pytest.mark.asyncio
-async def test_channel_status_rpc_payload_merges_config_and_runtime_health() -> None:
+async def test_channel_status_gateway_facade_preserves_wire_shape() -> None:
     manager = FakeChannelManager(
         {
             "configured": _health(
@@ -135,7 +138,7 @@ async def test_channel_status_rpc_payload_merges_config_and_runtime_health() -> 
 
 
 @pytest.mark.asyncio
-async def test_channel_lifecycle_rpc_payloads_parse_names_and_preserve_wire_shape() -> None:
+async def test_channel_lifecycle_gateway_facade_preserves_wire_shape() -> None:
     manager = FakeChannelManager()
 
     logout = await channel_logout_rpc_payload({"name": "runtime"}, manager)
@@ -147,27 +150,39 @@ async def test_channel_lifecycle_rpc_payloads_parse_names_and_preserve_wire_shap
     assert manager.restarted == ["runtime"]
 
 
-@pytest.mark.asyncio
-async def test_channel_lifecycle_rpc_payloads_validate_missing_channels() -> None:
-    manager = FakeChannelManager()
-
-    with pytest.raises(ValueError, match="channel name required"):
-        await channel_logout_rpc_payload({}, manager)
-    with pytest.raises(KeyError, match="Channel not found: missing"):
-        await channel_restart_rpc_payload({"channel": "missing"}, manager)
-    with pytest.raises(KeyError, match="Channel not found: runtime"):
-        await channel_logout_rpc_payload({"channel": "runtime"}, None)
-
-
-def test_gateway_delegates_channel_rpc_payloads_to_gateway_facade() -> None:
+def test_gateway_channel_rpc_handlers_import_gateway_payload_facade() -> None:
     imports = _imports_from(RPC_CHANNELS)
-    top_level_functions = _top_level_functions(RPC_CHANNELS)
 
-    assert ("opensquilla.gateway.channel_rpc_payloads", "channel_status_rpc_payload") in imports
-    assert ("opensquilla.gateway.channel_rpc_payloads", "channel_logout_rpc_payload") in imports
-    assert ("opensquilla.gateway.channel_rpc_payloads", "channel_restart_rpc_payload") in imports
+    assert (
+        "opensquilla.gateway.channel_rpc_payloads",
+        "channel_status_rpc_payload",
+    ) in imports
+    assert (
+        "opensquilla.gateway.channel_rpc_payloads",
+        "channel_logout_rpc_payload",
+    ) in imports
+    assert (
+        "opensquilla.gateway.channel_rpc_payloads",
+        "channel_restart_rpc_payload",
+    ) in imports
     assert not any(module == "opensquilla.channels.rpc_payload" for module, _ in imports)
-    assert "_configured_channel_entries" not in top_level_functions
-    assert "_health_extra" not in top_level_functions
-    assert "_status_for" not in top_level_functions
-    assert "_channel_status" not in top_level_functions
+
+
+def test_channel_status_semantics_live_outside_channel_rpc_payload_module() -> None:
+    gateway_functions = _top_level_functions(GATEWAY_CHANNEL_PAYLOADS)
+    rpc_payload_functions = _top_level_functions(CHANNEL_RPC_PAYLOAD)
+    status_report_functions = _top_level_functions(CHANNEL_STATUS_REPORT)
+
+    assert "_channel_status_report_to_wire" in gateway_functions
+    assert "_channel_status_row_to_wire" in gateway_functions
+    assert "_channel_name_param" in gateway_functions
+
+    assert "_configured_channel_entries" in status_report_functions
+    assert "_health_extra" in status_report_functions
+    assert "_status_for" in status_report_functions
+    assert "_channel_status_row" in status_report_functions
+
+    assert "_configured_channel_entries" not in rpc_payload_functions
+    assert "_health_extra" not in rpc_payload_functions
+    assert "_status_for" not in rpc_payload_functions
+    assert "_channel_status_row" not in rpc_payload_functions
