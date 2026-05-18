@@ -29,25 +29,37 @@ from typing import Any, cast
 import structlog
 
 from opensquilla.gateway.routing import RouteEnvelope, SourceKind
+from opensquilla.gateway.task_runtime_execution import (
+    TaskRuntimeExecutionCallbacks,
+    execute_task_lifecycle,
+)
 from opensquilla.gateway.task_runtime_records import (
     EventEmitter,
     TaskHandle,
     TaskHandler,
     TaskQueueFullError,
-    TaskRun,
     TaskStreamEventSink,
     TerminalListener,
 )
 from opensquilla.gateway.task_runtime_records import (
     RuntimeTask as _RuntimeTask,
 )
+from opensquilla.gateway.task_runtime_records import (
+    TaskRun as TaskRun,
+)
 from opensquilla.gateway.task_runtime_scheduler import TaskRuntimeScheduler
+from opensquilla.gateway.task_runtime_shutdown import shutdown_task_runtime
 from opensquilla.gateway.task_runtime_terminal import (
     SubagentCompletionEvent as SubagentCompletionEvent,
 )
 from opensquilla.gateway.task_runtime_terminal import (
     build_task_terminal_payload,
     notify_subagent_terminal,
+)
+from opensquilla.gateway.task_runtime_terminal_state import (
+    TERMINAL_STATUSES,
+    cleanup_terminal_task_state,
+    snapshot_unfinished_tasks,
 )
 from opensquilla.session.keys import canonicalize_session_key, normalize_agent_id, parse_agent_id
 from opensquilla.session.models import AgentTaskRecord, AgentTaskStatus
@@ -71,17 +83,6 @@ def _emit_metric(name: str, value: int = 1, **labels: Any) -> None:
     Grep pattern: ``metric=<name>``
     """
     log.info(name, metric=name, value=value, **labels)
-
-
-TERMINAL_STATUSES = frozenset(
-    {
-        AgentTaskStatus.SUCCEEDED,
-        AgentTaskStatus.FAILED,
-        AgentTaskStatus.CANCELLED,
-        AgentTaskStatus.TIMEOUT,
-        AgentTaskStatus.ABANDONED,
-    }
-)
 
 
 class TaskRuntime:
@@ -399,45 +400,15 @@ class TaskRuntime:
             Deadline (seconds) for the graceful drain phase.  ``None`` means
             wait indefinitely (use with care in production; set a finite value).
         """
-        tasks = [
-            task.asyncio_task
-            for task in self._tasks.values()
-            if task.asyncio_task is not None and not task.asyncio_task.done()
-        ]
-        if not tasks:
-            return
-
-        if graceful:
-            # Phase 1: wait for all tasks to finish naturally.
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=graceful_timeout,
-                )
-                return
-            except TimeoutError:
-                log.warning(
-                    "task_runtime.graceful_shutdown_timeout",
-                    graceful_timeout=graceful_timeout,
-                    remaining=sum(1 for t in tasks if not t.done()),
-                )
-            # Phase 2: cancel whatever is still running after the drain timeout.
-            tasks = [t for t in tasks if not t.done()]
-
-        if cancel:
-            for task in tasks:
-                task.cancel()
-        if tasks:
-            done, pending = await asyncio.wait(tasks, timeout=timeout)
-            for task in pending:
-                task.cancel()
-            if pending:
-                await self._mark_unfinished_abandoned()
-            for task in done:
-                try:
-                    task.result()
-                except (asyncio.CancelledError, Exception):
-                    pass
+        await shutdown_task_runtime(
+            tasks=self._tasks,
+            state_lock=self._state_lock,
+            mark_unfinished_abandoned=self._mark_unfinished_abandoned,
+            cancel=cancel,
+            timeout=timeout,
+            graceful=graceful,
+            graceful_timeout=graceful_timeout,
+        )
 
     async def _try_collect(
         self,
@@ -484,95 +455,15 @@ class TaskRuntime:
     async def _execute(self, task: _RuntimeTask) -> None:
         session_key = task.envelope.session_key
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
-        try:
-            async with lock:
-                # Signal to TurnRunner.run() that this Task already holds the
-                # session lock so run() can skip re-acquisition without using
-                # lock.locked() (which cannot distinguish owners across tasks).
-                from opensquilla.engine.runtime import _SESSION_LOCK_OWNER
-
-                _current_task = asyncio.current_task()
-                _prev_map = _SESSION_LOCK_OWNER.get(None)
-                _new_map: dict[int, Any] = dict(_prev_map or {})
-                if _current_task is not None:
-                    _new_map[id(lock)] = _current_task
-                _owner_token = _SESSION_LOCK_OWNER.set(_new_map)
-                try:
-                    if task.cancel_requested:
-                        _emit_metric(
-                            "turn_cancellations_total",
-                            value=1,
-                            reason="user_cancel",
-                            session_key=task.envelope.session_key,
-                        )
-                        await self._mark_terminal(
-                            task,
-                            AgentTaskStatus.CANCELLED,
-                            terminal_reason="cancelled_before_start",
-                        )
-                        return
-                    await self._wait_for_subagent_slot(task)
-                    acquired = False
-                    try:
-                        await self._acquire_fair_slot(task)
-                        acquired = True
-                        run = TaskRun(
-                            task_id=task.task_id,
-                            envelope=task.envelope,
-                            message=task.message,
-                            attachments=task.attachments,
-                            queue_mode=task.queue_mode,
-                            run_kind=task.run_kind,
-                            no_memory_capture=task.no_memory_capture,
-                            ingress_pipeline_steps=task.ingress_pipeline_steps,
-                            semantic_message=task.semantic_message,
-                            stream_event_sink=task.stream_event_sink,
-                        )
-                        await self._turn_handler(run)
-                        await self._mark_terminal(
-                            task,
-                            AgentTaskStatus.SUCCEEDED,
-                            terminal_reason="completed",
-                        )
-                    finally:
-                        if acquired:
-                            await self._release_slot(task)
-                finally:
-                    _SESSION_LOCK_OWNER.reset(_owner_token)
-        except asyncio.CancelledError:
-            _emit_metric(
-                "turn_cancellations_total",
-                value=1,
-                reason="interrupt",
-                session_key=task.envelope.session_key,
-            )
-            await self._mark_terminal(
-                task,
-                AgentTaskStatus.CANCELLED,
-                terminal_reason="cancelled",
-            )
-        except TimeoutError as exc:
-            _emit_metric(
-                "turn_cancellations_total",
-                value=1,
-                reason="timeout",
-                session_key=task.envelope.session_key,
-            )
-            await self._mark_terminal(
-                task,
-                AgentTaskStatus.TIMEOUT,
-                terminal_reason="timeout",
-                error_class=type(exc).__name__,
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001 - runtime ledger records the class.
-            await self._mark_terminal(
-                task,
-                AgentTaskStatus.FAILED,
-                terminal_reason="error",
-                error_class=type(exc).__name__,
-                error_message=str(exc),
-            )
+        callbacks = TaskRuntimeExecutionCallbacks(
+            wait_for_subagent_slot=self._wait_for_subagent_slot,
+            acquire_fair_slot=self._acquire_fair_slot,
+            release_slot=self._release_slot,
+            mark_terminal=self._mark_terminal,
+            turn_handler=self._turn_handler,
+            emit_metric=_emit_metric,
+        )
+        await execute_task_lifecycle(task=task, session_lock=lock, callbacks=callbacks)
 
     async def _acquire_fair_slot(self, task: _RuntimeTask) -> None:
         await self._scheduler.acquire_fair_slot(
@@ -621,28 +512,21 @@ class TaskRuntime:
         error_message: str | None = None,
     ) -> None:
         async with self._state_lock:
-            if task.terminal_emitted:
+            cleanup = cleanup_terminal_task_state(
+                task=task,
+                status=status,
+                tasks=self._tasks,
+                pending_by_session=self._pending_by_session,
+                running_by_session=self._running_by_session,
+                last_envelope_by_session=self._last_envelope_by_session,
+            )
+            if not cleanup.emitted:
                 return
-            task.terminal_emitted = True
-            task.status = status
-            self._remove_pending(task)
-            if self._running_by_session.get(task.envelope.session_key) is task:
-                self._running_by_session.pop(task.envelope.session_key, None)
-            self._tasks.pop(task.task_id, None)
-            self._last_envelope_by_session.pop(task.envelope.session_key, None)
-            # C3 fix: never pop _session_locks here.  Popping while _execute
-            # still holds the lock causes split-brain: a concurrent enqueue
-            # calls setdefault() and gets a *new* lock object, allowing two
-            # tasks to run concurrently for the same session.  The lock dict
-            # grows at most by # unique session_keys (one Lock ~200 B each),
-            # which is acceptable.
-            session_key = task.envelope.session_key
             # Clean up RR deque entry when session has no more work.
-            if (
-                not self._pending_by_session.get(session_key)
-                and self._running_by_session.get(session_key) is None
-            ):
-                self._scheduler.remove_inactive_session(task, has_session_work=False)
+            self._scheduler.remove_inactive_session(
+                task,
+                has_session_work=cleanup.has_session_work,
+            )
         await self._storage.update_agent_task(
             task.task_id,
             status=status,
@@ -678,9 +562,7 @@ class TaskRuntime:
 
     async def _mark_unfinished_abandoned(self) -> None:
         async with self._state_lock:
-            unfinished = [
-                task for task in self._tasks.values() if task.status not in TERMINAL_STATUSES
-            ]
+            unfinished = snapshot_unfinished_tasks(self._tasks)
         for task in unfinished:
             await self._mark_terminal(
                 task,
