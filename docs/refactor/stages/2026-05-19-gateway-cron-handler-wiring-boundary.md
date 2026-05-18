@@ -254,10 +254,18 @@ Co-authored-by: Codex <noreply@openai.com>
     pytest `2656 passed, 6 skipped, 2 warnings in 28.45s`; gateway smoke
     start/status/stop/status passed.
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active` and
+- [x] Remove `../opensquilla-refactor-active` and
       `../opensquilla-refactor-agent-cron-handler`, run `git worktree prune`,
       and verify no extra refactor worktree directories remain beyond
       `../opensquilla-refactor-integration`.
+  - Removed:
+    - `../opensquilla-refactor-active`
+    - `../opensquilla-refactor-agent-cron-handler`
+  - Worker PID `75052` was no longer present.
+  - Ran `git worktree prune`.
+  - `git worktree list --porcelain` verified no extra
+    `opensquilla-refactor-*` worktrees remain beyond
+    `../opensquilla-refactor-integration`.
 
 ## Child gate
 
@@ -291,7 +299,8 @@ Co-authored-by: Codex <noreply@openai.com>
 - Child verification commit: `f845461` (`Record gateway cron handler child
   verification`).
 - Integration merge: `0a9119b` (`Merge gateway cron handler wiring boundary`).
-- Integration record:
+- Integration record: `231fc75` (`Record gateway cron handler integration
+  verification`).
 - Verification evidence:
   - RED command failed as expected with 10 new boundary-test failures and 6
     existing focused tests passing before production changes.
@@ -311,6 +320,12 @@ Co-authored-by: Codex <noreply@openai.com>
     source files; whitespace passed; pytest `2656 passed, 6 skipped, 2
     warnings`; gateway smoke passed.
 - Cleanup evidence:
+  - Worker PID `75052` was no longer present.
+  - Removed `../opensquilla-refactor-active`.
+  - Removed `../opensquilla-refactor-agent-cron-handler`.
+  - Ran `git worktree prune`.
+  - `git worktree list --porcelain` shows the refactor line only has
+    `../opensquilla-refactor-integration`.
 - Residual risk: low before integration merge; the stage moves cron handler
   boot wiring behind a gateway boundary while preserving handler keys, delivery
   chain dependencies, session event delivery, workspace resolution, Dream cron
