@@ -59,7 +59,7 @@ def sync_provider_selector(ctx: Any, config: Any) -> None:
     if llm_cfg is None:
         return
 
-    from opensquilla.gateway.llm_runtime import resolve_llm_runtime_config
+    from opensquilla.provider.runtime_config import resolve_llm_runtime_config
 
     runtime = resolve_llm_runtime_config(config)
     selector = getattr(ctx, "provider_selector", None)
