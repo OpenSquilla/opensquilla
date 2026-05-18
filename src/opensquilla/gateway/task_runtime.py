@@ -31,7 +31,6 @@ import structlog
 from opensquilla.gateway.routing import RouteEnvelope, SourceKind
 from opensquilla.gateway.task_runtime_records import (
     EventEmitter,
-    RuntimeTask as _RuntimeTask,
     TaskHandle,
     TaskHandler,
     TaskQueueFullError,
@@ -39,9 +38,14 @@ from opensquilla.gateway.task_runtime_records import (
     TaskStreamEventSink,
     TerminalListener,
 )
+from opensquilla.gateway.task_runtime_records import (
+    RuntimeTask as _RuntimeTask,
+)
 from opensquilla.gateway.task_runtime_scheduler import TaskRuntimeScheduler
 from opensquilla.gateway.task_runtime_terminal import (
-    SubagentCompletionEvent,
+    SubagentCompletionEvent as SubagentCompletionEvent,
+)
+from opensquilla.gateway.task_runtime_terminal import (
     build_task_terminal_payload,
     notify_subagent_terminal,
 )
