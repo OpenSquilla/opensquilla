@@ -1,43 +1,35 @@
-"""Phase-class object for the post-stream turn-finalizer surface.
+"""TurnRunner stage that finalizes a turn after the agent stream ends.
 
-Owns the source slice that previously lived inline at
-``TurnRunner._run_turn`` between the post-stream "flush remaining text"
-edge and the ``turn_call_logger.write("turn_end", ...)`` boundary
-(PR-C-9's slice): heartbeat normalize, transcript ``append_message``
-for the assistant turn, ``_capture_turn_memory`` invocation,
-``_persist_turn_error`` for any pending error, and the
-``Session.update(...)`` session-totals rollup driven off the
-``DoneEvent`` snapshot.
+Drives the post-stream side effects between the "flush remaining text"
+edge and the ``turn_call_logger.write("turn_end", ...)`` boundary:
+heartbeat normalize, transcript ``append_message`` for the assistant
+turn, ``_capture_turn_memory`` invocation, ``_persist_turn_error`` for
+any pending error, and the ``Session.update(...)`` session-totals
+rollup driven off the ``DoneEvent`` snapshot.
 
-Activated by ``OPENSQUILLA_HARNESS_TURN_FINALIZER=new``. Default is
-``legacy`` -- the inline body remains the source of truth until the
-equivalence harness has run for one release cycle (PR-C-9 deletes the
-legacy arm).
-
-Returns ``StageOutcome[TurnFinalizerStageOutput]`` -- NOT a generator.
+Returns ``StageOutcome[TurnFinalizerStageOutput]`` -- not a generator.
 The agent stream has exhausted by the time this stage runs; the four
 upstream accumulators are fully materialized. The stage emits no
 ``AgentEvent``s during its body. The ``pending_error_event`` is
-surfaced in the stage output; PR-C-9 (TurnTrailerStage) yields it
-AFTER its trace + decision-entry emit.
+surfaced in the stage output after its trace + decision-entry emit.
 
-Side-effect order (load-bearing, preserve bit-identically):
+Side-effect order (load-bearing):
 
 1. Heartbeat-normalize the accumulated text.
 2. Transcript ``append_message`` (assistant turn) -- when
    ``(final_text or segments or artifacts)`` and a session manager is
    wired through the port.
-3. ``capture_turn_memory`` -- wrapped in log-and-continue try/except
-   matching the legacy slice.
+3. ``capture_turn_memory`` -- wrapped in log-and-continue try/except.
 4. ``persist_turn_error`` -- only when ``error_message`` is truthy.
    The helper owns its own internal try/except.
-5. Session totals rollup -- wrapped in log-and-continue try/except
-   matching the legacy slice; only when a DoneEvent is present.
+5. Session totals rollup -- wrapped in log-and-continue try/except,
+   only when a DoneEvent is present.
 
 Memory-after-transcript pairing is required (memory reads the
-persisted ``final_text``). Error-before-totals matches legacy ordering.
+persisted ``final_text``). Errors are persisted before totals are
+rolled up so the recorded cause is visible even when totals fail.
 
-No ``TurnHook.after_turn`` fan-out today; deferred to a follow-on PR.
+No ``TurnHook.after_turn`` fan-out today.
 """
 
 from __future__ import annotations
@@ -52,21 +44,18 @@ if TYPE_CHECKING:
     from opensquilla.engine.types import DoneEvent, ErrorEvent
     from opensquilla.tools.types import ToolContext
 
-
 log = structlog.get_logger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Ports -- four narrow Protocols
 # ---------------------------------------------------------------------------
 
-
 @runtime_checkable
 class TranscriptAppendPort(Protocol):
     """Persist the assistant turn via ``SessionManager.append_message(...)``.
 
-    Wraps the inline ``await self._session_manager.append_message(...)``
-    in the legacy slice. The adapter folds the
+    Wraps the inline ``await self._session_manager.append_message(...)``.
+    The adapter folds the
     ``_accepts_keyword_arg(..., "token_count")`` introspection so the
     stage body has no ``inspect`` dependency, and the
     ``session_manager is None`` guard so the stage body has no
@@ -74,7 +63,7 @@ class TranscriptAppendPort(Protocol):
     fired, ``False`` when the adapter declined (no manager configured).
 
     Exceptions propagate to the outer ``_run_turn`` terminal handler --
-    the legacy slice has NO try/except around ``append_message``.
+    no try/except wraps ``append_message``.
     """
 
     async def append_message(
@@ -88,15 +77,13 @@ class TranscriptAppendPort(Protocol):
         token_count: int | None,
     ) -> bool: ...
 
-
 @runtime_checkable
 class TurnMemoryCapturePort(Protocol):
     """Wrap ``TurnRunner._capture_turn_memory(...)``.
 
-    The legacy slice wraps the call in a log-and-continue try/except;
-    PR-C-8 keeps that try/except inside the stage body so the
-    error-handling contract is visible. The adapter forwards verbatim
-    without swallowing.
+    The call is wrapped in a log-and-continue try/except inside the
+    stage body so the error-handling contract is visible. The adapter
+    forwards verbatim without swallowing.
     """
 
     async def capture_turn(
@@ -113,12 +100,11 @@ class TurnMemoryCapturePort(Protocol):
         no_memory_capture: bool,
     ) -> None: ...
 
-
 @runtime_checkable
 class SessionTotalsPort(Protocol):
     """Roll up session token + cost + cache totals from a DoneEvent.
 
-    Wraps the entire post-DoneEvent block in the legacy slice: the
+    Wraps the entire post-DoneEvent block: the
     ``get_session`` read, ``normalize_event_cost_source`` call, the
     four ``next_*`` accumulator computations, the ``rollup_cost_source``
     call, and the ``Session.update`` write. The adapter folds the
@@ -140,12 +126,11 @@ class SessionTotalsPort(Protocol):
         resolved_model: str,
     ) -> CostRollupResult | None: ...
 
-
 @runtime_checkable
 class TurnErrorPersistPort(Protocol):
     """Wrap ``TurnRunner._persist_turn_error(session_key, event)``.
 
-    The legacy helper owns its own log-and-continue try/except; the
+    The helper owns its own log-and-continue try/except; the
     adapter forwards verbatim. The helper guards
     ``session_manager is None`` AND ``event is None`` internally -- the
     stage body has no None checks.
@@ -158,18 +143,16 @@ class TurnErrorPersistPort(Protocol):
         event: ErrorEvent | None,
     ) -> None: ...
 
-
 # ---------------------------------------------------------------------------
 # Cost-rollup result -- exposed for equivalence-harness pinning
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class CostRollupResult:
     """Snapshot of the per-turn session-totals update.
 
     Exposed so the equivalence harness can pin the post-rollup
-    ``Session`` row across legacy and new arms. Not consumed by
+    ``Session`` row. Not consumed by
     ``TurnContext`` or any downstream stage directly.
     """
 
@@ -186,23 +169,21 @@ class CostRollupResult:
     cache_write: int
     model_override: str | None
 
-
 # ---------------------------------------------------------------------------
 # Stage I/O dataclasses
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class TurnFinalizerStageInput:
     """Inputs the TurnFinalizerStage needs at its boundary.
 
-    Pulled from PR-C-1..PR-C-7 ``TurnContext`` accumulators by the
-    harness plus the post-stream ``_run_turn``-body locals (the four
+    Pulled from ``TurnContext`` accumulators by the harness plus the
+    post-stream ``_run_turn``-body locals (the four
     ``stream_*`` mirrors plus the original ``runtime_message`` /
     ``input_mode`` / ``input_provenance``).
     """
 
-    # From StreamConsumerStage (PR-C-7)
+    # From StreamConsumerStage
     final_text_parts: list[str]
     turn_segments: list[dict]
     turn_artifacts: list[dict[str, Any]]
@@ -210,17 +191,17 @@ class TurnFinalizerStageInput:
     pending_error_event: ErrorEvent | None
     done_event: DoneEvent | None
 
-    # From InputStage (PR-C-1) -- the ORIGINAL runtime_message (used by
+    # From InputStage -- the ORIGINAL runtime_message (used by
     # ``_capture_turn_memory`` for memory provenance), NOT the effective
     # post-pipeline string.
     runtime_message: str
     input_mode: str
     input_provenance: dict[str, Any] | None
 
-    # From PromptAssemblerStage (PR-C-3)
+    # From PromptAssemblerStage
     resolved_model: str
 
-    # From AgentBootstrapStage (PR-C-4)
+    # From AgentBootstrapStage
     agent_id: str
 
     # From _run_turn locals
@@ -230,12 +211,11 @@ class TurnFinalizerStageInput:
     heartbeat_ack_max_chars: int
     no_memory_capture: bool
 
-
 @dataclass(frozen=True)
 class TurnFinalizerStageOutput:
     """Outputs the harness applies to ``TurnContext`` after the stage runs.
 
-    PR-C-9 (TurnTrailerStage) consumes ``final_text``, ``turn_segments``,
+   Downstream consumers read ``final_text``, ``turn_segments``,
     ``turn_artifacts``, ``error_message``, ``pending_error_event``,
     ``done_event`` for its turn_end trace + decision entry. The
     ``cost_rollup`` snapshot is observability-only (pinned by the
@@ -243,12 +223,12 @@ class TurnFinalizerStageOutput:
     """
 
     # Heartbeat-normalized final text (the harness writes this onto
-    # TurnContext for PR-C-9 to read).
+    # TurnContext for to read).
     final_text: str
     # ``turn_segments`` may be EMPTIED by the heartbeat-empty edge; the
     # stage returns the post-empty value.
     turn_segments: list[dict]
-    # Re-exposed unchanged so PR-C-9 has its turn_end payload inputs.
+    # Re-exposed unchanged so has its turn_end payload inputs.
     turn_artifacts: list[dict[str, Any]]
     error_message: str | None
     pending_error_event: ErrorEvent | None
@@ -261,41 +241,39 @@ class TurnFinalizerStageOutput:
     # Did the memory capture fire?
     memory_captured: bool
 
-
 # ---------------------------------------------------------------------------
 # Outer stage class
 # ---------------------------------------------------------------------------
-
 
 class TurnFinalizerStage:
     """Persist the assistant turn, capture memory, roll up session totals.
 
     Stable boundary: runs ONCE per turn, after StreamConsumerStage
     exhausts (and after the harness flushes the trailing text segment),
-    and before TurnTrailerStage. The four ports execute in legacy order:
+   . The four ports execute in the original order:
 
     1. Heartbeat-normalize the accumulated text.
     2. ``TranscriptAppendPort.append_message`` (assistant turn).
     3. ``TurnMemoryCapturePort.capture_turn`` (memory write -- wrapped
-       in log-and-continue try/except matching legacy).
+       in log-and-continue try/except intentional).
     4. ``TurnErrorPersistPort.persist_error`` (pending error, only if
        ``error_message`` is truthy).
     5. ``SessionTotalsPort.rollup`` (DoneEvent-driven session.update --
-       wrapped in log-and-continue try/except matching legacy).
+       wrapped in log-and-continue try/except intentional).
 
     The order is load-bearing: transcript persistence MUST precede
     memory capture (memory capture reads ``final_text`` AS PERSISTED);
-    error persist MUST precede totals rollup to match legacy ordering
+    error persist MUST precede totals rollup for diagnostic ordering
     that downstream observability relies on.
 
     Exception model: the stage does NOT wrap the ``append_message``
     call. Any exception there propagates to the outer ``_run_turn``
-    terminal handler -- matching the legacy slice. The memory-capture
+    terminal handler --. The memory-capture
     and totals-rollup ports each have their own log-and-continue
     try/except inside the stage body.
 
-    No ``TurnHook.after_turn`` fan-out today -- deferred to a follow-on
-    PR.
+    No ``TurnHook.after_turn`` fan-out today; that wiring belongs in a separate
+    production hook pass.
     """
 
     name = "turn_finalizer_stage"
@@ -394,7 +372,7 @@ class TurnFinalizerStage:
                         no_memory_capture=inp.no_memory_capture,
                     )
                     memory_captured = True
-                except Exception as exc:  # noqa: BLE001 - log-and-continue per legacy
+                except Exception as exc:  # noqa: BLE001 - log-and-continue intentional
                     log.warning(
                         "turn_runner.capture_failed",
                         session_key=inp.session_key,
@@ -422,7 +400,7 @@ class TurnFinalizerStage:
                     done_event=inp.done_event,
                     resolved_model=inp.resolved_model,
                 )
-            except Exception as exc:  # noqa: BLE001 - log-and-continue per legacy
+            except Exception as exc:  # noqa: BLE001 - log-and-continue intentional
                 log.warning(
                     "turn_runner.session_usage_persist_failed",
                     session_key=inp.session_key,

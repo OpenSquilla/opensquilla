@@ -1,12 +1,11 @@
-"""TurnRunner phase-class package (Phase C).
+"""TurnRunner stage decomposition — public exports.
 
-Public surface exports the InputStage trio (PR-C-1), the
-ProviderAndToolsStage trio (PR-C-2), the PromptAssemblerStage septet
-(PR-C-3), the AgentBootstrapStage sextet (PR-C-4), the
-CompactionAndHistoryStage quartet (PR-C-5), the AttachmentStage trio
-(PR-C-6), the StreamConsumerStage seven-port set (PR-C-7), and the
-TurnFinalizerStage four-port set (PR-C-8). PR-C-9 adds
-TurnTrailerStage.
+Re-exports the eight TurnRunner stages, their I/O dataclasses, the
+Protocol ports they accept, and the shared ``StageOutcome`` /
+``TurnContext`` types. Internal adapters and private dataclasses live
+in their owning submodules (``harness``, ``stream_consumer_stage``,
+``agent_bootstrap_stage``) and are imported from there by code that
+needs them.
 """
 
 from __future__ import annotations
@@ -21,10 +20,6 @@ from opensquilla.engine.turn_runner.agent_bootstrap_stage import (
     ModelCatalogPort,
     SummarizerProviderPort,
     TimeoutBudgetPort,
-    _AgentConfigAuxiliaries,
-    _MemorySnapshotResult,
-    _ResolvedBudgets,
-    _ResolvedCatalog,
 )
 from opensquilla.engine.turn_runner.attachment_stage import (
     AttachmentMessageBuilderPort,
@@ -42,38 +37,6 @@ from opensquilla.engine.turn_runner.compaction_and_history_stage import (
     T3UpgradeCompactionPort,
 )
 from opensquilla.engine.turn_runner.context import TurnContext
-from opensquilla.engine.turn_runner.harness import (
-    _PromptReportBuilderAdapter,
-    _RequestContextPrependAdapter,
-    _TurnRunnerAgentConfigBuilderAdapter,
-    _TurnRunnerAgentFactoryAdapter,
-    _TurnRunnerAgentRunAdapter,
-    _TurnRunnerAttachmentMessageBuilderAdapter,
-    _TurnRunnerCompactionPersistAdapter,
-    _TurnRunnerExtraContextAdapter,
-    _TurnRunnerHistoryLoaderAdapter,
-    _TurnRunnerMemoryFingerprintAdapter,
-    _TurnRunnerMemorySnapshotAdapter,
-    _TurnRunnerMemorySnapshotRefreshAdapter,
-    _TurnRunnerMemorySyncNotifyAdapter,
-    _TurnRunnerModelCatalogAdapter,
-    _TurnRunnerPipelineExecutionAdapter,
-    _TurnRunnerPreflightCompactionAdapter,
-    _TurnRunnerPromptAssemblerAdapter,
-    _TurnRunnerPromptConfigResolverAdapter,
-    _TurnRunnerProviderResolverAdapter,
-    _TurnRunnerRouterContextAdapter,
-    _TurnRunnerSessionIdResolverAdapter,
-    _TurnRunnerSessionTotalsAdapter,
-    _TurnRunnerSummarizerProviderAdapter,
-    _TurnRunnerSystemPromptRefreshAdapter,
-    _TurnRunnerT3UpgradeCompactionAdapter,
-    _TurnRunnerTimeoutBudgetAdapter,
-    _TurnRunnerToolBuilderAdapter,
-    _TurnRunnerTranscriptAppendAdapter,
-    _TurnRunnerTurnErrorPersistAdapter,
-    _TurnRunnerTurnMemoryCaptureAdapter,
-)
 from opensquilla.engine.turn_runner.input_stage import (
     ExtraContextResolver,
     InputStage,
@@ -111,7 +74,6 @@ from opensquilla.engine.turn_runner.stream_consumer_stage import (
     StreamConsumerStageInput,
     SystemPromptRefreshPort,
     WarningTransformer,
-    _StreamState,
 )
 from opensquilla.engine.turn_runner.turn_finalizer_stage import (
     CostRollupResult,
@@ -184,39 +146,4 @@ __all__ = [
     "TurnFinalizerStageOutput",
     "TurnMemoryCapturePort",
     "WarningTransformer",
-    "_AgentConfigAuxiliaries",
-    "_MemorySnapshotResult",
-    "_PromptReportBuilderAdapter",
-    "_RequestContextPrependAdapter",
-    "_ResolvedBudgets",
-    "_ResolvedCatalog",
-    "_StreamState",
-    "_TurnRunnerAgentConfigBuilderAdapter",
-    "_TurnRunnerAgentFactoryAdapter",
-    "_TurnRunnerAgentRunAdapter",
-    "_TurnRunnerAttachmentMessageBuilderAdapter",
-    "_TurnRunnerCompactionPersistAdapter",
-    "_TurnRunnerExtraContextAdapter",
-    "_TurnRunnerHistoryLoaderAdapter",
-    "_TurnRunnerMemoryFingerprintAdapter",
-    "_TurnRunnerMemorySnapshotAdapter",
-    "_TurnRunnerMemorySnapshotRefreshAdapter",
-    "_TurnRunnerMemorySyncNotifyAdapter",
-    "_TurnRunnerModelCatalogAdapter",
-    "_TurnRunnerPipelineExecutionAdapter",
-    "_TurnRunnerPreflightCompactionAdapter",
-    "_TurnRunnerPromptAssemblerAdapter",
-    "_TurnRunnerPromptConfigResolverAdapter",
-    "_TurnRunnerProviderResolverAdapter",
-    "_TurnRunnerRouterContextAdapter",
-    "_TurnRunnerSessionIdResolverAdapter",
-    "_TurnRunnerSessionTotalsAdapter",
-    "_TurnRunnerSummarizerProviderAdapter",
-    "_TurnRunnerSystemPromptRefreshAdapter",
-    "_TurnRunnerT3UpgradeCompactionAdapter",
-    "_TurnRunnerTimeoutBudgetAdapter",
-    "_TurnRunnerToolBuilderAdapter",
-    "_TurnRunnerTranscriptAppendAdapter",
-    "_TurnRunnerTurnErrorPersistAdapter",
-    "_TurnRunnerTurnMemoryCaptureAdapter",
 ]

@@ -1,8 +1,8 @@
 """Snapshot harness for ``AttachmentStage`` through ``TurnRunner._run_turn``.
 
 Drives an 8-case corpus against ``TurnRunner._run_turn`` with the
-``AttachmentStage`` running unconditionally (PR-C-9: legacy arm deleted).
-The harness reuses the PR-C-4 patch helpers to stub all upstream stages
+``AttachmentStage`` running unconditionally (: legacy arm deleted).
+The harness reuses the patch helpers to stub all upstream stages
 and patches the ``Agent`` constructor so the stub agent's ``run_turn``
 raises a sentinel ``BaseException`` carrying the post-slice locals
 snapshot.
@@ -23,7 +23,7 @@ import pytest
 from opensquilla.engine.runtime import TurnRunner
 from opensquilla.engine.types import ErrorEvent
 
-# Reuse upstream patch helpers from PR-C-4's equivalence harness — this
+# Reuse upstream patch helpers from's equivalence harness — this
 # stage sits AFTER all five prior stages so the same upstream patching
 # strategy applies. Local duplication would just inflate LOC.
 from .test_agent_bootstrap_stage_snapshot import (
@@ -106,7 +106,7 @@ class _StubAgent:
         yield  # pragma: no cover
 
 
-# Local budget / thinking / compaction patches — match PR-C-5's harness shape.
+# Local budget / thinking / compaction patches — match's harness shape.
 
 
 def _patch_budget_resolvers(runner: TurnRunner) -> None:
@@ -196,7 +196,7 @@ def _pdf_attachment() -> dict[str, str]:
 # ``_run_turn`` types ``attachments`` as ``list[dict]`` (no ``None``); callers
 # normalize ``None`` to ``[]`` at the call site. The AttachmentStage-internal
 # ``None`` -> ``[]`` coercion is exercised by the unit suite. The shared
-# pipeline stub from PR-C-4 sets ``turn.message="EFFECTIVE"`` so the empty-
+# pipeline stub from sets ``turn.message="EFFECTIVE"`` so the empty-
 # attachments cases see ``turn_input="EFFECTIVE"`` regardless of the caller's
 # ``message`` field.
 

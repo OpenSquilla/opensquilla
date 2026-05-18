@@ -4,7 +4,7 @@ TurnRunner stack).
 Drives a 13-case corpus through ``CompactionAndHistoryStage.run`` with
 four recording fakes (one per port) plus a recording ``CompactionHook``.
 Per the coverage-gate-under-feature-flag-seam discipline, cases register
-raising fakes so the hook-isolation contract (Phase B) and the
+raising fakes so the hook-isolation contract (engine hook seam) and the
 exception-propagation contract are exercised even without the runtime
 wrapper.
 """
@@ -308,7 +308,7 @@ async def test_compaction_hook_only_fires_t3_when_handled() -> None:
 
 @pytest.mark.asyncio
 async def test_raising_before_compact_hook_is_isolated() -> None:
-    """Phase B isolation contract: a hook that raises MUST NOT break the turn."""
+    """engine hook seam isolation contract: a hook that raises MUST NOT break the turn."""
     hook = _RecordingCompactionHook(before_raises=RuntimeError)
     stage, t3, preflight, _, _ = _make_stage(
         t3=_RecordingT3(return_value="not_applicable"),

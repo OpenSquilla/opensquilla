@@ -1,8 +1,8 @@
-"""Dedicated Phase D seam suite for ``StreamConsumerStage``.
+"""Dedicated compaction seam suite for ``StreamConsumerStage``.
 
 The general snapshot harness exercises every event-type branch in
-the slice; this suite specifically pins the Phase D seam contract --
-the in-turn ``CompactionEvent`` handling -- so future Phase D refactors
+the slice; this suite specifically pins the compaction seam contract --
+the in-turn ``CompactionEvent`` handling -- so future compaction refactors
 have an easily discoverable contract to honor.
 
 Five focused tests cover:
@@ -59,7 +59,7 @@ def _baseline_case(
 
 
 # ---------------------------------------------------------------------------
-# Phase D Seam Test 1: persist arguments
+# Compaction seam test 1: persist arguments
 # ---------------------------------------------------------------------------
 
 
@@ -85,7 +85,7 @@ async def test_persist_compaction_result_invoked_with_event_args(
 
 
 # ---------------------------------------------------------------------------
-# Phase D Seam Test 2: notify_compaction follows persist
+# Compaction seam test 2: notify_compaction follows persist
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ async def test_notify_compaction_fires_after_persist(
 
 
 # ---------------------------------------------------------------------------
-# Phase D Seam Test 3: memory snapshot refresh respects private_memory_allowed
+# Compaction seam test 3: memory snapshot refresh respects private_memory_allowed
 # ---------------------------------------------------------------------------
 
 
@@ -161,7 +161,7 @@ async def test_memory_snapshot_refresh_respects_private_memory(
 
 
 # ---------------------------------------------------------------------------
-# Phase D Seam Test 4: system prompt refresh fires + tuple/str extract
+# Compaction seam test 4: system prompt refresh fires + tuple/str extract
 # ---------------------------------------------------------------------------
 
 
@@ -202,7 +202,7 @@ async def test_system_prompt_refresh_extracts_cacheable_base(
 
 
 # ---------------------------------------------------------------------------
-# Phase D Seam Test 5: persist log-and-continue does NOT block snapshot/prompt
+# Compaction seam test 5: persist log-and-continue does NOT block snapshot/prompt
 # ---------------------------------------------------------------------------
 
 
@@ -214,7 +214,7 @@ async def test_persist_raises_log_and_continue_preserves_refreshes(
     log-and-continue. The snapshot refresh + system prompt refresh
     still fire afterwards.
 
-    This is the most critical Phase D seam contract: snapshot + prompt
+    This is the most critical compaction seam contract: snapshot + prompt
     refresh ALWAYS fire, even on persist failure, so the next turn's
     cacheable prefix reflects the post-compaction state.
     """

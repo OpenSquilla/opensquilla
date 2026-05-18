@@ -18,7 +18,6 @@ from opensquilla.tools.types import ToolContext
 if TYPE_CHECKING:  # pragma: no cover — type-only to avoid an import cycle.
     from opensquilla.tools.registry import ToolRegistry
 
-
 @dataclass(frozen=True)
 class DispatchInput:
     """Inputs available to every :class:`PolicyCheck`.
@@ -62,7 +61,6 @@ class DispatchInput:
     def registered_handler(self) -> Any:
         return self.registered.handler
 
-
 @dataclass(frozen=True)
 class PolicyDecision:
     """Result of one :class:`PolicyCheck` evaluation.
@@ -77,7 +75,6 @@ class PolicyDecision:
     allowed: bool
     envelope: ToolResult | None = None
     log_event: dict[str, Any] | None = None
-
 
 @runtime_checkable
 class PolicyCheck(Protocol):

@@ -1,15 +1,9 @@
-"""Phase-class object for provider resolution + tool-handler construction.
+"""Stage object for provider resolution + tool-handler construction.
 
 Owns the source slice that previously lived inline at the top of
 ``TurnRunner._run_turn`` immediately after ``InputStage``. The harness
 invokes ``ProviderAndToolsStage.run`` once per turn, AFTER InputStage and
 BEFORE PromptAssemblyStage.
-
-Activated by ``OPENSQUILLA_HARNESS_PROVIDER_TOOLS=new``. Default is
-``legacy`` — the inline body remains the source of truth until the
-equivalence harness has run for one release cycle (PR-C-9 deletes the
-legacy arm).
-
 Side-effect contract: re-raises any exception from the tool registry or
 provider selector exactly as the inline body did. The harness catches it
 through the existing CancelledError / Exception terminal handlers in
@@ -24,10 +18,10 @@ Asymmetry note: provider-resolution failure is modeled as an
 ``StageOutcome.terminate_with(ErrorEvent(...))`` because it is a known
 configuration condition (no selector configured) with a stable
 user-facing ``code="no_provider"``. Tool-build failure is NOT modeled as
-an early-yield — it propagates as an exception because the legacy code
+an early-yield — it propagates as an exception because the code
 does not catch tool-build exceptions and routes them through the generic
-terminal handler at ``TurnRunner._run_turn``. Do NOT "fix" this
-asymmetry in this PR.
+terminal handler at ``TurnRunner._run_turn``. Preserve this asymmetry unless
+the tool-build failure contract changes.
 """
 
 from __future__ import annotations
@@ -40,13 +34,11 @@ if TYPE_CHECKING:
     from opensquilla.engine.turn_runner.outcome import StageOutcome
     from opensquilla.tools.types import ToolContext
 
-
 # ---------------------------------------------------------------------------
 # Ports — narrow protocols so the stage is unit-testable without the full
 # TurnRunner. The runtime adapters in ``harness.py`` bind these to the
 # concrete TurnRunner methods.
 # ---------------------------------------------------------------------------
-
 
 @runtime_checkable
 class ProviderResolverPort(Protocol):
@@ -58,7 +50,6 @@ class ProviderResolverPort(Protocol):
     """
 
     def resolve_provider(self) -> tuple[Any | None, Any | None]: ...
-
 
 @runtime_checkable
 class ToolBuilderPort(Protocol):
@@ -72,8 +63,8 @@ class ToolBuilderPort(Protocol):
       ``_with_runtime_write_callbacks``.
     - ``build_tools`` mirrors ``_build_tools(ctx, metadata=...)``.
 
-    Tool-hook wiring is OUT OF SCOPE for this PR — the deferred PR-C-2.5
-    will extend ``build_tools`` to forward ``tool_hooks=`` to
+    Tool-hook wiring is not active at this boundary yet; a future production
+    wiring pass can extend ``build_tools`` to forward ``tool_hooks=`` to
     ``build_tool_handler``.
     """
 
@@ -96,12 +87,10 @@ class ToolBuilderPort(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> tuple[list[Any], ToolHandler | None]: ...
 
-
 # ---------------------------------------------------------------------------
-# Stage I/O dataclasses (frozen — phase-class outputs are immutable values
+# Stage I/O dataclasses (frozen — stage outputs are immutable values
 # the harness accumulates onto TurnContext)
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class ProviderAndToolsStageInput:
@@ -119,7 +108,6 @@ class ProviderAndToolsStageInput:
     run_kind: str
     input_mode: str
 
-
 @dataclass(frozen=True)
 class ProviderAndToolsStageOutput:
     """The pieces of state ``PromptAssemblyStage`` and downstream consume.
@@ -136,7 +124,7 @@ class ProviderAndToolsStageOutput:
       (PromptAssemblyStage, AgentBootstrapStage) consume this enriched
       form, NOT the input ``tool_context``.
     - ``tool_metadata``: the metadata dict ``_build_tools`` populates with
-      ``tool_profile``. Threaded into the prompt-report on PR-C-3.
+      ``tool_profile``. Threaded into the prompt-report on.
     """
 
     provider: Any
@@ -146,11 +134,9 @@ class ProviderAndToolsStageOutput:
     effective_tool_context: ToolContext | None
     tool_metadata: dict[str, Any] = field(default_factory=dict)
 
-
 # ---------------------------------------------------------------------------
 # Stage
 # ---------------------------------------------------------------------------
-
 
 class ProviderAndToolsStage:
     """Resolve provider + build tool definitions / handler.
@@ -194,7 +180,7 @@ class ProviderAndToolsStage:
         # 1. Resolve provider (clone to avoid shared state race)
         provider, cloned_selector = self._provider_resolver.resolve_provider()
         if provider is None:
-            # Construct the same ErrorEvent shape the legacy inline body
+            # Construct the same ErrorEvent shape the original inline body
             # produces. The harness emits the turn_error trace + persists
             # the error after consuming this outcome.
             return StageOutcome.terminate_with(

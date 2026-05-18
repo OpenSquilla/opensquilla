@@ -466,7 +466,7 @@ async def test_outer_stage_suppresses_compaction_event_and_fires_phase_d_seams()
     # CompactionEvent must NOT be yielded.
     assert "CompactionEvent" not in kinds
     assert kinds == ["TextDeltaEvent", "TextDeltaEvent", "DoneEvent"]
-    # Phase D seams fired in order.
+    # compaction seams fired in order.
     assert len(recs["compaction_persist"].calls) == 1
     assert recs["compaction_persist"].calls[0]["kept_entries"] == [1, 2, 3]
     assert len(recs["memory_snapshot_refresh"].calls) == 1

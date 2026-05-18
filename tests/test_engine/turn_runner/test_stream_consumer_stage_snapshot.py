@@ -1,9 +1,9 @@
 """Snapshot harness for ``StreamConsumerStage`` through ``TurnRunner._run_turn``.
 
 Drives a 17-case corpus against ``TurnRunner._run_turn`` with the
-``StreamConsumerStage`` running unconditionally (PR-C-9: legacy arm
+``StreamConsumerStage`` running unconditionally (: legacy arm
 deleted). The corpus exercises every event-type branch in the slice plus
-the Phase D seam (``CompactionEvent`` -> persist -> snapshot refresh ->
+the compaction seam (``CompactionEvent`` -> persist -> snapshot refresh ->
 system-prompt refresh) plus raising-fake cases for both the agent stream
 and the compaction persist.
 """
@@ -27,7 +27,7 @@ from opensquilla.engine.types import (
     WarningEvent,
 )
 
-# Reuse upstream patch helpers from PR-C-4's equivalence harness -- this
+# Reuse upstream patch helpers from's equivalence harness -- this
 # stage sits after all six prior stages so the same upstream patching
 # strategy applies.
 from .test_agent_bootstrap_stage_snapshot import (
@@ -546,7 +546,7 @@ async def test_stream_consumer_stage_snapshot(
     if case.expected_done_present:
         assert any(isinstance(e, DoneEvent) for e in yielded)
 
-    # Phase D seam observation: persist call count + system-prompt refresh count.
+    # compaction seam observation: persist call count + system-prompt refresh count.
     sm = runner._session_manager
     assert isinstance(sm, _RecordingSessionManager)
     persist_calls = [c for c in sm.calls if c[0] == "persist"]

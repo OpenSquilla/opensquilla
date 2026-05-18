@@ -1,9 +1,9 @@
-"""Tests for the Phase D compaction public entry point.
+"""Tests for the compaction compaction public entry point.
 
-PR-D-4: the dispatcher env-var, legacy implementation, and shadow comparator
+: the dispatcher env-var, legacy implementation, and shadow comparator
 have been deleted. ``compact_context`` delegates directly to
 ``compact_context_new``. These tests cover the public contract and the
-turn-boundary cut behavior introduced in Phase D.
+turn-boundary cut behavior introduced in compaction.
 """
 
 from __future__ import annotations
@@ -133,6 +133,36 @@ async def test_new_avoids_mid_turn_cut():
             assert not is_mid_turn, (
                 f"Cut landed mid-turn: last_removed={removed[-1]}, first_kept={kept[0]}"
             )
+
+
+@pytest.mark.asyncio
+async def test_new_avoids_mid_turn_cut_for_agent_flattened_tool_blocks():
+    """Turn-boundary cut must match the Agent's flattened tool-use entries."""
+    entries = [
+        {"role": "user", "content": "old context", "token_count": 10},
+        {"role": "user", "content": "q1", "token_count": 5},
+        {"role": "assistant", "content": "[Used tool: read_file]", "token_count": 5},
+        {
+            "role": "user",
+            "content": "[Tool result (toolu_1): file contents]",
+            "token_count": 5,
+        },
+        {"role": "user", "content": "q2", "token_count": 5},
+        {"role": "assistant", "content": "answer", "token_count": 5},
+    ]
+    request = CompactionRequest(
+        session_id="agent-flattened-boundary-test",
+        entries=entries,
+        context_window_tokens=30,
+        config=CompactionConfig(safety_margin=1.0),
+    )
+    result = await compact_context_new(request)
+
+    assert result.removed_count > 0
+    removed = entries[: len(entries) - len(result.kept_entries)]
+    kept = result.kept_entries
+    assert removed[-1]["content"] != "[Used tool: read_file]"
+    assert kept[0]["content"] == "[Used tool: read_file]"
 
 
 @pytest.mark.asyncio

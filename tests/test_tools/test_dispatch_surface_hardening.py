@@ -1,4 +1,4 @@
-"""Regression tests for the Phase A surface-hardening pass.
+"""Regression tests for the dispatch policy refactor surface-hardening pass.
 
 Two boundaries are exercised here:
 

@@ -121,6 +121,9 @@ SOUL.md defines durable voice and persona guidance for this workspace. Treat it 
 
 - For user identity/profile questions such as name, preferred address, pronouns, timezone, or stable profile notes, first use injected `USER.md` when it contains the answer. Do not call `memory_search` for those questions when injected `USER.md` answers them.
 - Use `memory_search` on memory source files (`MEMORY.md` + `memory/**/*.md`) for prior work, decisions, dated history, todos, and historical memory not already present in injected context. Then use `memory_get` to pull only the needed lines. If low confidence after search, say you checked.
+{% if "session_search" in tools -%}
+- Use `session_search` for prior chat wording, prior session history, or code snippets from transcripts. Curated durable notes remain `memory_search` + `memory_get`; `session_search` does not search `MEMORY.md` or `memory/**/*.md`.
+{% endif -%}
 
 {% endif -%}
 

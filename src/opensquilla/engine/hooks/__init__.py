@@ -1,6 +1,6 @@
 """Engine-level hook protocols.
 
-Phase B introduces three typed hook surfaces on the Agent + TurnRunner:
+engine hook seam introduces three typed hook surfaces on the Agent + TurnRunner:
 
 * :class:`TurnHook` — turn lifecycle events (``before_turn``, ``after_turn``,
   ``on_error``, ``on_event``).
@@ -9,8 +9,8 @@ Phase B introduces three typed hook surfaces on the Agent + TurnRunner:
   ``after_compact``).
 
 Default implementations in :mod:`opensquilla.engine.hooks.defaults` reproduce
-the legacy inline behavior so registering an empty hook list is equivalent to
-running the legacy code path.
+the original direct behavior so registering an empty hook list is equivalent to
+running the canonical code path.
 """
 
 from __future__ import annotations

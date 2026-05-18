@@ -1,16 +1,10 @@
-"""Phase-class object for runtime budget resolve + AgentConfig assembly + Agent construction.
+"""Stage object for runtime budget resolve + AgentConfig assembly + Agent construction.
 
 Owns the source slice that previously lived inline at the top of
 ``TurnRunner._run_turn`` between the PromptAssemblerStage seam and the
 pre-flight compaction call. The harness invokes
 ``AgentBootstrapStage.run`` once per turn, AFTER PromptAssemblerStage
 and BEFORE PreflightCompactionStage.
-
-Activated by ``OPENSQUILLA_HARNESS_AGENT_BOOTSTRAP=new``. Default is
-``legacy`` — the inline body remains the source of truth until the
-equivalence harness has run for one release cycle (PR-C-9 deletes the
-legacy arm).
-
 Side-effect contract: re-raises any exception from the budget resolvers,
 the model-catalog lookups, the AgentConfig constructor, the memory
 warm/load helpers, or the Agent constructor exactly as the inline body
@@ -33,14 +27,13 @@ if TYPE_CHECKING:
     from opensquilla.engine.turn_runner.outcome import StageOutcome
     from opensquilla.engine.types import AgentConfig, ThinkingLevel
     from opensquilla.observability.turn_call_log import TurnCallLogger
-    from opensquilla.provider.types import LLMProvider, ModelCapabilities
-
+    from opensquilla.provider.protocol import LLMProvider
+    from opensquilla.provider.types import ModelCapabilities
 
 # ---------------------------------------------------------------------------
 # Value objects returned by the ports — typed frozen tuples that collapse
 # the multi-call slice into declarative single-call shapes.
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class _ResolvedBudgets:
@@ -53,7 +46,6 @@ class _ResolvedBudgets:
     request_timeout: float
     max_provider_retries: int
 
-
 @dataclass(frozen=True)
 class _ResolvedCatalog:
     """Three-field frozen value returned by ``ModelCatalogPort.lookup``."""
@@ -61,7 +53,6 @@ class _ResolvedCatalog:
     max_tokens: int
     context_window: int
     capabilities: ModelCapabilities | None
-
 
 @dataclass(frozen=True)
 class _AgentConfigAuxiliaries:
@@ -94,7 +85,6 @@ class _AgentConfigAuxiliaries:
     tool_result_store_disk_budget_bytes: int
     tool_result_store_retention_seconds: int
 
-
 @dataclass(frozen=True)
 class _MemorySnapshotResult:
     """Two-field frozen value returned by ``MemorySnapshotPort.warm_and_capture``."""
@@ -102,13 +92,11 @@ class _MemorySnapshotResult:
     sync_manager: Any | None
     private_memory_allowed: bool
 
-
 # ---------------------------------------------------------------------------
 # Ports — six narrow Protocols so the stage is unit-testable without the
 # full TurnRunner. The runtime adapters in ``harness.py`` bind these to the
 # concrete TurnRunner methods.
 # ---------------------------------------------------------------------------
-
 
 @runtime_checkable
 class TimeoutBudgetPort(Protocol):
@@ -135,12 +123,11 @@ class TimeoutBudgetPort(Protocol):
         max_provider_retries: int | None,
     ) -> _ResolvedBudgets: ...
 
-
 @runtime_checkable
 class ModelCatalogPort(Protocol):
     """Wraps ``TurnRunner._model_catalog`` lookups defensively.
 
-    Mirrors the inline three-call sequence with the legacy fallback
+    Mirrors the inline three-call sequence with the fallback
     semantics: when ``self._model_catalog is None`` the inline body
     computes ``max_tokens=user_override or 8192`` and
     ``context_window=200_000`` and ``model_caps=None``. The adapter folds
@@ -152,7 +139,6 @@ class ModelCatalogPort(Protocol):
     """
 
     def lookup(self, model_id: str) -> _ResolvedCatalog: ...
-
 
 @runtime_checkable
 class AgentConfigBuilderPort(Protocol):
@@ -179,7 +165,6 @@ class AgentConfigBuilderPort(Protocol):
         turn: Any,
     ) -> _AgentConfigAuxiliaries: ...
 
-
 @runtime_checkable
 class SummarizerProviderPort(Protocol):
     """Wraps ``TurnRunner._resolve_tool_result_summarizer_provider``.
@@ -198,7 +183,6 @@ class SummarizerProviderPort(Protocol):
         current_provider: Any,
         summary_model: str | None,
     ) -> Any | None: ...
-
 
 @runtime_checkable
 class MemorySnapshotPort(Protocol):
@@ -229,7 +213,6 @@ class MemorySnapshotPort(Protocol):
         session_key: str,
     ) -> _MemorySnapshotResult: ...
 
-
 @runtime_checkable
 class AgentFactoryPort(Protocol):
     """Wraps the typed ``Agent(...)`` constructor.
@@ -253,11 +236,9 @@ class AgentFactoryPort(Protocol):
         memory_sync_manager: Any | None,
     ) -> Agent: ...
 
-
 # ---------------------------------------------------------------------------
 # Stage I/O dataclasses (frozen)
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class AgentBootstrapStageInput:
@@ -267,8 +248,8 @@ class AgentBootstrapStageInput:
     PromptAssemblerStage has finished. The ``provider``,
     ``cloned_selector``, ``turn``, ``final_prompt``, ``cache_breakpoints``,
     ``request_context_prompt``, ``resolved_model``, and
-    ``session_id_for_log`` fields come from PR-C-3's
-    ``PromptAssemblerStageOutput``. ``tool_handler`` comes from PR-C-2's
+    ``session_id_for_log`` fields come from's
+    ``PromptAssemblerStageOutput``. ``tool_handler`` comes from's
     output.
     """
 
@@ -293,7 +274,6 @@ class AgentBootstrapStageInput:
     tool_timeout: float | None
     request_timeout: float | None
     max_provider_retries: int | None
-
 
 @dataclass(frozen=True)
 class AgentBootstrapStageOutput:
@@ -331,11 +311,9 @@ class AgentBootstrapStageOutput:
     private_memory_allowed: bool
     sync_manager: Any | None
 
-
 # ---------------------------------------------------------------------------
 # Stage
 # ---------------------------------------------------------------------------
-
 
 class AgentBootstrapStage:
     """Resolve runtime budgets, build AgentConfig, instantiate the Agent.

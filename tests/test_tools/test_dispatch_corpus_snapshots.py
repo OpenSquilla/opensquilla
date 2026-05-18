@@ -8,7 +8,7 @@ Each test runs the legacy dispatch handler against one CorpusCase and:
    `pytest --snapshot-update`.
 3. Verifies artifact delta, structured log events, and contextvar reset.
 
-These tests form the safety net that PR3 must not regress.
+These tests form the safety net that dispatch refactors must not regress.
 """
 
 from __future__ import annotations

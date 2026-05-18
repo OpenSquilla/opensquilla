@@ -36,7 +36,7 @@ runner = CliRunner()
 def _install_fake_inputs(monkeypatch, inputs: Iterable[str]) -> None:
     """Install a fake `interactive_session` that yields lines from *inputs*.
 
-    The S3 refactor switched the REPL drivers (`_standalone_repl`,
+    The concurrent REPL refactor switched the REPL drivers (`_standalone_repl`,
     `_gateway_chat`) from `prompt_user(...)` to the
     `interactive_session(...)` async context manager. This helper provides a
     fake context manager whose handle returns the next item from the
@@ -219,7 +219,7 @@ async def test_prompt_approval_does_not_draw_chat_chrome(monkeypatch) -> None:
     """`prompt_approval` must not draw the chat rule or `/help` toolbar, and
     must preserve prior model / session_id context for the next turn.
 
-    Under Option B″, the approval flow constructs a fresh `PromptSession`
+    Under inline approval, the approval flow constructs a fresh `PromptSession`
     inline (see `prompt_approval_inline`) and never reuses the cached chat
     session. The legacy `_toolbar_context['suppress']` toggle is no longer
     part of the contract because the outer Application is fully suspended

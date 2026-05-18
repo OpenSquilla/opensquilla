@@ -1,8 +1,8 @@
-"""S4 acceptance — slash-command classification table.
+"""Slash-command classification table.
 
 The concurrent REPL spawns each user input as a child turn task while the
 input task keeps accepting keystrokes. When new input arrives mid-turn,
-the policy split (locked in plan §2 S4) routes the command by category:
+the policy split routes the command by category:
 
 * ``DESTRUCTIVE`` (``/clear`` / ``/reset`` / ``/compact``) — purge the
   pending queue, cancel the active turn, then run synchronously.
@@ -54,7 +54,7 @@ def test_classify_destructive(command: str) -> None:
 def test_destructive_set_matches_plan_lock() -> None:
     """The destructive set is locked to exactly these three commands.
 
-    Plan §2 S4 freezes the destructive set; any future addition needs a
+    The destructive set is closed; any future addition needs a
     plan amendment. This test pins the frozenset contents so a silent
     expansion fails loudly.
     """
@@ -209,7 +209,7 @@ def test_classify_is_case_insensitive() -> None:
 def test_classify_unknown_slash_is_enqueue() -> None:
     """Unknown slash words fall through to an enqueue category.
 
-    Per plan §S4 the destructive set is explicitly closed (``/clear``,
+    The destructive set is explicitly closed (``/clear``,
     ``/reset``, ``/compact`` only); anything else starting with ``/`` and
     not in the exit set MUST NOT cancel the active turn. The chosen
     behavior is to route through the enqueue path so the existing slash-

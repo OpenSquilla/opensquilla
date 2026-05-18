@@ -659,7 +659,7 @@ class MemoryConfig(BaseSettings):
     vector_weight: float = 0.7
     text_weight: float = 0.3
 
-    # Dream consolidation (PR4)
+    # Dream consolidation
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
 

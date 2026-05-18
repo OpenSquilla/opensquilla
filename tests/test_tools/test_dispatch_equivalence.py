@@ -1,4 +1,4 @@
-"""Equivalence harness — policy-pipeline self-comparison (PR4).
+"""Equivalence harness — policy-pipeline self-comparison.
 
 Both control and candidate are :func:`opensquilla.tools.dispatch.build_tool_handler`
 (the policy pipeline). This is a determinism/infrastructure smoke-test: two
@@ -6,7 +6,7 @@ independent factory calls must produce byte-for-byte identical results for every
 corpus case. Any shared mutable state, contextvar leak, or non-deterministic
 ordering will surface here.
 
-The legacy dispatch module was removed in PR4. The permanent behavioural contract
+The legacy dispatch module was removed. The permanent behavioural contract
 lives in:
   - test_dispatch_corpus_snapshots.py  (golden envelopes)
   - test_dispatch_properties.py         (idempotence, ordering invariants)
@@ -27,7 +27,7 @@ from test_tools.dispatch_corpus import ALL_CASES, CorpusCase  # noqa: E402
 from opensquilla.tool_boundary import ToolResult
 from opensquilla.tools.dispatch import build_tool_handler as _build_candidate
 
-# Both sides use the policy-pipeline factory (PR4: legacy removed).
+# Both sides use the policy-pipeline factory.
 from opensquilla.tools.dispatch import build_tool_handler as _build_control
 from opensquilla.tools.types import ToolContext, current_tool_context
 

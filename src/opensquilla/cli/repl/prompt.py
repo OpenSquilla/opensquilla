@@ -244,7 +244,7 @@ async def prompt_user(
 
 
 async def prompt_approval_inline(*, surface: Surface, approval_panel: str) -> str:
-    """Option B″ approval: temporarily release the outer Application's
+    """Inline approval: temporarily release the outer Application's
     terminal ownership via prompt-toolkit's ``in_terminal`` async context
     manager, run a fresh one-shot ``PromptSession`` as the sole owner of
     stdin/screen for the prompt, then resume the outer Application.
@@ -258,8 +258,8 @@ async def prompt_approval_inline(*, surface: Surface, approval_panel: str) -> st
     that requires a shell ``fg`` to recover.
 
     The ``_approval_in_flight`` Event on the ``ChatApplication`` is set for
-    the whole suspend window and cleared on resume so the S2b output-lock
-    acquirer (NEW-S2b) can gate concurrent turn-task writes.
+    the whole suspend window and cleared on resume so the output-lock
+    acquirer can gate concurrent turn-task writes.
     """
     from prompt_toolkit.application.run_in_terminal import in_terminal
 
@@ -267,7 +267,7 @@ async def prompt_approval_inline(*, surface: Surface, approval_panel: str) -> st
     if chat_app is None:
         # No outer Application is running for this surface; run the fresh
         # one-shot session directly. This still avoids re-entering any
-        # cached ``PromptSession`` so the legacy R6 bug cannot recur.
+        # cached ``PromptSession`` so the legacy re-entry bug cannot recur.
         fresh = PromptSession(message=approval_panel)
         try:
             value = await fresh.prompt_async()
@@ -293,8 +293,8 @@ async def prompt_approval(
     *,
     surface: Surface = Surface.CLI_GATEWAY,
 ) -> str:
-    """Thin wrapper that adapts the legacy prefix-style call to the new
-    Option B″ inline approval path. Existing callers in ``chat_cmd.py`` keep
+    """Thin wrapper that adapts the legacy prefix-style call to the
+    inline approval path. Existing callers in ``chat_cmd.py`` keep
     working without source changes — they pass a prefix string and receive
     the lowercased answer.
 
@@ -310,7 +310,7 @@ async def prompt_approval(
 
 
 # ---------------------------------------------------------------------------- #
-# S1 scaffolding: long-lived Application + interactive_session() context mgr   #
+# Long-lived Application + interactive_session() context manager               #
 # ---------------------------------------------------------------------------- #
 
 
@@ -320,7 +320,7 @@ _chat_applications: dict[Surface, ChatApplication] = {}
 class InteractiveSessionHandle:
     """Handle returned by `interactive_session()`.
 
-    Exposes the minimal contract callers will migrate to in S3/S4:
+    Exposes the minimal contract concurrent chat callers need:
       - `await handle.next_line()` -> str | None  (None = Ctrl-D)
       - `handle.set_toolbar(key, value)`
 
@@ -363,7 +363,7 @@ def _get_or_create_chat_app(
     auto_suggest = AutoSuggestFromHistory()
     # LockedFileHistory serializes store_string calls across concurrent writers
     # (input task plus any auxiliary prompts), keeping the history file from
-    # interleaving bytes on multi-thread or yielding I/O paths (R7 / S2a).
+    # interleaving bytes on multi-thread or yielding I/O paths.
     from opensquilla.cli.repl.app import LockedFileHistory
 
     history = LockedFileHistory(_history_path())
@@ -419,8 +419,8 @@ async def interactive_session(
     `prompt_toolkit.Application` is launched in a background task and torn
     down on context exit.
 
-    NOTE (S1): existing callers (`prompt_user`, `prompt_approval`) are NOT
-    routed through this context manager yet; migration happens in S3/S4.
+    Existing callers (`prompt_user`, `prompt_approval`) are NOT routed through
+    this context manager.
     The toolbar state dict (`_toolbar_context`) is shared, so setting
     `model` / `session_id` here remains visible to the legacy
     `_bottom_toolbar` callable used by `prompt_user`.

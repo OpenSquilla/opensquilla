@@ -29,7 +29,7 @@ from opensquilla.engine.hooks.types import CompactionState
 from opensquilla.engine.runtime import TurnRunner
 from opensquilla.engine.types import ErrorEvent
 
-# Reuse upstream patch helpers from PR-C-4's equivalence harness — this
+# Reuse upstream patch helpers from's equivalence harness — this
 # stage sits AFTER AgentBootstrapStage's slice so the same upstream
 # patching strategy applies. Local duplication would just inflate LOC.
 from .test_agent_bootstrap_stage_snapshot import (
@@ -86,7 +86,7 @@ def _capture_locals_at_post_slice() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Local budget / thinking patches — PR-C-4's helpers take a case dict with
+# Local budget / thinking patches —'s helpers take a case dict with
 # different fields, so a smaller local stub keeps the corpus simple.
 # ---------------------------------------------------------------------------
 

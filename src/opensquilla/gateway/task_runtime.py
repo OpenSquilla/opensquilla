@@ -805,7 +805,7 @@ class TaskRuntime:
                                 # Only reclassify when the hard-deadline budget
                                 # was actually exhausted.  A TimeoutError that
                                 # originates inside the handler (e.g. from a
-                                # phase class or tool call) will have elapsed
+                                # stage class or tool call) will have elapsed
                                 # well below the deadline; in that case re-raise
                                 # the original exception unchanged so the outer
                                 # handler records the correct cause.
@@ -991,9 +991,9 @@ class TaskRuntime:
         """Return the OUTER per-session lock for *session_key*.
 
         Exposed as a ``session_lock_provider`` callable for ``TurnRunner`` so
-        that both classes share the same ``asyncio.Lock`` per session.  After
-        Step 7c this becomes the *only* per-session lock; TurnRunner's internal
-        ``_session_locks`` dict is removed.
+        that both classes share the same ``asyncio.Lock`` per session. With a
+        shared provider this is the only per-session lock; TurnRunner no
+        longer owns an internal ``_session_locks`` dict.
 
         ``setdefault`` is atomic in CPython — avoids TOCTOU race on insertion.
         """

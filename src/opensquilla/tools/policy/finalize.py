@@ -6,7 +6,7 @@ the orchestrator — exception, approval-pending on an unsupported surface,
 denial payload, and success — and always routes through
 :func:`normalize_execution_status` exactly once.
 
-The function deliberately keeps the legacy budget-bypass behaviour: when
+The function preserves the budget-bypass behaviour: when
 artifacts were published the raw content is returned unchanged; otherwise
 the result is normalised through the budget tracker.
 """
@@ -34,11 +34,9 @@ from opensquilla.tools.types import InteractionMode, ToolContext
 
 log = structlog.get_logger("opensquilla.tools.dispatch")
 
-
 _PENDING_APPROVAL_STATUSES: frozenset[str] = frozenset(
     {"approval_required", "approval_pending"}
 )
-
 
 def _extract_pending_approval(content: Any) -> dict[str, Any] | None:
     """Return the payload when ``content`` carries a pending-approval status."""
@@ -55,7 +53,6 @@ def _extract_pending_approval(content: Any) -> dict[str, Any] | None:
         return None
     return payload if payload.get("status") in _PENDING_APPROVAL_STATUSES else None
 
-
 def _denial_reason(content: Any) -> str:
     payload: Any = content
     if isinstance(content, str):
@@ -67,10 +64,8 @@ def _denial_reason(content: Any) -> str:
         return "approval_denied"
     return "denied"
 
-
 def _has_live_approval_surface(ctx: ToolContext | None) -> bool:
     return ctx is None or ctx.interaction_mode is InteractionMode.INTERACTIVE
-
 
 async def finalize(
     call: ToolCall,

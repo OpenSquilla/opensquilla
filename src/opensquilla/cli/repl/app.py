@@ -1,10 +1,9 @@
 """Long-lived prompt-toolkit Application driver for the chat REPL.
 
-S1 scaffolding for Option B″ concurrent REPL. Owns a single
+Owns a single
 `prompt_toolkit.Application` per surface, exposes submitted lines through an
 asyncio queue, and routes toolbar state updates through the existing
-`_toolbar_context` dict in `prompt.py`. Caller migration (chat_cmd.py) is
-deferred to later stories — this module only provides the API surface.
+`_toolbar_context` dict in `prompt.py`.
 """
 
 from __future__ import annotations
@@ -64,7 +63,7 @@ if TYPE_CHECKING:
 _EOF_SENTINEL: object = object()
 
 
-# Time window for Ctrl-C double-press shutdown detection (S7). A second
+# Time window for Ctrl-C double-press shutdown detection. A second
 # Ctrl-C arriving within this many seconds of the previous one triggers
 # the registered shutdown callback (drain + exit). Outside the window,
 # Ctrl-C behaves as the existing single-press cancel-or-clear. Module-
@@ -78,7 +77,7 @@ def _build_key_bindings() -> KeyBindings:
     Ctrl-C clears the current buffer (matches `prompt.py:_key_bindings`).
     Ctrl-D exits the Application by emitting the EOF sentinel on the buffer's
     accept handler so the submit queue surfaces None upstream.
-    Ctrl-G invokes the registered cancel callback (S3) so the chat REPL can
+    Ctrl-G invokes the registered cancel callback so the chat REPL can
     cancel an in-flight turn task without tearing down the input surface.
     """
     bindings = KeyBindings()
@@ -94,7 +93,7 @@ def _build_key_bindings() -> KeyBindings:
         # the next input after cancel, or clearing typed-but-unsent text
         # when idle.
         #
-        # S7: a SECOND Ctrl-C within `_DOUBLE_CTRL_C_WINDOW_S` of the
+        # A SECOND Ctrl-C within `_DOUBLE_CTRL_C_WINDOW_S` of the
         # previous press triggers the registered shutdown callback, which
         # the chat REPL wires to drain the pending deque, finalize any
         # in-flight turn, and exit cleanly. The single-press behavior
@@ -164,8 +163,8 @@ class ChatApplication:
         self._toolbar_context = toolbar_context
         self._submit_queue: asyncio.Queue[str | object] = asyncio.Queue()
         self._eof_seen = False
-        # Set for the duration of the Option B″ approval suspend window
-        # (`prompt.py:prompt_approval_inline`). The S2b output-lock acquirer
+        # Set for the duration of the inline approval suspend window
+        # (`prompt.py:prompt_approval_inline`). The output-lock acquirer
         # awaits the inverse before flushing turn-task output so concurrent
         # writes cannot collide with the inline approval `PromptSession`
         # while it owns the screen.
@@ -178,7 +177,7 @@ class ChatApplication:
         # without spinning. Starts set so the idle-by-default contract holds.
         self._approval_idle: asyncio.Event = asyncio.Event()
         self._approval_idle.set()
-        # Serializes terminal write-and-flush only (NEW-S2b contract). Rich
+        # Serializes terminal write-and-flush only. Rich
         # rendering MUST happen outside this lock so panel rendering time
         # cannot starve concurrent input echo; callers render into a
         # `StringIO` first and acquire the lock for the microsecond
@@ -190,7 +189,7 @@ class ChatApplication:
         # `set_cancel_callback`; `None` while no turn is in flight.
         self._cancel_callback: Callable[[], None] | None = None
         # Optional callback invoked when Ctrl-C is pressed twice within
-        # `_DOUBLE_CTRL_C_WINDOW_S` of the previous press (S7). The chat
+        # `_DOUBLE_CTRL_C_WINDOW_S` of the previous press. The chat
         # REPL registers a callable that emits EOF on the submit queue so
         # the main loop's existing EOF path drains pending work and exits
         # cleanly. `None` falls back to single-press behavior — no double-
@@ -266,10 +265,10 @@ class ChatApplication:
 
     @property
     def approval_in_flight(self) -> asyncio.Event:
-        """Event surface for S2b's output-lock acquirer.
+        """Event surface for the output-lock acquirer.
 
-        The Event is set for the duration of the Option B″ approval suspend
-        window and cleared on resume. S2b's output-lock holder waits on the
+        The Event is set for the duration of the inline approval suspend
+        window and cleared on resume. The output-lock holder waits on the
         Event's "cleared" state before flushing turn-task output so writes
         cannot collide with the inline approval `PromptSession`.
         """
@@ -296,13 +295,13 @@ class ChatApplication:
         """Wait until no approval is in flight.
 
         Returns immediately when no approval is active (the idle-by-default
-        contract). Used by the S2b output-lock acquirer; kept here so the
+        contract). Used by the output-lock acquirer; kept here so the
         Event contract is owned by the Application that mutates it.
         """
         await self._approval_idle.wait()
 
     # ------------------------------------------------------------------ #
-    # Cancel callback (S3)                                                #
+    # Cancel callback                                                     #
     # ------------------------------------------------------------------ #
 
     def set_cancel_callback(self, cb: Callable[[], None] | None) -> None:
@@ -333,11 +332,11 @@ class ChatApplication:
             pass
 
     # ------------------------------------------------------------------ #
-    # Shutdown callback (S7) — Ctrl-C double-press                        #
+    # Shutdown callback — Ctrl-C double-press                             #
     # ------------------------------------------------------------------ #
 
     def set_shutdown_callback(self, cb: Callable[[], None] | None) -> None:
-        """Register a callable invoked on a Ctrl-C double-press (S7).
+        """Register a callable invoked on a Ctrl-C double-press.
 
         The chat REPL registers a callable that emits EOF on the submit
         queue so the main loop's existing EOF path drains pending work
@@ -395,7 +394,7 @@ class ChatApplication:
         self._last_ctrl_c_at = now
 
     # ------------------------------------------------------------------ #
-    # Output mutex (NEW-S2b)                                              #
+    # Output mutex                                                        #
     # ------------------------------------------------------------------ #
 
     @property
@@ -413,11 +412,11 @@ class ChatApplication:
     async def acquire_output(self):
         """Async context manager: acquire the output mutex with suspend gating.
 
-        Contract (NEW-S2b):
+        Contract:
           1. Awaits the output mutex.
           2. Inside the lock, awaits `wait_approval_idle()` so writes never
              collide with the inline approval `PromptSession` that owns the
-             screen during the Option B″ suspend window.
+             screen during the inline approval suspend window.
           3. Yields. The body MUST do write-and-flush only — Rich rendering
              belongs *outside* the lock (render into `StringIO` first) so a
              slow panel render cannot starve concurrent input echo.
@@ -437,7 +436,7 @@ class ChatApplication:
         The payload is expected to be the result of rendering Rich content
         into a `StringIO` (or any other in-memory buffer) — this helper is
         the canonical "flush a rendered string to the terminal" entrypoint
-        for any caller that wants the S2b write-and-flush contract.
+        for any caller that wants the write-and-flush contract.
 
         Imports `console` lazily inside the function to avoid a top-level
         circular import with `cli.repl.stream`, which in turn pulls in

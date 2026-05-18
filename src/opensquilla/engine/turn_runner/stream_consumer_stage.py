@@ -1,35 +1,28 @@
-"""Phase-class object for the agent stream consumer loop.
+"""Stage object for the agent stream consumer loop.
 
-Owns the source slice that previously lived inline at
-``TurnRunner._run_turn`` between the ``AttachmentStage`` (PR-C-6) seam
-and the post-stream transcript-persist seam (PR-C-8 scope): the
+Owns the per-turn slice between the ``AttachmentStage`` seam
+and the post-stream transcript-persist seam: the
 pre-loop accumulator declarations, the
 ``async for event in agent.run_turn(...)`` body, and the post-stream
 sync-manager notify call.
 
-Activated by ``OPENSQUILLA_HARNESS_STREAM_CONSUMER=new``. Default is
-``legacy`` -- the inline body remains the source of truth until the
-equivalence harness has run for one release cycle (PR-C-9 deletes the
-legacy arm).
-
-Departs from the Phase C ``StageOutcome`` uniformity: this stage is an
+Departs from the ``StageOutcome`` uniformity: this stage is an
 async generator. Each ``AgentEvent`` the agent produces is forwarded
 through the stage (after optional in-place rewrite) so downstream
 consumers (WebUI, CLI, channels) keep their per-event streaming
-contract. Terminal state for the post-stream surface (PR-C-8) flows
+contract. Terminal state for the post-stream surface flows
 through the harness-owned ``_StreamState`` value object the stage
 mutates in place.
 
-Phase D seam preservation: the ``_CompactionHandler`` executes the
+Compaction seam preservation: the ``_CompactionHandler`` executes the
 three-step ``persist -> snapshot refresh -> system-prompt refresh``
-sequence bit-identically to the legacy slice. The
+sequence as a single transaction. The
 ``persist_compaction_result`` re-entrancy contract is preserved -- the
 adapter forwards the call verbatim and the IN-TURN path remains the
-only call site after PR-C-5 landed.
+only call site after the previous extraction landed.
 
-No ``TurnHook`` is fired from inside the stream loop today; PR-C-7
-preserves that. ``CompactionHook`` integration for the IN-TURN seam is
-deferred to a follow-on PR.
+No ``TurnHook`` is fired from inside the stream loop today.
+``CompactionHook`` integration for the IN-TURN seam is deferred.
 """
 
 from __future__ import annotations
@@ -54,20 +47,16 @@ if TYPE_CHECKING:
         WarningEvent,
     )
 
-
 log = structlog.get_logger(__name__)
-
 
 # Sentinel for "this event was consumed and should NOT be yielded
 # downstream" (CompactionEvent + ErrorEvent take this path -- the
-# legacy slice ``continue``s instead of yielding).
+# loop continues instead of yielding).
 _SUPPRESS: Final = object()
-
 
 # ---------------------------------------------------------------------------
 # Ports -- five narrow Protocols + one callable
 # ---------------------------------------------------------------------------
-
 
 @runtime_checkable
 class AgentRunPort(Protocol):
@@ -89,23 +78,22 @@ class AgentRunPort(Protocol):
         semantic_message: str | None,
     ) -> AsyncIterator[AgentEvent]: ...
 
-
 @runtime_checkable
 class CompactionPersistPort(Protocol):
     """Persist the IN-TURN ``CompactionEvent`` result + notify cache monitor.
 
     Wraps ``SessionManager.persist_compaction_result(session_key, summary,
     kept_entries)`` followed by ``notify_compaction(session_key)``. The
-    legacy slice wraps both in a single ``try/except`` that swallows
+    single ``try/except`` wraps both and swallows
     exceptions other than ``CancelledError`` (log + continue); the
     stage applies that wrapping at the call site, not inside the port.
 
-    PHASE D SEAM: This is the only remaining call site for
-    ``persist_compaction_result`` after PR-C-5 landed. The Phase D
-    contract requires the call to remain re-entrant -- the Agent has
-    already mutated its in-memory message list before the runner sees
-    ``CompactionEvent``, so the DB transcript may have more entries
-    than ``kept_entries``. PR-C-7 forwards the call verbatim.
+    Compaction seam: This is the only remaining call site for
+    ``persist_compaction_result``. The compaction contract requires the
+    call to remain re-entrant -- the Agent has already mutated its
+    in-memory message list before the runner sees ``CompactionEvent``,
+    so the DB transcript may have more entries than ``kept_entries``.
+    The stage forwards the call verbatim.
     """
 
     async def persist_and_notify(
@@ -116,7 +104,6 @@ class CompactionPersistPort(Protocol):
         kept_entries: list[Any],
     ) -> None: ...
 
-
 @runtime_checkable
 class MemorySnapshotRefreshPort(Protocol):
     """Refresh ``_memory_snapshots[(agent_id, session_key)]`` after compaction.
@@ -125,8 +112,8 @@ class MemorySnapshotRefreshPort(Protocol):
     dict-write sequence. The adapter respects ``private_memory_allowed``:
     when false, the dict is not written.
 
-    PHASE D SEAM: the frozen system-prompt snapshot lives in this dict;
-    the Phase D scientist's note "the in-turn path must keep emitting
+    Compaction seam: the frozen system-prompt snapshot lives in this dict;
+    the design note "the in-turn path must keep emitting
     through CompactionEvent so TurnRunner can update the frozen
     system-prompt snapshot ... before the next turn" is satisfied by
     refreshing here, BEFORE the agent's next iteration runs.
@@ -140,7 +127,6 @@ class MemorySnapshotRefreshPort(Protocol):
         private_memory_allowed: bool,
     ) -> None: ...
 
-
 @runtime_checkable
 class SystemPromptRefreshPort(Protocol):
     """Rebuild + apply the cacheable system-prompt base after compaction.
@@ -148,7 +134,7 @@ class SystemPromptRefreshPort(Protocol):
     Wraps the ``_assemble_prompt(...)`` call + the tuple-vs-str extract
     + ``agent.refresh_system_prompt(refreshed_prompt)``.
 
-    PHASE D SEAM: the post-compaction prompt rebuild MUST extract the
+    Compaction seam: the post-compaction prompt rebuild MUST extract the
     cacheable base (not the full ``(base, dynamic_suffix)`` tuple) --
     feeding the tuple directly into ``agent.refresh_system_prompt``
     would smuggle volatile bytes into ``ChatConfig.system`` and raise
@@ -166,7 +152,6 @@ class SystemPromptRefreshPort(Protocol):
         bootstrap_context_mode: str | None,
     ) -> None: ...
 
-
 @runtime_checkable
 class MemorySyncNotifyPort(Protocol):
     """Notify ``sync_manager.notify_message(byte_count)`` post-stream.
@@ -182,17 +167,14 @@ class MemorySyncNotifyPort(Protocol):
         runtime_message: str,
     ) -> None: ...
 
-
 # Callable signature for runtime warning transformation. Implemented as a
 # plain callable rather than a Protocol because it is a single-method
 # contract and the recording-fake discipline applies identically.
 WarningTransformer = Callable[["WarningEvent"], "WarningEvent"]
 
-
 # ---------------------------------------------------------------------------
 # Stream state -- four owned + four pass-by-reference accumulators
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class _StreamState:
@@ -205,13 +187,13 @@ class _StreamState:
 
     Four fields move INTO this object from the inline body. Four
     fields STAY on the harness-level ``_run_turn`` body and are
-    PASSED IN as mutable references -- the legacy ``CancelledError``
+    PASSED IN as mutable references -- the outer ``CancelledError``
     handler reads them after the stream loop. Wrapping each mutation
     into a yielded state-delta envelope would balloon LOC and harm
     readability for zero behavioral benefit.
     """
 
-    # Moved INTO stage scope (declared inline at the legacy slice).
+    # Moved INTO stage scope (declared inline before the stage extraction).
     current_text_parts: list[str] = field(default_factory=list)
     error_message: str | None = None
     pending_error_event: ErrorEvent | None = None
@@ -223,11 +205,9 @@ class _StreamState:
     turn_artifacts: list[dict[str, Any]] = field(default_factory=list)
     artifact_delivery_failures: list[str] = field(default_factory=list)
 
-
 # ---------------------------------------------------------------------------
 # Stage I/O dataclass
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class StreamConsumerStageInput:
@@ -238,21 +218,21 @@ class StreamConsumerStageInput:
     stage mutates it in place.
     """
 
-    # From AgentBootstrapStage (PR-C-4)
+    # From AgentBootstrapStage
     agent: Agent
     agent_id: str
     sync_manager: Any  # MemorySyncManager | None
     private_memory_allowed: bool
 
-    # From PromptAssemblerStage (PR-C-3)
+    # From PromptAssemblerStage
     turn: Any  # post-pipeline pipeline.TurnContext
     tool_defs: list[Any]
 
-    # From AttachmentStage (PR-C-6)
+    # From AttachmentStage
     turn_input: str
     extra_messages: list[Any] | None
 
-    # From InputStage (PR-C-1)
+    # From InputStage
     semantic_input: str
     effective_runtime_message: str
 
@@ -269,11 +249,9 @@ class StreamConsumerStageInput:
     # Mutable shared accumulators (passed by reference)
     state: _StreamState
 
-
 # ---------------------------------------------------------------------------
 # Per-event handler classes
 # ---------------------------------------------------------------------------
-
 
 class _TextDeltaHandler:
     """Accumulate streamed text deltas into the final-text and current-text buffers."""
@@ -287,11 +265,10 @@ class _TextDeltaHandler:
         state.current_text_parts.append(event.text)
         return event
 
-
 class _ToolUseStartHandler:
     """Strip synthetic-tool-call text, flush the current text segment, append tool_use segment.
 
-    Mirrors the legacy ToolUseStart branch in ``_run_turn`` -- the
+    Implements the canonical ToolUseStart handling -- the
     synthetic-text strip rewrites ``final_text_parts`` and
     ``current_text_parts`` in place when the agent emitted a synthetic
     tool call with prefix text it now wants stripped.
@@ -345,7 +322,6 @@ class _ToolUseStartHandler:
         )
         return event
 
-
 class _ToolResultHandler:
     """Capture artifact-delivery failures and append the tool_result segment."""
 
@@ -374,7 +350,6 @@ class _ToolResultHandler:
         state.turn_segments.append(_persisted_tool_result_segment(event))
         return event
 
-
 class _ArtifactHandler:
     """Append an artifact payload to the per-turn artifact list."""
 
@@ -388,11 +363,10 @@ class _ArtifactHandler:
         state.turn_artifacts.append(artifact_payload(event))
         return event
 
-
 class _ErrorHandler:
     """Rewrite timeout envelopes, drop unpaired tool_use, capture pending error.
 
-    Returns ``_SUPPRESS`` -- the legacy slice ``continue``s without
+    Returns ``_SUPPRESS`` -- the loop continues without
     yielding (the pending error event is yielded post-stream by the
     finalizer stage after transcript persist).
     """
@@ -421,7 +395,6 @@ class _ErrorHandler:
         state.pending_error_event = event
         return _SUPPRESS
 
-
 class _WarningHandler:
     """Forward warnings to the runner's runtime-warning transformer."""
 
@@ -431,7 +404,6 @@ class _WarningHandler:
     def handle(self, event: WarningEvent) -> WarningEvent:
         return self._transformer(event)
 
-
 class _DoneHandler:
     """Apply routing-tier metadata, savings, normalize text, emit notices.
 
@@ -439,7 +411,7 @@ class _DoneHandler:
     extra_yields)`` where ``extra_yields`` is the (possibly empty) list
     of events the outer stage must yield BEFORE the DoneEvent itself --
     the artifact-delivery-failure notice TextDelta and/or the
-    hallucination Warning yield, in legacy order.
+    hallucination Warning yield, in the original order.
     """
 
     def handle(
@@ -552,16 +524,15 @@ class _DoneHandler:
             )
         return event, extra_yields
 
-
 class _CompactionHandler:
-    """Phase D seam: persist + memory snapshot refresh + system prompt refresh.
+    """compaction seam: persist + memory snapshot refresh + system prompt refresh.
 
     The order persist -> snapshot -> prompt is load-bearing per the
-    Phase D scientist contract (the Agent has already mutated its
+    compaction contract (the Agent has already mutated its
     in-memory history; the DB transcript must be brought into sync
     first, then the next turn's snapshot dependencies refreshed). The
     persist call is wrapped in a log-and-continue try/except matching
-    the legacy slice; snapshot + prompt refresh always fire after.
+    log-and-continue semantics; snapshot + prompt refresh always fire after.
 
     Does NOT yield -- ``CompactionEvent`` is internal-only.
     """
@@ -589,7 +560,7 @@ class _CompactionHandler:
                     summary=event.summary,
                     kept_entries=event.kept_entries,
                 )
-            except Exception as exc:  # noqa: BLE001 - log-and-continue per legacy
+            except Exception as exc:  # noqa: BLE001 - log-and-continue intentional
                 log.warning("compaction_persist_failed", error=str(exc))
 
         self._memory_snapshot.refresh_snapshot(
@@ -605,11 +576,9 @@ class _CompactionHandler:
             bootstrap_context_mode=inp.bootstrap_context_mode,
         )
 
-
 # ---------------------------------------------------------------------------
 # Outer stage class
 # ---------------------------------------------------------------------------
-
 
 class StreamConsumerStage:
     """Consume the agent stream and yield events; persist mid-stream side effects.
@@ -620,22 +589,23 @@ class StreamConsumerStage:
     1. ``AgentRunPort.run_turn`` -- one async iterator started; the
        stage owns the lifetime of the consumer loop.
     2. Per ``CompactionEvent``, conditionally:
-       a. ``CompactionPersistPort.persist_and_notify`` (Phase D seam).
-       b. ``MemorySnapshotRefreshPort.refresh_snapshot`` (Phase D seam).
-       c. ``SystemPromptRefreshPort.refresh_system_prompt`` (Phase D seam).
+       a. ``CompactionPersistPort.persist_and_notify`` (compaction seam).
+       b. ``MemorySnapshotRefreshPort.refresh_snapshot`` (compaction seam).
+       c. ``SystemPromptRefreshPort.refresh_system_prompt`` (compaction seam).
     3. Post-stream: ``MemorySyncNotifyPort.notify_message_bytes`` -- one
        call after the loop exits cleanly.
 
-    Async-generator signature -- the FIRST Phase C stage that does NOT
+    Async-generator signature -- the FIRST TurnRunner stage that does NOT
     return ``StageOutcome``. Each yielded value is forwarded by the
-    harness to its own caller. Terminal state for PR-C-8 flows
+    harness to its own caller. Terminal state for flows
     through ``inp.state`` (the harness-owned ``_StreamState``).
 
     Exception model: the stream loop propagates ``CancelledError``
     unchanged (the outer ``_run_turn`` CancelledError handler owns the
     partial-persist behavior). Other exceptions propagate to the outer
-    terminal handler. The ``_CompactionHandler`` wraps its persist
-    call in a log-and-continue try/except that matches the legacy slice.
+    terminal handler. The ``_CompactionHandler`` wraps its persist call
+    in a log-and-continue try/except so transient persistence failures
+    do not abort the surrounding turn.
 
     No ``TurnHook`` or ``CompactionHook`` is fired from inside the
     stream loop today.

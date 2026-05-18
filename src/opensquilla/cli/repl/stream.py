@@ -372,7 +372,7 @@ class StreamingRenderer:
         self._stream_started = False
         self._strip = _ToolCallStrip()
         # Optional ChatApplication handle. When provided, async callers can
-        # route token writes through `aappend_text` so the S2b output mutex
+        # route token writes through `aappend_text` so the output mutex
         # serializes the write-and-flush with concurrent slash-handler /
         # input-echo writes. Sync `append_text` is preserved unchanged for
         # legacy callers; migration to the async path is incremental.
@@ -440,7 +440,7 @@ class StreamingRenderer:
 
         Mirrors the sync path's sanitization and buffer accounting, then
         delegates the write-and-flush to `ChatApplication.write_through`
-        which holds the S2b output lock for the microsecond write window.
+        which holds the output lock for the microsecond write window.
         When no `chat_app` was attached the call falls back to the direct
         sync write so callers can use a single async API without paying for
         a lock that isn't wired.

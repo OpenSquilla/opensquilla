@@ -4,7 +4,7 @@ Both ``_stream_response_gateway`` and ``_stream_response_turnrunner`` are the
 real REPL stream renderers. Before this fix, they constructed
 ``StreamingRenderer()`` with no ``chat_app`` kwarg and called the sync
 ``renderer.append_text(...)`` which writes straight to ``console.file``. The
-S2b output lock + ``_approval_in_flight`` suspend gate therefore never fired
+The output lock + ``_approval_in_flight`` suspend gate therefore never fired
 in production — only tests that drove ``ChatApplication.write_through``
 directly exercised them.
 
@@ -153,7 +153,7 @@ def test_stream_response_gateway_threads_chat_app_into_renderer(monkeypatch) -> 
 
     assert _RecordingRenderer.last_init_kwargs.get("chat_app") is chat_app, (
         "StreamingRenderer must be constructed with chat_app=... so its "
-        "aappend_text path can route writes through the S2b output mutex"
+        "aappend_text path can route writes through the output mutex"
     )
     instance = _RecordingRenderer.last_instance
     assert instance is not None
@@ -163,7 +163,7 @@ def test_stream_response_gateway_threads_chat_app_into_renderer(monkeypatch) -> 
     )
     assert instance.appended == [], (
         "sync append_text must not be called by the production gateway "
-        "stream path — that bypasses the S2b output lock"
+        "stream path — that bypasses the output lock"
     )
 
 
@@ -230,7 +230,7 @@ def test_stream_response_turnrunner_threads_chat_app_into_renderer(monkeypatch) 
 
     assert _RecordingRenderer.last_init_kwargs.get("chat_app") is chat_app, (
         "_stream_response_turnrunner must construct StreamingRenderer "
-        "with chat_app=... so production tokens route through the S2b "
+        "with chat_app=... so production tokens route through the "
         "output mutex"
     )
     instance = _RecordingRenderer.last_instance
@@ -247,10 +247,10 @@ def test_stream_response_turnrunner_threads_chat_app_into_renderer(monkeypatch) 
 
 def test_production_stream_blocks_during_approval_in_flight(monkeypatch) -> None:
     """Integration regression: bytes do not hit ``console.file`` until the
-    Option B″ suspend-gate clears.
+    inline approval suspend-gate clears.
 
     Drives the real ``StreamingRenderer`` (not the recorder) through the
-    real ``ChatApplication.write_through`` path so the S2b output mutex
+    real ``ChatApplication.write_through`` path so the output mutex
     AND the ``_approval_in_flight`` suspend gate are both wired. With
     approval set the awaited write must park; clearing approval unblocks
     it and the bytes land. Without Fix 1 the production paths bypass

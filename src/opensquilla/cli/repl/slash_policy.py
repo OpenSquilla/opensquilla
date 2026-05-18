@@ -1,4 +1,4 @@
-"""Slash-command classification for the concurrent chat REPL (S4).
+"""Slash-command classification for the concurrent chat REPL.
 
 The concurrent REPL spawns each user input as a child turn task while the
 input task keeps accepting keystrokes. When new input arrives mid-turn, the
@@ -57,7 +57,7 @@ EXIT_SLASH_WORDS: frozenset[str] = frozenset({"/exit", "/quit"})
 # Pure-info commands. Both pure-info and state-mutation enqueue identically;
 # this set exists so the classifier can return a more specific category for
 # callers that want it (and for the unit tests pinning the taxonomy). Keep in
-# sync with the plan §S4 table.
+# sync with the slash-command policy table.
 PURE_INFO_SLASH_WORDS: frozenset[str] = frozenset(
     {
         "/help",

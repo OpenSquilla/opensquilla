@@ -155,7 +155,7 @@ async def test_no_self_deadlock_when_run_consumed_by_child_task() -> None:
 async def test_lock_provider_used_not_internal_dict() -> None:
     """When session_lock_provider is set, _get_session_lock returns the provider's lock.
 
-    Verifies Step 7a: provider path takes precedence over internal _session_locks.
+    Verifies that the provided session-lock path takes precedence over internal locks.
     """
     session_key = "agent:main:provider-path-check"
     external_lock = asyncio.Lock()
@@ -167,14 +167,14 @@ async def test_lock_provider_used_not_internal_dict() -> None:
         "_get_session_lock must return the external provider's lock, "
         f"got {returned!r} instead"
     )
-    # Step 7c: TurnRunner has no internal _session_locks dict
+    # TurnRunner has no internal _session_locks dict.
     assert not hasattr(runner, "_session_locks"), (
         "TurnRunner must not own an internal _session_locks dict"
     )
 
 
 def test_no_provider_uses_fallback_no_session_locks_field() -> None:
-    """Step 7c: TurnRunner without session_lock_provider creates a closure-based fallback.
+    """TurnRunner without session_lock_provider creates a closure-based fallback.
 
     TurnRunner must NOT have a _session_locks attribute (the dict lives
     in the provider closure, not as a named field on the object).

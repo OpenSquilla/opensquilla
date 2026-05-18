@@ -1,4 +1,4 @@
-"""NEW-S4a acceptance — SIGWINCH + SIGTSTP handlers for the chat REPL.
+"""SIGWINCH + SIGTSTP handlers for the chat REPL.
 
 The signal-handlers module owns two pieces of behavior:
 
@@ -12,7 +12,7 @@ The signal-handlers module owns two pieces of behavior:
       Ctrl-Z UX still works.
 
 Both signals are Unix-only; Windows lacks ``signal.SIGWINCH`` and
-``signal.SIGTSTP`` entirely. Per locked OQ#3 in
+``signal.SIGTSTP`` entirely. Per the platform contract in
 ``.omc/plans/concurrent-repl.md`` automated Windows pty coverage is
 deferred — Windows is manual-QA only.
 

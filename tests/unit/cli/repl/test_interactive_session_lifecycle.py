@@ -1,4 +1,4 @@
-"""Lifecycle tests for `interactive_session()` (S1 scaffolding).
+"""Lifecycle tests for `interactive_session()`.
 
 Drives the long-lived `prompt_toolkit.Application` headlessly through a
 pipe-input / DummyOutput pair so the asserts run without a TTY.

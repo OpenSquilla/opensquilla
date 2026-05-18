@@ -470,7 +470,7 @@ class Agent:
         self._state: AgentState = AgentState.IDLE
         self._history: list[Message] = []
         self._context: ContextAssembly | None = None
-        # Phase B: typed dependency surface. Either constructor injection or
+        # engine hook seam: typed dependency surface. Either constructor injection or
         # legacy attribute assignment from the runtime is accepted; both reach
         # the same internal slot.
         self._memory_sync_manager: Any | None = memory_sync_manager

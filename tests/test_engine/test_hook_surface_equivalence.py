@@ -1,4 +1,4 @@
-"""Phase B equivalence harness for the engine hook surface.
+"""engine hook seam equivalence harness for the engine hook surface.
 
 The harness compares two execution paths for trace emission:
 
@@ -10,11 +10,11 @@ The harness compares two execution paths for trace emission:
 
 The two paths must produce identical ``TraceEvent`` records observed at the
 sink. The harness also covers the no-op default hooks (``DefaultTranscriptHook``
-and ``DefaultMemoryFlushHook``), which Phase B reserves as future seams without
+and ``DefaultMemoryFlushHook``), which engine hook seam reserves as future seams without
 yet moving the inline body.
 
 Coverage gate: every hook method on every default hook is exercised at least
-once, so the protocols are wired end-to-end before PR3 swaps any production
+once, so the protocols are wired end-to-end before production code moves to
 call site.
 """
 
@@ -87,7 +87,7 @@ def captured_events(monkeypatch: pytest.MonkeyPatch) -> list[TraceEvent]:
 
 
 # ---------------------------------------------------------------------------
-# Trace-emission equivalence — the load-bearing comparison for PR3
+# Trace-emission equivalence for hook protocol wiring
 # ---------------------------------------------------------------------------
 
 

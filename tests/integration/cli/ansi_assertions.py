@@ -1,8 +1,8 @@
-"""Byte-level ANSI sequence assertions for R13 collision detection.
+"""Byte-level ANSI sequence assertions for terminal writer collision detection.
 
-S6 pins the invariant that the concurrent chat REPL never emits a
-malformed pairing of cursor / line-erase / cursor-up sequences across the
-combined stream + slash-handler + approval-suspend + resume window.
+These helpers pin the invariant that the concurrent chat REPL never emits a
+malformed pairing of cursor, line-erase, or cursor-up sequences across the
+combined stream, slash-handler, approval-suspend, and resume window.
 
 The helpers here operate on raw byte streams (not Rich renderables) so
 they catch the actual escape sequences the terminal would see, including

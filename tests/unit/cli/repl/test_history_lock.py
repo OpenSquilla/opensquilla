@@ -1,6 +1,6 @@
-"""S2a acceptance — LockedFileHistory serializes concurrent writers.
+"""LockedFileHistory serializes concurrent writers.
 
-R7 / NEW-S2a: FileHistory.store_string opens, writes, and closes the
+FileHistory.store_string opens, writes, and closes the
 history file per call. With multiple writers (input task + auxiliary
 prompts) we need a single-writer guard so distinct entries do not
 interleave bytes in the file.

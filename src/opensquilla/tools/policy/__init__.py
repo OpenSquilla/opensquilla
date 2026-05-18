@@ -1,6 +1,6 @@
 """Tool dispatch policy pipeline.
 
-The legacy waterfall in ``opensquilla.tools.dispatch_legacy`` is rewritten as a
+The dispatch pipeline is composed of
 declarative chain of :class:`PolicyCheck` objects. Each check inspects a
 :class:`DispatchInput` and returns either an allowing or denying
 :class:`PolicyDecision`. The chain runs in document order; the first denial wins.

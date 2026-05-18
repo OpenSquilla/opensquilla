@@ -1,7 +1,7 @@
-"""S1.5 acceptance — completer and auto-suggest survive the prompt.py refactor.
+"""Completer and auto-suggest survive the prompt.py refactor.
 
 The legacy `PromptSession` driver wired a fuzzy slash-command completer and
-`AutoSuggestFromHistory` into its session; Option B″ moves those onto
+`AutoSuggestFromHistory` into its session; the long-lived application moves those onto
 `Buffer.completer` / `Buffer.auto_suggest` on the long-lived
 `ChatApplication`. These tests pin both wirings.
 """

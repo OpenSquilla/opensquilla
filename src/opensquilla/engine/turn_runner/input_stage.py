@@ -1,12 +1,7 @@
-"""Phase-class object for the input-normalize + input-persist slice of _run_turn.
+"""Stage object for the input-normalize + input-persist slice of _run_turn.
 
-Owns the source slice that previously lived inline at the top of
-``TurnRunner._run_turn``. The harness invokes ``InputStage.run`` once per
-turn, before any provider/tool/prompt resolution.
-
-Activated by ``OPENSQUILLA_HARNESS_INPUT=new``. Default is ``legacy`` —
-the inline body remains the source of truth until the equivalence harness
-has run in CI for one release cycle (PR-C-9 deletes the legacy arm).
+Owns the per-turn input slice. The harness invokes ``InputStage.run``
+once per turn, before any provider/tool/prompt resolution.
 
 Side-effect contract: re-raises any exception from
 ``SessionAppendPort.append_message`` exactly as the inline body did. The
@@ -25,13 +20,11 @@ if TYPE_CHECKING:
     from opensquilla.session.models import TranscriptEntry
     from opensquilla.tools.types import ToolContext
 
-
 # ---------------------------------------------------------------------------
 # Ports — narrow protocols so the stage is unit-testable without the full
 # SessionManager. Production SessionManager satisfies SessionAppendPort
 # structurally; the stage never touches non-append SessionManager methods.
 # ---------------------------------------------------------------------------
-
 
 @runtime_checkable
 class SessionAppendPort(Protocol):
@@ -51,7 +44,6 @@ class SessionAppendPort(Protocol):
         provenance: dict[str, Any] | None = None,
     ) -> TranscriptEntry: ...
 
-
 @runtime_checkable
 class ExtraContextResolver(Protocol):
     """Adapter around the static helpers ``_extra_context_for_tool_context``
@@ -69,12 +61,10 @@ class ExtraContextResolver(Protocol):
         extra: dict[str, str],
     ) -> dict[str, str] | None: ...
 
-
 # ---------------------------------------------------------------------------
-# Stage I/O dataclasses (frozen — phase-class outputs are immutable values
+# Stage I/O dataclasses (frozen — stage outputs are immutable values
 # the Harness accumulates onto TurnContext)
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class InputStageInput:
@@ -95,7 +85,6 @@ class InputStageInput:
     session_key: str
     tool_context: ToolContext | None
     session_append: SessionAppendPort | None
-
 
 @dataclass(frozen=True)
 class InputStageOutput:
@@ -124,18 +113,16 @@ class InputStageOutput:
 
         Cosmetic shim — ``InputStage`` never produces an early-yield, so
         the harness can equivalently wrap externally. Provided so all
-        Phase C stages document the contract at the producer site.
+        TurnRunner stages document the contract at the producer site.
         """
 
         from opensquilla.engine.turn_runner.outcome import StageOutcome
 
         return StageOutcome.success(self)
 
-
 # ---------------------------------------------------------------------------
 # Stage
 # ---------------------------------------------------------------------------
-
 
 class InputStage:
     """Normalize the user/system input and (optionally) persist it.

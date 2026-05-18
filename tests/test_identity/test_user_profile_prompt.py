@@ -58,6 +58,18 @@ def test_system_prompt_routes_profile_to_user_md() -> None:
     assert "prior work, decisions, dated history, todos" in prompt
 
 
+def test_system_prompt_routes_transcript_recall_to_session_search() -> None:
+    prompt = assemble_system_prompt(
+        AgentProfile(agent_id="main", prompt_mode="full"),
+        tools=["memory_search", "memory_get", "session_search"],
+    )
+
+    assert "`session_search`" in prompt
+    assert "prior chat wording" in prompt
+    assert "code snippets from transcripts" in prompt
+    assert "Curated durable notes remain `memory_search`" in prompt
+
+
 def test_system_prompt_routes_agent_identity_away_from_memory_md() -> None:
     prompt = assemble_system_prompt(
         AgentProfile(agent_id="main", prompt_mode="full"),

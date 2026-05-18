@@ -1,16 +1,14 @@
 """Concrete :class:`PolicyCheck` implementations.
 
-Each check mirrors a single branch from the legacy waterfall in
-``opensquilla.tools.dispatch_legacy``. The line ranges referenced in the
-docstrings point at the canonical legacy contract.
+Each check encapsulates a single authorization/transform branch of the
+dispatch pipeline.
 
 Behaviour notes shared across the checks:
 
-* ``ctx is None`` always allows — the legacy code guards every policy
-  with ``if effective_ctx and ...``.
+* ``ctx is None`` always allows — every policy guards on
+  ``if effective_ctx and ...``.
 * Denial envelopes are constructed via :func:`_denial_envelope`, which
-  centralises the ``ToolResult`` shape used by the legacy
-  ``_build_envelope_result`` helper for ``policy_denial=True``.
+  centralises the ``ToolResult`` shape used for ``policy_denial=True``.
 * The structured log event returned alongside an envelope is emitted by
   the orchestrator at WARN level — keeping I/O out of the checks
   themselves.
@@ -40,8 +38,7 @@ def _denial_envelope(
 ) -> ToolResult:
     """Build the ``ToolResult`` returned for a policy-denial outcome.
 
-    Mirrors :func:`opensquilla.tools.dispatch_legacy._build_envelope_result`
-    when ``policy_denial=True``.
+    Produces the canonical ``policy_denial=True`` envelope shape.
     """
     status = {
         "version": 1,
@@ -69,7 +66,6 @@ def _denial_envelope(
         execution_status=normalize_execution_status(status),
     )
 
-
 def _block_log_event(
     tool_call: ToolCall,
     ctx: ToolContext | None,
@@ -79,8 +75,8 @@ def _block_log_event(
 ) -> dict[str, Any]:
     """Construct the ``dispatch.defense_in_depth_block`` log payload.
 
-    Field order and key names match the legacy ``log.warning`` calls so
-    the equivalence harness sees identical structured-log records.
+    Field order and key names are the canonical structured-log shape
+    expected by downstream consumers of ``dispatch.defense_in_depth_block``.
     """
     return {
         "event": event,
@@ -91,11 +87,9 @@ def _block_log_event(
         "session_key": ctx.session_key if ctx else None,
     }
 
-
 # ---------------------------------------------------------------------------
-# Owner-only — legacy lines 215–231
+# Owner-only
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class OwnerOnlyPolicy:
@@ -123,11 +117,9 @@ class OwnerOnlyPolicy:
             return PolicyDecision(allowed=False, envelope=envelope, log_event=log_event)
         return PolicyDecision(allowed=True)
 
-
 # ---------------------------------------------------------------------------
-# Deny list — legacy lines 233–251
+# Deny list
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class DenyListPolicy:
@@ -155,11 +147,9 @@ class DenyListPolicy:
             return PolicyDecision(allowed=False, envelope=envelope, log_event=log_event)
         return PolicyDecision(allowed=True)
 
-
 # ---------------------------------------------------------------------------
-# Private memory scope — legacy lines 253–270
+# Private memory scope
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class PrivateMemoryScopePolicy:
@@ -187,11 +177,9 @@ class PrivateMemoryScopePolicy:
             return PolicyDecision(allowed=False, envelope=envelope, log_event=log_event)
         return PolicyDecision(allowed=True)
 
-
 # ---------------------------------------------------------------------------
-# Allow list — legacy lines 272–293
+# Allow list
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class AllowListPolicy:
@@ -223,11 +211,9 @@ class AllowListPolicy:
             return PolicyDecision(allowed=False, envelope=envelope, log_event=log_event)
         return PolicyDecision(allowed=True)
 
-
 # ---------------------------------------------------------------------------
-# Profile — legacy lines 295–315
+# Profile
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class ProfilePolicy:
@@ -265,11 +251,9 @@ class ProfilePolicy:
             return PolicyDecision(allowed=False, envelope=envelope, log_event=log_event)
         return PolicyDecision(allowed=True)
 
-
 # ---------------------------------------------------------------------------
-# Permission matrix — legacy lines 317–340
+# Permission matrix
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class PermissionMatrixPolicy:

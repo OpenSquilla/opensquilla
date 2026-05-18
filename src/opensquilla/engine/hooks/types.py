@@ -18,11 +18,9 @@ if TYPE_CHECKING:
     from opensquilla.observability.trace import TraceContext
     from opensquilla.tool_boundary import ToolCall, ToolResult
 
-
 # ---------------------------------------------------------------------------
 # Turn lifecycle
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class TurnHookContext:
@@ -41,12 +39,11 @@ class TurnHookContext:
     trace_context: TraceContext | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
-
 @dataclass(frozen=True)
 class TurnEvent:
     """A trace-bearing turn event emitted by the runtime.
 
-    ``kind`` mirrors the legacy ``_write_trace_event`` ``kind`` argument
+    ``kind`` mirrors the ``_write_trace_event`` ``kind`` argument
     (``turn_start``, ``turn_end``, ``turn_error``, ``turn_cancelled``).
     """
 
@@ -55,12 +52,11 @@ class TurnEvent:
     attrs: dict[str, Any] = field(default_factory=dict)
     payload: dict[str, Any] = field(default_factory=dict)
 
-
 @dataclass(frozen=True)
 class TurnHookResult:
     """Result of a turn handed to ``TurnHook.after_turn``.
 
-    Fields mirror the data the legacy inline transcript-persist path needs:
+    Fields carry the data the transcript-persist path needs:
     final assistant text, structured turn segments, published artifacts, and
     any terminal error message captured during streaming.
     """
@@ -75,7 +71,6 @@ class TurnHookResult:
     input_provenance: dict[str, Any] | None = None
     no_memory_capture: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
-
 
 @runtime_checkable
 class TurnHook(Protocol):
@@ -101,11 +96,9 @@ class TurnHook(Protocol):
     def on_event(self, ctx: TurnHookContext, event: TurnEvent) -> None:
         """Fire for each structured turn event (synchronous, observability only)."""
 
-
 # ---------------------------------------------------------------------------
 # Tool dispatch surround
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class ToolHookCall:
@@ -118,7 +111,6 @@ class ToolHookCall:
     tool_call: ToolCall
     ctx: Any | None  # ToolContext | None — kept loose to avoid an import cycle
 
-
 @dataclass(frozen=True)
 class ToolHookResult:
     """The outcome presented to ``ToolHook.after_tool``.
@@ -130,7 +122,6 @@ class ToolHookResult:
 
     result: ToolResult | None = None
     exception: BaseException | None = None
-
 
 @runtime_checkable
 class ToolHook(Protocol):
@@ -146,17 +137,15 @@ class ToolHook(Protocol):
 
     def after_tool(self, call: ToolHookCall, outcome: ToolHookResult) -> None: ...
 
-
 # ---------------------------------------------------------------------------
-# Compaction lifecycle (Phase B reserves the surface; Phase D wires defaults)
+# Compaction lifecycle (engine hook seam reserves the surface; compaction wires defaults)
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class CompactionState:
     """Snapshot of compaction inputs handed to ``CompactionHook.before_compact``.
 
-    ``Phase B`` reserves the protocol; full population happens in Phase D when
+    ``engine hook seam`` reserves the protocol; full population happens in compaction when
     incremental compaction lands. For now the runtime supplies only what is
     cheaply available at the call site.
     """
@@ -166,7 +155,6 @@ class CompactionState:
     total_tokens: int = 0
     threshold_tokens: int = 0
     extra: dict[str, Any] = field(default_factory=dict)
-
 
 @runtime_checkable
 class CompactionHook(Protocol):

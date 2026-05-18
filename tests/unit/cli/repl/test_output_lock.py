@@ -1,6 +1,6 @@
-"""NEW-S2b acceptance — output mutex + approval-suspend gate.
+"""Output mutex + approval-suspend gate.
 
-The S2b contract pins the following invariants:
+The output-lock contract pins the following invariants:
 
   - `ChatApplication.output_lock` is an `asyncio.Lock`.
   - The mirror Events `_approval_in_flight` and `_approval_idle` start in
@@ -112,7 +112,7 @@ def test_write_through_respects_suspend_window(monkeypatch) -> None:
 def test_turn_completes_during_approval_does_not_print_until_resume(
     monkeypatch,
 ) -> None:
-    """Mirror of the S2' deferred test, now passing via the S2b output lock.
+    """Mirror of the deferred approval test, now passing via the output lock.
 
     This is the same invariant as
     `test_write_through_respects_suspend_window` but framed as the
@@ -143,7 +143,7 @@ def test_turn_completes_during_approval_does_not_print_until_resume(
 
 
 # --------------------------------------------------------------------------- #
-# R17 — input echo responsive under long render                               #
+# Input echo responsive under long render                                     #
 # --------------------------------------------------------------------------- #
 
 
@@ -163,7 +163,7 @@ def test_input_echo_responsive_under_long_render(monkeypatch) -> None:
 
         async def _long_render() -> None:
             # Simulate a Rich panel render that happens OUTSIDE the lock.
-            # This is the S2b contract: callers render into a StringIO
+            # This is the output-lock contract: callers render into a StringIO
             # first, then acquire the lock only for the final write+flush.
             await asyncio.sleep(0.5)
             await chat_app.write_through("LONG\n")

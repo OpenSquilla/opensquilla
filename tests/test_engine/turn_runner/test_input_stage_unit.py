@@ -1,6 +1,6 @@
 """Unit tests for ``InputStage`` driven directly (no full TurnRunner stack).
 
-Drives the 8-case corpus from the PR-C-1 design through ``InputStage.run``
+Drives the 8-case corpus from the design through ``InputStage.run``
 in isolation, plus a 9th case that exercises the
 ``persist_input=True with session_append=None`` short-circuit. Includes a
 raising-port case so the propagation contract is exercised even without

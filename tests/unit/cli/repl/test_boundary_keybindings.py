@@ -1,4 +1,4 @@
-"""S7 acceptance — boundary keybindings.
+"""Boundary keybindings.
 
 Covers the Ctrl-C double-press shutdown contract and the Ctrl-D drain-then-
 exit contract.
@@ -82,7 +82,7 @@ class _FakeEvent:
 
 # --------------------------------------------------------------------------- #
 # Ctrl-C single-press (boundary-key file coverage; duplicates a smaller       #
-# test in test_concurrent_turn.py — left in place because the rest of S7      #
+# test in test_concurrent_turn.py — left in place because the rest of the     #
 # builds on the same _FakeEvent + handler harness)                            #
 # --------------------------------------------------------------------------- #
 
@@ -217,7 +217,7 @@ def test_ctrl_c_double_press_with_no_shutdown_callback_is_no_op() -> None:
     fall back to single-press behavior — no double-press detection runs
     because there is no shutdown contract to fire. This pins that the
     timestamp is not updated either, so existing single-press semantics
-    are byte-for-byte equivalent to pre-S7.
+    are byte-for-byte equivalent to the previous single-press behavior.
     """
     handler = _ctrl_c_handler()
     chat_app = _fresh_chat_app()

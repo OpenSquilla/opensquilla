@@ -65,8 +65,8 @@ def test_stale_replay_roundtrips_through_json_and_live_tracker_wins():
     assert serialized["session_totals"] is not None
     assert serialized["session_totals"]["input_tokens"] == 10
 
-    # Advance tracker beyond S1 — server-side consumers should NOT
-    # see the frozen S1 if they re-derive from the live tracker.
+    # Advance tracker beyond the frozen snapshot — server-side consumers should
+    # NOT see stale values if they re-derive from the live tracker.
     tracker.add("sess-C", input_tokens=99, output_tokens=99, model_id="gpt-test")
     snap_s2 = tracker.session_snapshot("sess-C")
     assert snap_s2.input_tokens == 109

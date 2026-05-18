@@ -1,18 +1,11 @@
-"""Phase-class object for the attachment-message build + ``turn_input`` rebind.
+"""Stage object for the attachment-message build + ``turn_input`` rebind.
 
-Owns the source slice that previously lived inline at
-``TurnRunner._run_turn`` between the ``CompactionAndHistoryStage`` seam
-and the ``StreamConsumerStage`` (PR-C-7) seam: the
+Owns the per-turn slice between the ``CompactionAndHistoryStage`` seam
+and the ``StreamConsumerStage`` seam: the
 ``_build_attachment_messages`` call and the immediately-following
 ``turn_input`` rebind. The harness invokes ``AttachmentStage.run`` once
 per turn, AFTER ``CompactionAndHistoryStage`` and BEFORE the
 ``async for event in agent.run_turn(...)`` loop.
-
-Activated by ``OPENSQUILLA_HARNESS_ATTACHMENTS=new``. Default is
-``legacy`` — the inline body remains the source of truth until the
-equivalence harness has run for one release cycle (PR-C-9 deletes the
-legacy arm).
-
 Side-effect contract: the stage is a pure transformation. The single
 port executes synchronously and has no observable side effects on the
 agent / runner / session. Validation failures (count cap, disallowed
@@ -40,14 +33,13 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from opensquilla.engine.turn_runner.outcome import StageOutcome
 
-
 @runtime_checkable
 class AttachmentMessageBuilderPort(Protocol):
     """Wraps ``TurnRunner._build_attachment_messages`` + media-root resolution.
 
-    The adapter forwards to the legacy helper verbatim and supplies the
+    The adapter forwards verbatim and supplies the
     ``media_root`` argument from the runner. Returns
-    ``list[Message] | None`` matching the legacy signature: ``None`` when
+    ``list[Message] | None`` the historical return: ``None`` when
     ``attachments`` is empty/``None``, else a single-element
     ``list[Message]`` (one multimodal user message carrying every
     attachment block).
@@ -64,22 +56,20 @@ class AttachmentMessageBuilderPort(Protocol):
         attachments: list[dict],
     ) -> list[Any] | None: ...
 
-
 @dataclass(frozen=True)
 class AttachmentStageInput:
     """Inputs the ``AttachmentStage`` needs at its boundary.
 
     - ``effective_runtime_message`` is the post-pipeline message string
-      from ``PromptAssemblerStage``. The legacy slice passes it as the
+      from ``PromptAssemblerStage``. It is passed as the
       first positional argument to ``_build_attachment_messages``.
     - ``attachments`` is the caller-provided attachment list (may be
       empty or ``None``). The stage normalizes ``None`` to ``[]`` to
-      match the legacy ``if not attachments: return None`` early exit.
+      preserve the ``if not attachments: return None`` early exit.
     """
 
     effective_runtime_message: str
     attachments: list[dict] | None
-
 
 @dataclass(frozen=True)
 class AttachmentStageOutput:
@@ -97,7 +87,6 @@ class AttachmentStageOutput:
     extra_messages: list[Any] | None
     turn_input: str
 
-
 class AttachmentStage:
     """Build the multimodal attachment envelope and rebind ``turn_input``.
 
@@ -113,7 +102,7 @@ class AttachmentStage:
 
     Exception model: ``ValueError`` from
     ``AttachmentMessageBuilderPort.build`` propagates unchanged (the
-    legacy slice has no surrounding try/except). No new try/except is
+    no surrounding try/except is needed). No try/except is
     introduced.
     """
 

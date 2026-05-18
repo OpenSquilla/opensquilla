@@ -316,6 +316,24 @@ def _merge_summaries(summaries: list[str]) -> str:
     return "\n".join(merged_lines)
 
 
+def _is_assistant_tool_call_entry(entry: dict[str, Any]) -> bool:
+    if entry.get("role") != "assistant":
+        return False
+    if entry.get("tool_calls"):
+        return True
+    content = str(entry.get("content") or "")
+    return "[tool_call:" in content or "[Used tool:" in content
+
+
+def _is_tool_result_entry(entry: dict[str, Any] | None) -> bool:
+    if entry is None:
+        return False
+    if entry.get("role") == "tool" or entry.get("tool_call_id"):
+        return True
+    content = str(entry.get("content") or "").lstrip()
+    return content.startswith("[Tool result ")
+
+
 def _find_turn_boundary_cut(
     entries: list[dict[str, Any]],
     keep_budget: int,
@@ -360,23 +378,13 @@ def _find_turn_boundary_cut(
         last_removed = entries[cut - 1]
         first_kept = entries[cut] if cut < len(entries) else None
 
-        last_role = last_removed.get("role", "")
-        last_content = str(last_removed.get("content") or "")
-        first_role = first_kept.get("role", "") if first_kept else ""
-
-        # Mid-turn: assistant tool_call removed, tool result would be first kept
-        if (
-            last_role == "assistant"
-            and "[tool_call:" in last_content
-            and first_role == "tool"
+        # Mid-turn: assistant tool call removed, tool result would be first kept.
+        if _is_assistant_tool_call_entry(last_removed) and _is_tool_result_entry(
+            first_kept
         ):
             # Move cut one step earlier to avoid splitting the pair.
             cut -= 1
             continue
-
-        # Also avoid cutting when a tool result is the first kept entry but its
-        # corresponding assistant call is the last removed entry.
-        # (covered above — same condition)
 
         # Clean boundary found.
         break
@@ -385,13 +393,13 @@ def _find_turn_boundary_cut(
 
 
 async def compact_context_new(request: CompactionRequest) -> CompactionResult:
-    """Cut-point + turn-boundary-aware + incremental-summary compaction (Phase D).
+    """Cut-point + turn-boundary-aware + incremental-summary compaction (compaction).
 
     Differences from :func:`compact_context_legacy`:
 
-    * **Turn-boundary cut**: the split point avoids orphaning an assistant
-      ``[tool_call:...]`` from its paired ``tool`` result.  The legacy path
-      uses a pure token-budget split that may land mid-turn.
+    * **Turn-boundary cut**: the split point avoids orphaning an assistant tool
+      call from its paired tool result.  The legacy path uses a pure
+      token-budget split that may land mid-turn.
     * **Previous-summary prefix**: if ``request.custom_instructions`` carries a
       ``__prev_summary__:<text>`` marker the summary is prepended to the new
       chunk summary so incremental context accumulates.  Normal custom
@@ -448,7 +456,7 @@ async def compact_context_new(request: CompactionRequest) -> CompactionResult:
 
     keep_budget = window // 2
 
-    # Phase D: use turn-boundary-aware cut instead of raw token split.
+    # compaction: use turn-boundary-aware cut instead of raw token split.
     cut = _find_turn_boundary_cut(entries, keep_budget)
     kept = entries[cut:]
     to_compact = entries[:cut]
@@ -532,7 +540,7 @@ async def compact_context_new(request: CompactionRequest) -> CompactionResult:
 async def compact_context(request: CompactionRequest) -> CompactionResult:
     """Summarize older messages to free context-window budget.
 
-    Delegates to :func:`compact_context_new` — the Phase D cut-point +
+    Delegates to :func:`compact_context_new` — the compaction cut-point +
     turn-boundary-aware pipeline.  The public signature is unchanged so
     every existing call site keeps working without modification.
     """

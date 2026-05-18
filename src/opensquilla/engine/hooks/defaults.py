@@ -1,8 +1,8 @@
-"""Default hook implementations that reproduce inline legacy behavior.
+"""Default hook implementations that reproduce the original inline behavior.
 
 These hooks let the runtime be wired with an explicit hook surface while
 preserving the existing observability + persistence side-effects bit-for-bit.
-The Phase B equivalence harness compares the legacy inline path against the
+The default hook implementations exist so the registry never sees ``None``;
 hook path with these defaults registered.
 """
 
@@ -25,11 +25,9 @@ from opensquilla.observability.trace import TraceEvent, write_trace_event
 
 log = structlog.get_logger("opensquilla.engine.hooks")
 
-
 # ---------------------------------------------------------------------------
 # No-op hooks — used in tests + as the safe registration default
 # ---------------------------------------------------------------------------
-
 
 class NoopTurnHook:
     """TurnHook that does nothing. Useful as a base class or test double."""
@@ -48,7 +46,6 @@ class NoopTurnHook:
     def on_event(self, ctx: TurnHookContext, event: TurnEvent) -> None:
         return None
 
-
 class NoopToolHook:
     """ToolHook that does nothing."""
 
@@ -59,7 +56,6 @@ class NoopToolHook:
 
     def after_tool(self, call: ToolHookCall, outcome: ToolHookResult) -> None:
         return None
-
 
 class NoopCompactionHook:
     """CompactionHook that does nothing."""
@@ -72,11 +68,9 @@ class NoopCompactionHook:
     async def after_compact(self, state: CompactionState, outcome: object) -> None:
         return None
 
-
 # ---------------------------------------------------------------------------
 # Default trace emitter — reproduces TurnRunner._write_trace_event verbatim
 # ---------------------------------------------------------------------------
-
 
 class DefaultTraceEmitterHook:
     """``TurnHook.on_event`` implementation that emits a trace event.
@@ -116,19 +110,17 @@ class DefaultTraceEmitterHook:
         except Exception as exc:  # pragma: no cover — observability must not break turns
             log.debug("trace_event.write_failed", kind=event.kind, error=str(exc))
 
-
 # ---------------------------------------------------------------------------
-# Default transcript hook — placeholder, real persist stays inline in PR3
+# Default transcript hook — placeholder; production persistence stays inline
 # ---------------------------------------------------------------------------
-
 
 class DefaultTranscriptHook:
     """``TurnHook.after_turn`` implementation reserved for transcript persist.
 
-    Phase B keeps the transcript persist branch inline because the legacy code
+    the transcript persist branch stays inline because the code
     is deeply intertwined with done-event bookkeeping, error-event persistence,
-    and capture services. Wiring is exposed as a hook so Phase C can move the
-    body without changing the seam. The default behavior is a no-op so legacy
+    and capture services. Wiring is exposed as a hook so TurnRunner stage decomposition can move the
+    body without changing the seam. The default behavior is a no-op so the original
     inline persistence remains the source of truth.
     """
 
@@ -146,18 +138,16 @@ class DefaultTranscriptHook:
     def on_event(self, ctx: TurnHookContext, event: TurnEvent) -> None:
         return None
 
-
 # ---------------------------------------------------------------------------
-# Default memory flush hook — placeholder, real flush stays inline in PR3
+# Default memory flush hook — placeholder; production flush stays inline
 # ---------------------------------------------------------------------------
-
 
 class DefaultMemoryFlushHook:
     """``TurnHook.after_turn`` implementation reserved for memory flush.
 
     The actual flush task lives in :mod:`opensquilla.engine.agent` and depends
-    on per-Agent compaction state. Phase B keeps the implementation inline and
-    reserves this hook as the seam for Phase D.
+    on per-Agent compaction state. engine hook seam keeps the implementation inline and
+    reserves this hook as the seam for compaction.
     """
 
     name = "default_memory_flush"
@@ -174,19 +164,17 @@ class DefaultMemoryFlushHook:
     def on_event(self, ctx: TurnHookContext, event: TurnEvent) -> None:
         return None
 
-
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
-
 
 def build_default_turn_hooks() -> tuple[TurnHook, ...]:
     """Return the canonical default ``TurnHook`` chain.
 
     The order is observational only: trace emitter first so events reach the
     sink before later hooks observe them, then transcript and flush hooks
-    which currently no-op (legacy inline code is still the source of truth in
-    PR2). Phase C/D will move the inline bodies into these hooks.
+    which currently no-op (the inline code remains the source of truth in
+    prior runtime path). A later runtime extraction can move the inline bodies into these hooks.
     """
 
     return (
@@ -194,7 +182,6 @@ def build_default_turn_hooks() -> tuple[TurnHook, ...]:
         DefaultTranscriptHook(),
         DefaultMemoryFlushHook(),
     )
-
 
 __all__ = [
     "DefaultMemoryFlushHook",
@@ -205,7 +192,6 @@ __all__ = [
     "NoopTurnHook",
     "build_default_turn_hooks",
 ]
-
 
 # Static checks: defaults satisfy the protocols.
 _check_turn: TurnHook = NoopTurnHook()

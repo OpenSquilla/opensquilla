@@ -1,4 +1,4 @@
-"""Signal handlers for the concurrent chat REPL (NEW-S4a).
+"""Signal handlers for the concurrent chat REPL.
 
 Two signals are handled, both Unix-only by platform contract:
 
@@ -16,7 +16,7 @@ Two signals are handled, both Unix-only by platform contract:
 
 Both signals are platform-guarded via ``hasattr(signal, "SIG...")``;
 Windows lacks both and the install function becomes a no-op there. Per
-locked OQ#3 in ``.omc/plans/concurrent-repl.md``, automated Windows pty
+the platform contract, automated Windows pty
 coverage is deferred — Windows is manual-QA only.
 
 The install function returns an ``uninstall`` callable that restores the

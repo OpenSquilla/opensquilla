@@ -1,6 +1,6 @@
 """Ordered chain of policy checks.
 
-The chain order is the legacy waterfall order — owner_only fires before
+The chain order is owner_only first, then
 denied_tools, denied_tools before private_memory_scope, and so on. The
 :func:`run_chain` function returns the first denying decision (the
 "first denial wins" contract codified in
@@ -8,13 +8,14 @@ denied_tools, denied_tools before private_memory_scope, and so on. The
 
 :func:`run_chain_with_emit` adds a logger callback so the orchestrator does
 not need to inline its own copy of the loop just to emit log events. This is
-the single chain-execution site that Phase B's ``ToolHook.before_tool`` seam
+the single chain-execution site that engine hook seam's ``ToolHook.before_tool`` seam
 sits in front of.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 from opensquilla.tools.policy.checks import (
     AllowListPolicy,
@@ -26,18 +27,16 @@ from opensquilla.tools.policy.checks import (
 )
 from opensquilla.tools.policy.types import DispatchInput, PolicyCheck, PolicyDecision
 
-POLICY_CHAIN: tuple[PolicyCheck, ...] = (
+POLICY_CHAIN: tuple[PolicyCheck, ...] = cast(tuple[PolicyCheck, ...], (
     OwnerOnlyPolicy(),
     DenyListPolicy(),
     PrivateMemoryScopePolicy(),
     AllowListPolicy(),
     ProfilePolicy(),
     PermissionMatrixPolicy(),
-)
-
+))
 
 PolicyLogEmitter = Callable[[dict], None]
-
 
 def run_chain(d: DispatchInput) -> PolicyDecision:
     """Run the chain in order; return the first denial or an allow."""
@@ -46,7 +45,6 @@ def run_chain(d: DispatchInput) -> PolicyDecision:
         if not decision.allowed:
             return decision
     return PolicyDecision(allowed=True)
-
 
 def run_chain_with_emit(
     d: DispatchInput,

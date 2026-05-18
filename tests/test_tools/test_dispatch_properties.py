@@ -385,7 +385,7 @@ async def test_session_search_is_denied_by_private_memory_scope_for_subagents() 
 #
 # dispatch_legacy sets current_tool_context to effective_ctx before invoking
 # the registered handler (line 343) and resets it in the finally block (line 492).
-# PR3 must honour the same contract so nested tool calls see their parent context.
+# Dispatch must honour the same contract so nested tool calls see their parent context.
 #
 # The _contextvar_reading_registry helper captures current_tool_context.get()
 # mid-execution into registry._corpus_captured. This test asserts that captured
@@ -396,7 +396,7 @@ async def test_session_search_is_denied_by_private_memory_scope_for_subagents() 
 async def test_contextvar_is_effective_ctx_during_handler_call() -> None:
     """current_tool_context.get() inside a handler equals effective_ctx (legacy line 343).
 
-    Rationale: PR3 could ship without setting the contextvar before dispatch and
+    Rationale: dispatch could run without setting the contextvar before dispatch and
     the existing ``contextvar_must_be_none_after`` assertion would still pass
     (None → dispatch → None is indistinguishable from None → set → dispatch → reset → None
     if we only check after the fact). This test closes that gap by asserting the

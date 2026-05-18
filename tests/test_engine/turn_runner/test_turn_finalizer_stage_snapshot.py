@@ -1,7 +1,7 @@
 """Snapshot harness for ``TurnFinalizerStage`` through ``TurnRunner._run_turn``.
 
 Drives a 13-case corpus against ``TurnRunner._run_turn`` with the
-``TurnFinalizerStage`` running unconditionally (PR-C-9: legacy arm
+``TurnFinalizerStage`` running unconditionally (: legacy arm
 deleted). The corpus exercises every branch in the slice plus the
 heartbeat-empty edge, DeepSeek/non-DeepSeek reasoning, hallucination
 passthrough, no-session-manager edge, and raising-fake cases for memory
@@ -24,7 +24,7 @@ from opensquilla.engine.types import (
     ToolUseStartEvent,
 )
 
-# Reuse upstream patch helpers + stub agent from PR-C-7's equivalence
+# Reuse upstream patch helpers + stub agent from's equivalence
 # harness -- this stage sits one step after the stream consumer, so the
 # same patching strategy applies for everything before the slice.
 from .test_agent_bootstrap_stage_snapshot import (
@@ -113,7 +113,7 @@ class _RecordingSessionManager:
             raise self.session_update_raises("recording rollup boom")
         self.update_calls.append({"session_key": session_key, **kwargs})
 
-    # The CompactionPersistPort calls this; not relevant to PR-C-8 but
+    # The CompactionPersistPort calls this; not relevant to but
     # the stub-agent corpus is event-empty for compaction so it never
     # fires.
     async def persist_compaction_result(
@@ -447,7 +447,7 @@ def _setup_runner(monkeypatch: pytest.MonkeyPatch, case: _Case) -> tuple[
     _patch_compaction_history(runner)
 
     # Reinstate ``_persist_turn_error`` after observability patched it
-    # to a no-op. PR-C-8 needs the real helper to route through the
+    # to a no-op. needs the real helper to route through the
     # recording session manager so the harness can pin the system-role
     # append count for the error-persist case.
     runner._persist_turn_error = TurnRunner._persist_turn_error.__get__(

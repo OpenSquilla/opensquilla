@@ -1,19 +1,18 @@
-"""TurnRunner harness scaffolding for Phase C.
+"""TurnRunner harness scaffolding for TurnRunner stage decomposition.
 
 Hosts the small adapter classes that bind ``TurnRunner`` instance methods
-to the Protocol-shaped ports the phase-class stages consume. Each adapter
+to the Protocol-shaped ports the stages consume. Each adapter
 lazy-imports ``TurnRunner`` inside its method bodies to avoid the
 runtime → turn_runner → runtime import cycle.
 
 The full ``TurnRunnerHarness`` skeleton (the orchestrator that owns
-``TurnContext`` and drives the nine ordered phase classes) is deferred
-until enough phase classes exist for it to sequence. Subsequent PRs
-grow this module.
+``TurnContext`` and drives the ordered stage classes) can be introduced after
+the stage boundaries are ready to sequence.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from opensquilla.engine.turn_runner.agent_bootstrap_stage import (
     AgentConfigBuilderPort,
@@ -74,9 +73,8 @@ if TYPE_CHECKING:
     from opensquilla.engine.types import AgentConfig, AgentEvent, DoneEvent, ErrorEvent
     from opensquilla.observability.prompt_report import PromptReport
     from opensquilla.observability.turn_call_log import TurnCallLogger
-    from opensquilla.provider.types import LLMProvider
+    from opensquilla.provider.protocol import LLMProvider
     from opensquilla.tools.types import ToolContext
-
 
 class _TurnRunnerExtraContextAdapter(ExtraContextResolver):
     """Bind ``TurnRunner``'s two static extra-context helpers as a Protocol.
@@ -100,7 +98,6 @@ class _TurnRunnerExtraContextAdapter(ExtraContextResolver):
 
         return TurnRunner._merge_extra_prompt_context(base, extra)
 
-
 class _TurnRunnerProviderResolverAdapter(ProviderResolverPort):
     """Bind ``TurnRunner._resolve_provider`` as a Protocol-shaped port."""
 
@@ -110,15 +107,10 @@ class _TurnRunnerProviderResolverAdapter(ProviderResolverPort):
     def resolve_provider(self) -> tuple[Any | None, Any | None]:
         return self._runner._resolve_provider()
 
-
 class _TurnRunnerToolBuilderAdapter(ToolBuilderPort):
     """Bind ``TurnRunner._build_tools`` and the two ``ToolContext`` mutators.
 
-    The new arm of the runtime feature flag forwards ``metadata=``
-    unconditionally; the legacy inline body retains the historical
-    ``inspect.signature`` arity check. Subclass overrides of
-    ``_build_tools`` (none exist today) would still hit the legacy arm.
-    """
+        """
 
     def __init__(self, runner: TurnRunner) -> None:
         self._runner = runner
@@ -144,7 +136,6 @@ class _TurnRunnerToolBuilderAdapter(ToolBuilderPort):
         metadata: dict[str, Any] | None = None,
     ) -> tuple[list[Any], ToolHandler | None]:
         return self._runner._build_tools(ctx, metadata=metadata)
-
 
 class _TurnRunnerPromptAssemblerAdapter(PromptAssemblerPort):
     """Bind ``TurnRunner._assemble_prompt`` as a Protocol-shaped port."""
@@ -173,15 +164,10 @@ class _TurnRunnerPromptAssemblerAdapter(PromptAssemblerPort):
             bootstrap_context_mode=bootstrap_context_mode,
         )
 
-
 class _TurnRunnerPipelineExecutionAdapter(PipelineExecutionPort):
     """Bind ``TurnRunner._run_pipeline`` and unpack ``RunPipelineRequest``.
 
-    The new arm of the runtime feature flag forwards every kwarg
-    unconditionally; the legacy inline body retains the historical
-    ``_accepts_keyword_arg`` introspection branches. Subclass overrides of
-    ``_run_pipeline`` (none exist today) would still hit the legacy arm.
-    """
+        """
 
     def __init__(self, runner: TurnRunner) -> None:
         self._runner = runner
@@ -207,7 +193,6 @@ class _TurnRunnerPipelineExecutionAdapter(PipelineExecutionPort):
             tool_context=request.tool_context,
         )
 
-
 class _TurnRunnerRouterContextAdapter(RouterContextPort):
     """Bind ``TurnRunner._router_previous_assistant_context``."""
 
@@ -225,7 +210,6 @@ class _TurnRunnerRouterContextAdapter(RouterContextPort):
             exclude_last_user=exclude_last_user,
         )
 
-
 class _TurnRunnerPromptConfigResolverAdapter(PromptConfigResolverPort):
     """Bind ``TurnRunner._resolve_prompt_config``."""
 
@@ -237,7 +221,6 @@ class _TurnRunnerPromptConfigResolverAdapter(PromptConfigResolverPort):
         turn: Any,
     ) -> tuple[str, list[Any] | None, str | None]:
         return self._runner._resolve_prompt_config(turn)
-
 
 class _PromptReportBuilderAdapter(PromptReportBuilderPort):
     """Pure shim around the module-level ``build_prompt_report`` helper.
@@ -271,7 +254,6 @@ class _PromptReportBuilderAdapter(PromptReportBuilderPort):
             tool_profile=tool_profile,
         )
 
-
 class _TurnRunnerSessionIdResolverAdapter(SessionIdResolverPort):
     """Bind ``TurnRunner._resolve_session_id_for_log``."""
 
@@ -284,13 +266,12 @@ class _TurnRunnerSessionIdResolverAdapter(SessionIdResolverPort):
     ) -> str | None:
         return await self._runner._resolve_session_id_for_log(session_key)
 
-
 class _TurnRunnerMemoryFingerprintAdapter(MemoryFingerprintPort):
     """Bind ``TurnRunner._config.memory_mode_fingerprint`` defensively.
 
     Returns ``None`` when the config is absent, when the method is missing,
-    or when the call raises — matching the legacy ``try/except`` arm
-    inline in ``_run_turn``.
+    or when the call raises — applying the defensive ``try/except``
+    pattern used previously inline.
     """
 
     def __init__(self, runner: TurnRunner) -> None:
@@ -303,10 +284,9 @@ class _TurnRunnerMemoryFingerprintAdapter(MemoryFingerprintPort):
         if not hasattr(config, "memory_mode_fingerprint"):
             return None
         try:
-            return config.memory_mode_fingerprint()
-        except Exception:  # noqa: BLE001 - match legacy defensive arm
+            return cast(dict[str, str] | None, config.memory_mode_fingerprint())
+        except Exception:  # noqa: BLE001 - defensive
             return None
-
 
 class _TurnRunnerTimeoutBudgetAdapter(TimeoutBudgetPort):
     """Bind the five ``TurnRunner._resolve_agent_*`` helpers as a single port.
@@ -356,9 +336,8 @@ class _TurnRunnerTimeoutBudgetAdapter(TimeoutBudgetPort):
             ),
         )
 
-
 class _TurnRunnerModelCatalogAdapter(ModelCatalogPort):
-    """Bind ``TurnRunner._model_catalog`` lookups with legacy None-fallback.
+    """Bind ``TurnRunner._model_catalog`` lookups with a None-fallback.
 
     Folds the ``self._model_catalog is None`` branch into the adapter so
     the stage body has no conditional on catalog presence.
@@ -390,7 +369,6 @@ class _TurnRunnerModelCatalogAdapter(ModelCatalogPort):
             context_window=context_window,
             capabilities=capabilities,
         )
-
 
 class _TurnRunnerAgentConfigBuilderAdapter(AgentConfigBuilderPort):
     """Bind the five ``TurnRunner`` helpers AgentConfig assembly needs.
@@ -495,7 +473,6 @@ class _TurnRunnerAgentConfigBuilderAdapter(AgentConfigBuilderPort):
             ),
         )
 
-
 class _TurnRunnerSummarizerProviderAdapter(SummarizerProviderPort):
     """Bind ``TurnRunner._resolve_tool_result_summarizer_provider`` (static)."""
 
@@ -515,7 +492,6 @@ class _TurnRunnerSummarizerProviderAdapter(SummarizerProviderPort):
             current_provider=current_provider,
             summary_model=summary_model,
         )
-
 
 class _TurnRunnerMemorySnapshotAdapter(MemorySnapshotPort):
     """Bind the per-agent memory warm + per-(agent_id, session_key) snapshot capture.
@@ -565,7 +541,6 @@ class _TurnRunnerMemorySnapshotAdapter(MemorySnapshotPort):
             private_memory_allowed=private_memory_allowed,
         )
 
-
 class _TurnRunnerAgentFactoryAdapter(AgentFactoryPort):
     """Bind the typed ``Agent(...)`` constructor.
 
@@ -604,11 +579,10 @@ class _TurnRunnerAgentFactoryAdapter(AgentFactoryPort):
             session_flush_service=self._runner._session_flush_service,
         )
 
-
 class _TurnRunnerT3UpgradeCompactionAdapter(T3UpgradeCompactionPort):
     """Bind ``TurnRunner._maybe_compact_on_t3_upgrade`` as a Protocol port.
 
-    Forwards positional + keyword arguments verbatim. The legacy helper
+    Forwards positional + keyword arguments verbatim. The helper
     handles its own ``asyncio.CancelledError`` re-raise and the
     log-and-record swallow for other exceptions; the adapter preserves
     that contract by not adding any try/except.
@@ -633,7 +607,6 @@ class _TurnRunnerT3UpgradeCompactionAdapter(T3UpgradeCompactionPort):
             compaction_provider=compaction_provider,
             compaction_model=compaction_model,
         )
-
 
 class _TurnRunnerPreflightCompactionAdapter(PreflightCompactionPort):
     """Bind ``TurnRunner._maybe_preflight_compact`` as a Protocol port.
@@ -660,13 +633,12 @@ class _TurnRunnerPreflightCompactionAdapter(PreflightCompactionPort):
             compaction_model=compaction_model,
         )
 
-
 class _TurnRunnerHistoryLoaderAdapter(HistoryLoaderPort):
     """Bind ``TurnRunner._load_history`` as a Protocol port.
 
-    The legacy helper mutates ``agent._history`` via
+    The helper mutates ``agent._history`` via
     ``agent.set_history`` internally; the adapter preserves that.
-    Exceptions propagate (the legacy slice has no surrounding
+    Exceptions propagate (no surrounding
     try/except).
     """
 
@@ -686,7 +658,6 @@ class _TurnRunnerHistoryLoaderAdapter(HistoryLoaderPort):
             trim_last_user=trim_last_user,
         )
 
-
 class _RequestContextPrependAdapter(RequestContextPrependPort):
     """Pure shim around the module-level ``_prepend_request_context_prompt``.
 
@@ -704,14 +675,13 @@ class _RequestContextPrependAdapter(RequestContextPrependPort):
 
         return _prepend_request_context_prompt(existing, prepended)
 
-
 class _TurnRunnerAgentRunAdapter(AgentRunPort):
     """Bind ``agent.run_turn(turn_input, extra_messages=..., **kwargs)``.
 
-    Folds the legacy ``_accepts_keyword_arg(agent.run_turn, "semantic_message")``
+    Folds the ``_accepts_keyword_arg(agent.run_turn, "semantic_message")``
     introspection inside the adapter so the stage body never imports
     ``inspect``. ``semantic_message`` is forwarded only when the agent
-    accepts the keyword; otherwise the call mirrors the legacy two-arg
+    accepts the keyword; otherwise the call uses the two-arg
     invocation. The agent is supplied per-call so the stage can be
     instantiated once and reused across turns.
     """
@@ -735,14 +705,13 @@ class _TurnRunnerAgentRunAdapter(AgentRunPort):
             **kwargs,
         )
 
-
 class _TurnRunnerCompactionPersistAdapter(CompactionPersistPort):
     """Bind ``SessionManager.persist_compaction_result`` + ``notify_compaction``.
 
-    PHASE D SEAM: the adapter forwards the persist call verbatim and
+    Compaction seam: the adapter forwards the persist call verbatim and
     follows it with ``notify_compaction(session_key)``. The
     log-and-continue try/except lives in the stage's
-    ``_CompactionHandler``, matching the legacy slice. The
+    ``_CompactionHandler``. The
     re-entrancy contract on ``persist_compaction_result`` is untouched.
     """
 
@@ -768,11 +737,10 @@ class _TurnRunnerCompactionPersistAdapter(CompactionPersistPort):
         )
         notify_compaction(session_key)
 
-
 class _TurnRunnerMemorySnapshotRefreshAdapter(MemorySnapshotRefreshPort):
     """Refresh ``runner._memory_snapshots[(agent_id, session_key)]`` after compaction.
 
-    Mirrors the legacy slice: resolves the memory source dir, loads
+    Resolves the memory source dir, loads
     MEMORY.md + daily notes, writes the frozen snapshot. Respects
     ``private_memory_allowed`` -- when false, the dict is not written.
     """
@@ -797,11 +765,10 @@ class _TurnRunnerMemorySnapshotRefreshAdapter(MemorySnapshotRefreshPort):
                 daily_notes=runner._load_daily_notes(workspace),
             )
 
-
 class _TurnRunnerSystemPromptRefreshAdapter(SystemPromptRefreshPort):
     """Rebuild + apply the cacheable system-prompt base after compaction.
 
-    PHASE D SEAM: extracts the cacheable base from the
+    Compaction seam: extracts the cacheable base from the
     ``(base, dynamic_suffix)`` tuple returned by ``_assemble_prompt``
     (when applicable) before invoking ``agent.refresh_system_prompt``.
     Feeding the tuple directly into ``ChatConfig.system`` would smuggle
@@ -831,13 +798,12 @@ class _TurnRunnerSystemPromptRefreshAdapter(SystemPromptRefreshPort):
         )
         agent.refresh_system_prompt(refreshed_prompt)
 
-
 class _TurnRunnerMemorySyncNotifyAdapter(MemorySyncNotifyPort):
     """Notify ``sync_manager.notify_message(byte_count)`` post-stream.
 
     The adapter folds the ``sync_manager is None`` guard so the stage
     body has no conditional. Byte count is the UTF-8 length of the
-    effective runtime message, matching the legacy slice.
+    effective runtime message.
     """
 
     def notify_message_bytes(
@@ -850,7 +816,6 @@ class _TurnRunnerMemorySyncNotifyAdapter(MemorySyncNotifyPort):
         byte_count = len(runtime_message.encode("utf-8"))
         sync_manager.notify_message(byte_count)
 
-
 class _TurnRunnerAttachmentMessageBuilderAdapter(AttachmentMessageBuilderPort):
     """Bind ``TurnRunner._build_attachment_messages`` + media-root lookup.
 
@@ -858,7 +823,7 @@ class _TurnRunnerAttachmentMessageBuilderAdapter(AttachmentMessageBuilderPort):
     ``media_root`` from the runner instance on every call. The stage
     body never sees the runner.
 
-    Exception contract: the legacy helper raises ``ValueError`` on
+    Exception contract: the helper raises ``ValueError`` on
     validation failures (count cap, disallowed media type, ref without
     media_root, invalid base64, oversize). The adapter does NOT add a
     try/except — exceptions propagate to the stage which propagates
@@ -879,11 +844,10 @@ class _TurnRunnerAttachmentMessageBuilderAdapter(AttachmentMessageBuilderPort):
             media_root=self._runner._attachment_media_root(),
         )
 
-
 class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
     """Bind ``SessionManager.append_message`` for the assistant turn persist.
 
-    Folds two legacy responsibilities into the adapter so the stage
+    Folds two responsibilities into the adapter so the stage
     body has no ``inspect`` dependency and no ``session_manager is None``
     conditional:
 
@@ -894,7 +858,7 @@ class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
        append) instead of calling.
 
     Exceptions from ``append_message`` propagate to the stage and out
-    to the outer ``_run_turn`` terminal handler -- the legacy slice has
+    to the outer ``_run_turn`` terminal handler -- there is
     no try/except here.
     """
 
@@ -928,11 +892,10 @@ class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
         await session_manager.append_message(session_key, **append_kwargs)
         return True
 
-
 class _TurnRunnerTurnMemoryCaptureAdapter(TurnMemoryCapturePort):
     """Bind ``TurnRunner._capture_turn_memory`` as a Protocol port.
 
-    Forwards verbatim. The legacy slice's log-and-continue try/except
+    Forwards verbatim. The log-and-continue try/except
     lives in the stage body, NOT the adapter -- the error-handling
     contract is visible in the stage code.
     """
@@ -965,17 +928,16 @@ class _TurnRunnerTurnMemoryCaptureAdapter(TurnMemoryCapturePort):
             no_memory_capture=no_memory_capture,
         )
 
-
 class _TurnRunnerSessionTotalsAdapter(SessionTotalsPort):
     """Roll up session token + cost + cache totals from a DoneEvent.
 
-    Mirrors the legacy block bit-identically: ``get_session`` read,
+    Performs as a single transaction: ``get_session`` read,
     ``normalize_event_cost_source`` call, four ``next_*`` accumulators,
     ``rollup_cost_source`` call, ``Session.update`` write. Folds two
     early-return guards (``session_manager is None`` and
     ``current_session is None``) so the stage body has no conditional
     on either; the stage's outer try/except wraps the adapter call
-    matching the legacy log-and-continue arm.
+    with log-and-continue semantics.
     """
 
     def __init__(self, runner: TurnRunner) -> None:
@@ -1086,7 +1048,6 @@ class _TurnRunnerSessionTotalsAdapter(SessionTotalsPort):
             cache_write=next_cache_write,
             model_override=next_model_override,
         )
-
 
 class _TurnRunnerTurnErrorPersistAdapter(TurnErrorPersistPort):
     """Bind ``TurnRunner._persist_turn_error`` as a Protocol port.

@@ -1,4 +1,4 @@
-"""S6 — R13 ANSI collision absence (byte-level invariants).
+"""ANSI collision absence for the concurrent chat REPL.
 
 The concurrent chat REPL composes three writers onto a single terminal:
 
@@ -7,12 +7,11 @@ The concurrent chat REPL composes three writers onto a single terminal:
     ``console.file``);
   - the slash-handler / approval prompt paths.
 
-R13 in ``.omc/plans/concurrent-repl.md`` calls out the risk that any pair
-of these writers can emit ANSI sequences that collide — orphaned
+Any pair of these writers can emit ANSI sequences that collide: orphaned
 hide-cursor / show-cursor pairs, stray ``erase line`` sequences, or a
 ``cursor-up`` issued while the outer Application still owns the screen.
 
-This module pins four byte-level invariants (plan §4 criterion 14):
+This module pins four byte-level invariants:
 
   1. ``\\x1b[?25l`` / ``\\x1b[?25h`` hide/show pairs balance across
      stream + slash + approval suspend + resume.
@@ -22,12 +21,11 @@ This module pins four byte-level invariants (plan §4 criterion 14):
   4. Slash-command panel bytes (e.g. ``/help``) appear strictly outside
      the stream-window region.
 
-The live-PTY drill (real pexpect run of the chat CLI) is deferred to
-manual smoke per the plan's locked OQ#3 (Windows pty manual-only) and
-because the byte-level contract here is the invariant that matters; a
-``pexpect.importorskip`` guard keeps the door open for adding a live
-drill in a future iteration without breaking dev environments that lack
-pexpect.
+The live-PTY drill (real pexpect run of the chat CLI) is deferred to manual
+smoke because Windows pty coverage is manual-only and the byte-level contract
+here is the invariant that matters; a ``pexpect.importorskip`` guard keeps the
+door open for adding a live drill in a future iteration without breaking dev
+environments that lack pexpect.
 """
 
 from __future__ import annotations
@@ -154,10 +152,10 @@ def test_no_ansi_collision_across_stream_slash_approval(monkeypatch) -> None:
 
       1. Stream a synthetic assistant response chunk-by-chunk through
          ``StreamingRenderer.aappend_text`` (so writes route through the
-         S2b output mutex on the ChatApplication).
+         output mutex on the ChatApplication).
       2. Mid-stream, render a ``/help``-shaped Rich panel into a StringIO
          and ``write_through`` the captured bytes (mirroring the slash
-         handler's S2b contract).
+         handler's output-mutex contract).
       3. Toggle ``set_approval_in_flight(True)`` to enter the suspend
          window, then resolve with ``set_approval_in_flight(False)``.
       4. Stream a final closing chunk.
@@ -166,7 +164,7 @@ def test_no_ansi_collision_across_stream_slash_approval(monkeypatch) -> None:
 
       - balanced ``\\x1b[?25l`` / ``\\x1b[?25h`` pairs;
       - no orphan ``\\x1b[2K`` (the stream path never erases lines —
-        Rich only emits ``2K`` for Live regions, which S2′ removed);
+        Rich only emits ``2K`` for Live regions, which inline approval removed);
       - zero cursor-up sequences (the chat REPL owns the screen via the
         prompt-toolkit Application; cursor-up would belong to a Live).
     """
@@ -236,7 +234,7 @@ def test_no_ansi_collision_across_stream_slash_approval(monkeypatch) -> None:
     assert_no_orphans(payload, HIDE_CURSOR, SHOW_CURSOR)
 
     # Invariant 2 — no erase-line outside intended scope. The chat REPL
-    # stream path never emits 2K (S2′ removed Live; slash panels render
+    # stream path never emits 2K (inline approval removed Live; slash panels render
     # via Rich.Panel which does not emit 2K when written through file).
     assert count_sequence(payload, ERASE_LINE) == 0, (
         f"unexpected erase-line sequence in payload: "
@@ -490,16 +488,14 @@ def test_help_panel_renders_outside_stream_window(monkeypatch) -> None:
 
 @pytest.mark.skipif(
     sys.platform == "win32",
-    reason="pexpect is Unix-only; live-PTY drill deferred to manual smoke per plan OQ#3",
+    reason="pexpect is Unix-only; live-PTY drill is covered by manual smoke",
 )
 def test_live_pty_smoke_deferred() -> None:
     """Hook for future live-PTY drill via pexpect.
 
-    Per plan locked OQ#3 (Windows pty manual-only) and the executor
-    contract for S6, the live-PTY drive of the chat CLI under pexpect is
-    deferred to manual smoke (``.omc/research/manual-smoke.md``). The
-    byte-level invariants enforced by the three tests above are the
-    authoritative S6 contract.
+    Windows pty behavior is manual-only, so the live-PTY drive of the chat CLI
+    under pexpect is deferred to manual smoke. The byte-level invariants
+    enforced by the tests above are the authoritative automated contract.
 
     This test uses ``importorskip`` so the slot is wired and ready for a
     future live drill without breaking dev environments that lack
@@ -507,7 +503,6 @@ def test_live_pty_smoke_deferred() -> None:
     """
     pytest.importorskip("pexpect")
     pytest.skip(
-        "live-PTY drill deferred to manual smoke per plan OQ#3 — "
-        "byte-level invariants in this module are the authoritative "
-        "S6 contract"
+        "live-PTY drill deferred to manual smoke; byte-level invariants in "
+        "this module are the authoritative automated contract"
     )

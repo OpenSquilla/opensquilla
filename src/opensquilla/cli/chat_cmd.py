@@ -14,7 +14,7 @@ import inspect
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
@@ -56,8 +56,8 @@ def _tool_result_success_from_status(status: Any, *, legacy_is_error: bool) -> b
 _DEFAULT_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 180.0
 
-# Maximum number of inputs that may queue behind an in-flight turn (D2 lock,
-# plan §S4). When the cap is reached, additional Enter presses are rejected
+# Maximum number of inputs that may queue behind an in-flight turn. When the cap
+# is reached, additional Enter presses are rejected
 # with a toast and the user must wait for the current turn to finish before
 # enqueueing more. Module-level so tests can monkeypatch a tighter cap.
 _PENDING_QUEUE_MAX_SIZE = 8
@@ -421,7 +421,7 @@ async def _run_concurrent_repl(
     *,
     surface: Surface,
     scope: dict[str, Any],
-    dispatch: Callable[[str], Awaitable[bool]],
+    dispatch: Callable[[str], Coroutine[Any, Any, bool]],
 ) -> None:
     """Concurrent input/turn loop driven by a long-lived ChatApplication.
 
@@ -457,7 +457,7 @@ async def _run_concurrent_repl(
     ) as handle:
         chat_app = handle.application
         # Expose the active ChatApplication to dispatch closures so the
-        # production stream paths can route token writes through the S2b
+        # production stream paths can route token writes through the
         # output mutex (`StreamingRenderer.aappend_text`) and so
         # ``_maybe_handle_approval`` can prompt against this surface's own
         # Application instead of the default gateway lookup.
@@ -475,7 +475,7 @@ async def _run_concurrent_repl(
         chat_app.set_cancel_callback(_cancel_inflight_turn)
 
         def _shutdown_drain_then_exit() -> None:
-            # Registered as the Ctrl+C double-press callback (S7). Emit
+            # Registered as the Ctrl+C double-press callback. Emit
             # EOF on the submit queue so the main loop's existing EOF
             # path runs: drain pending → finalize in-flight turn → print
             # "Goodbye." → return. We do NOT cancel the turn — the
@@ -494,7 +494,7 @@ async def _run_concurrent_repl(
         if callable(_set_shutdown_cb):
             _set_shutdown_cb(_shutdown_drain_then_exit)
 
-        # NEW-S4a: install SIGWINCH (redraw on resize) + SIGTSTP (block
+        # Install SIGWINCH (redraw on resize) + SIGTSTP (block
         # Ctrl-Z mid-turn; default at idle) handlers. Platform-guarded
         # inside the install helper — Windows skips silently. Lifetime
         # is bounded to the chat loop via try/finally so subsequent
@@ -540,7 +540,7 @@ async def _run_concurrent_repl(
         # Persistent next-line read armed exactly once at a time. The
         # main loop races this against any in-flight turn_task via
         # asyncio.wait so a destructive `/clear` arriving mid-turn can
-        # actually preempt the turn (S4 requirement). When turn_task
+        # actually preempt the turn. When turn_task
         # finishes first the next_line read stays armed for the next
         # iteration, so no input is dropped.
         next_line_task: asyncio.Task[str | None] | None = None
@@ -628,7 +628,7 @@ async def _run_concurrent_repl(
                     # an intentional shutdown-time drain — preemption is
                     # NOT desired because the user has signalled exit and
                     # queued user work must run to completion (locked
-                    # policy §S4) before the loop returns.
+                    # slash policy) before the loop returns.
                     while pending_commands:
                         queued = pending_commands.popleft()
                         turn_task = asyncio.create_task(
@@ -643,7 +643,7 @@ async def _run_concurrent_repl(
                 category = classify(user_input)
 
                 if category is SlashCategory.DESTRUCTIVE:
-                    # Locked policy (plan §S4): destructive commands invalidate
+                    # Locked slash policy: destructive commands invalidate
                     # everything queued behind them AND the active turn.
                     # 1) PURGE the pending deque first so queued state-
                     #    mutation slash commands do not race the handler.
@@ -667,7 +667,7 @@ async def _run_concurrent_repl(
                     continue
 
                 if category is SlashCategory.EXIT:
-                    # Locked policy (plan §S4): exit drains pending work
+                    # Locked slash policy: exit drains pending work
                     # before terminating, mirroring Ctrl-D semantics. Queued
                     # user inputs must run before the loop exits.
                     if turn_task is not None and not turn_task.done():
@@ -680,7 +680,7 @@ async def _run_concurrent_repl(
                     # an intentional shutdown-time drain — preemption is
                     # NOT desired because the user has signalled exit and
                     # queued user work must run to completion (locked
-                    # policy §S4) before the loop returns.
+                    # slash policy) before the loop returns.
                     while pending_commands:
                         queued = pending_commands.popleft()
                         turn_task = asyncio.create_task(
@@ -710,7 +710,7 @@ async def _run_concurrent_repl(
                 # destructive inputs can preempt the turn.
                 if turn_task is not None and not turn_task.done():
                     if len(pending_commands) >= _PENDING_QUEUE_MAX_SIZE:
-                        # D2 lock (plan §S4): reject overflow with a toast.
+                        # Reject queue overflow with a toast.
                         # The user must wait for the current turn before
                         # enqueuing more. The rejected input is dropped on
                         # the floor; this matches the locked decision over
@@ -735,7 +735,7 @@ async def _run_concurrent_repl(
             # Clear the cancel callback before the Application tears down so a
             # stale binding cannot reach a finished task on the next session.
             chat_app.set_cancel_callback(None)
-            # S7: clear the shutdown callback for the same reason — a
+            # Clear the shutdown callback for the same reason — a
             # stale binding firing on the next session would emit EOF on
             # an unrelated submit queue. `getattr` keeps minimal-fake
             # tests happy.
@@ -743,7 +743,7 @@ async def _run_concurrent_repl(
             if callable(_clear_shutdown_cb):
                 _clear_shutdown_cb(None)
             await _drop_next_line()
-            # NEW-S4a: restore previous signal handlers so subsequent
+            # Restore previous signal handlers so subsequent
             # REPL runs / tests start from a clean signal-handler state.
             try:
                 _uninstall_signals()
@@ -950,8 +950,8 @@ async def _standalone_repl(
     async def _dispatch_input(user_input: str) -> bool:
         """Process one input line. Returns True to keep looping, False to exit.
 
-        S3 keeps slash handlers synchronous-inside-the-loop (per plan §S3).
-        S4 will split this into the cancel-then-execute / enqueue policy.
+        Slash handlers run synchronously inside the loop so the concurrent
+        routing policy can decide whether to cancel, execute, or enqueue.
         """
         if user_input is None or is_exit_command(user_input):
             console.print("[yellow]Goodbye.[/yellow]")
@@ -1280,7 +1280,7 @@ async def _handle_gateway_slash_command(
     it threads through to the per-slash streaming paths (``/image``,
     ``/path``, ``/file``) so their renderer goes through ``aappend_text``
     + ``ChatApplication.write_through`` instead of a direct
-    ``console.file`` write, honoring the S2b output mutex and approval
+    ``console.file`` write, honoring the output mutex and approval
     suspend gate. Defaults to ``None`` for non-REPL callers that never
     enter the concurrent loop.
     """
@@ -1965,9 +1965,9 @@ async def _stream_response_gateway(
     """Stream response from gateway with Rich live display.
 
     When ``chat_app`` is provided, token writes are routed through the
-    S2b output mutex via ``StreamingRenderer.aappend_text`` so stream
+    output mutex via ``StreamingRenderer.aappend_text`` so stream
     chunks cannot collide with the inline approval ``PromptSession`` that
-    owns the screen during the Option B″ suspend window.
+    owns the screen during the inline-approval suspend window.
     """
     elevated = elevated_state["mode"] if elevated_state else None
     usage: UsageSummary | None = None
@@ -2083,9 +2083,9 @@ async def _stream_response_turnrunner(
     """Stream TurnRunner response with Rich live display (standalone mode).
 
     When ``chat_app`` is provided, token writes are routed through the
-    S2b output mutex via ``StreamingRenderer.aappend_text`` so stream
+    output mutex via ``StreamingRenderer.aappend_text`` so stream
     chunks cannot collide with the inline approval ``PromptSession`` that
-    owns the screen during the Option B″ suspend window.
+    owns the screen during the inline-approval suspend window.
     """
     from opensquilla.engine.runtime import TurnRunner
     from opensquilla.engine.types import (
@@ -2205,7 +2205,7 @@ async def _handle_image_command_turnrunner(
 
     ``chat_app`` is the active ``ChatApplication`` for the REPL surface;
     when provided, token streaming routes through ``aappend_text`` +
-    ``ChatApplication.write_through`` so the S2b output mutex and
+    ``ChatApplication.write_through`` so the output mutex and
     approval suspend gate apply to /image output the same way they
     apply to regular turn output. Defaults to ``None`` for non-REPL
     callers.

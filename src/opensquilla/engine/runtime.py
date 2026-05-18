@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final, SupportsInt, TypeGuard
+from typing import Any, Final, SupportsInt, TypeGuard, cast
 
 import structlog
 
@@ -56,9 +56,10 @@ from opensquilla.engine.turn_runner import (
     StreamConsumerStageInput,
     TurnFinalizerStage,
     TurnFinalizerStageInput,
+)
+from opensquilla.engine.turn_runner.harness import (
     _PromptReportBuilderAdapter,
     _RequestContextPrependAdapter,
-    _StreamState,
     _TurnRunnerAgentConfigBuilderAdapter,
     _TurnRunnerAgentFactoryAdapter,
     _TurnRunnerAgentRunAdapter,
@@ -88,6 +89,7 @@ from opensquilla.engine.turn_runner import (
     _TurnRunnerTurnErrorPersistAdapter,
     _TurnRunnerTurnMemoryCaptureAdapter,
 )
+from opensquilla.engine.turn_runner.stream_consumer_stage import _StreamState
 from opensquilla.engine.types import (
     AgentConfig,
     AgentEvent,
@@ -1107,7 +1109,7 @@ class TurnRunner:
         self._turn_capture_services = turn_capture_services
         self._session_flush_service = session_flush_service
         self._diagnostics_state = diagnostics_state
-        # Phase B hook surface. When OPENSQUILLA_HOOKS=new, the runtime fans
+        # engine hook seam hook surface. When OPENSQUILLA_HOOKS=new, the runtime fans
         # turn events out through these hooks instead of calling the static
         # ``_write_trace_event`` helper directly. The default registration
         # reproduces inline behavior 1:1.
@@ -1115,7 +1117,7 @@ class TurnRunner:
             self._turn_hooks: tuple[TurnHook, ...] = (DefaultTraceEmitterHook(),)
         else:
             self._turn_hooks = tuple(turn_hooks)
-        # Phase B CompactionHook surface. CompactionAndHistoryStage fans
+        # engine hook seam CompactionHook surface. CompactionAndHistoryStage fans
         # before/after-compact events out through these hooks. Empty tuple
         # by default = no fan-out.
         self._compaction_hooks: tuple[CompactionHook, ...] = (
@@ -1144,17 +1146,17 @@ class TurnRunner:
         self._bootstrap_snapshots: dict[tuple[str, str, str], BootstrapSnapshot] = {}
         self._compaction_failures: dict[str, _CompactionFailureState] = {}
         self._turn_compacted_sessions: set[str] = set()
-        # Phase C InputStage instance (PR-C-1). Holds no per-turn state;
-        # constructed once. Active unconditionally as of PR-C-9.
+        # TurnRunner stage decomposition InputStage instance. Holds no per-turn state;
+        # constructed once. Active unconditionally as of.
         self._input_stage = InputStage(extra_ctx=_TurnRunnerExtraContextAdapter())
-        # Phase C ProviderAndToolsStage instance (PR-C-2). Holds no
-        # per-turn state. Active unconditionally as of PR-C-9.
+        # TurnRunner stage decomposition ProviderAndToolsStage instance. Holds no
+        # per-turn state. Active unconditionally as of.
         self._provider_and_tools_stage = ProviderAndToolsStage(
             provider_resolver=_TurnRunnerProviderResolverAdapter(self),
             tool_builder=_TurnRunnerToolBuilderAdapter(self),
         )
-        # Phase C PromptAssemblerStage instance (PR-C-3). Holds no
-        # per-turn state. Active unconditionally as of PR-C-9.
+        # TurnRunner stage decomposition PromptAssemblerStage instance. Holds no
+        # per-turn state. Active unconditionally as of.
         self._prompt_assembler_stage = PromptAssemblerStage(
             prompt_assembler=_TurnRunnerPromptAssemblerAdapter(self),
             pipeline_executor=_TurnRunnerPipelineExecutionAdapter(self),
@@ -1164,8 +1166,8 @@ class TurnRunner:
             session_id_resolver=_TurnRunnerSessionIdResolverAdapter(self),
             memory_fingerprint=_TurnRunnerMemoryFingerprintAdapter(self),
         )
-        # Phase C AgentBootstrapStage instance (PR-C-4). Holds no
-        # per-turn state. Active unconditionally as of PR-C-9.
+        # TurnRunner stage decomposition AgentBootstrapStage instance. Holds no
+        # per-turn state. Active unconditionally as of.
         self._agent_bootstrap_stage = AgentBootstrapStage(
             timeout_budget=_TurnRunnerTimeoutBudgetAdapter(self),
             model_catalog=_TurnRunnerModelCatalogAdapter(self),
@@ -1174,8 +1176,8 @@ class TurnRunner:
             memory_snapshot=_TurnRunnerMemorySnapshotAdapter(self),
             agent_factory=_TurnRunnerAgentFactoryAdapter(self),
         )
-        # Phase C CompactionAndHistoryStage instance (PR-C-5). Holds no
-        # per-turn state. Active unconditionally as of PR-C-9.
+        # TurnRunner stage decomposition CompactionAndHistoryStage instance. Holds no
+        # per-turn state. Active unconditionally as of.
         self._compaction_and_history_stage = CompactionAndHistoryStage(
             t3_upgrade=_TurnRunnerT3UpgradeCompactionAdapter(self),
             preflight=_TurnRunnerPreflightCompactionAdapter(self),
@@ -1183,13 +1185,13 @@ class TurnRunner:
             request_context_prepender=_RequestContextPrependAdapter(),
             compaction_hooks=self._compaction_hooks,
         )
-        # Phase C AttachmentStage instance (PR-C-6). Holds no per-turn
-        # state. Active unconditionally as of PR-C-9.
+        # TurnRunner stage decomposition AttachmentStage instance. Holds no per-turn
+        # state. Active unconditionally as of.
         self._attachment_stage = AttachmentStage(
             builder=_TurnRunnerAttachmentMessageBuilderAdapter(self),
         )
-        # Phase C StreamConsumerStage instance (PR-C-7). Holds no
-        # per-turn state. Active unconditionally as of PR-C-9. The
+        # TurnRunner stage decomposition StreamConsumerStage instance. Holds no
+        # per-turn state. Active unconditionally as of. The
         # warning transformer binds ``self._handle_runtime_warning`` as
         # a one-method callable; the recording-fake discipline applies
         # identically to a Protocol-shaped port.
@@ -1201,8 +1203,8 @@ class TurnRunner:
             memory_sync_notify=_TurnRunnerMemorySyncNotifyAdapter(),
             warning_transformer=self._handle_runtime_warning,
         )
-        # Phase C TurnFinalizerStage instance (PR-C-8). Holds no
-        # per-turn state. Active unconditionally as of PR-C-9. Adapter
+        # TurnRunner stage decomposition TurnFinalizerStage instance. Holds no
+        # per-turn state. Active unconditionally as of. Adapter
         # contracts:
         #   * TranscriptAppendPort folds the ``token_count`` introspect
         #     and the ``session_manager is None`` guard.
@@ -1663,7 +1665,9 @@ class TurnRunner:
                 # Harness performs the legacy observability + persist +
                 # yield sequence in the legacy ORDER (trace-emit, persist,
                 # yield, return).
-                provider_error_event = pt_outcome.early_yield
+                provider_error_event = cast(
+                    ErrorEvent, pt_outcome.require_early_yield()
+                )
                 log.error("turn_runner.no_provider", session_key=session_key)
                 self._emit_turn_event(
                     "turn_error",
@@ -1683,7 +1687,7 @@ class TurnRunner:
                 await self._persist_turn_error(session_key, provider_error_event)
                 yield provider_error_event
                 return
-            pt_out = pt_outcome.output
+            pt_out = pt_outcome.require_output()
             provider = pt_out.provider
             cloned_selector = pt_out.cloned_selector
             tool_defs = pt_out.tool_defs
@@ -1712,7 +1716,7 @@ class TurnRunner:
                     ingress_pipeline_steps=ingress_pipeline_steps,
                 )
             )
-            pa_out = pa_outcome.output
+            pa_out = pa_outcome.require_output()
             provider = pa_out.provider
             turn = pa_out.turn
             turn_obj = turn
@@ -1793,7 +1797,7 @@ class TurnRunner:
                     max_provider_retries=max_provider_retries,
                 )
             )
-            ab_out = ab_outcome.output
+            ab_out = ab_outcome.require_output()
             agent = ab_out.agent
             agent_config = ab_out.agent_config
             # These locals are read by the test_agent_bootstrap_stage_snapshot
@@ -1823,7 +1827,7 @@ class TurnRunner:
                     history_has_persisted_user=history_has_persisted_user,
                 )
             )
-            ch_out = ch_outcome.output
+            ch_out = ch_outcome.require_output()
             agent.config.request_context_prompt = (
                 ch_out.final_request_context_prompt
             )
@@ -1836,7 +1840,7 @@ class TurnRunner:
                     attachments=attachments,
                 )
             )
-            att_out = att_outcome.output
+            att_out = att_outcome.require_output()
             extra_msgs = att_out.extra_messages
 
             # 9. Stream events (final_text_parts/turn_segments are declared
@@ -1922,7 +1926,7 @@ class TurnRunner:
                     no_memory_capture=no_memory_capture,
                 )
             )
-            fin_out = fin_outcome.output
+            fin_out = fin_outcome.require_output()
             final_text = fin_out.final_text
             turn_segments = fin_out.turn_segments
 

@@ -48,7 +48,7 @@ def test_streaming_renderer_uses_toolbar_status_not_rich_live() -> None:
 
     Historical context: a Markdown+Panel Live update loop produced ghost
     panel borders on Windows PowerShell whenever the rendered height grew
-    past the visible viewport. S2′ removed the last remaining Live
+    past the visible viewport. Inline approval removed the last remaining Live
     instance (the waiting indicator) and routed the "thinking…" status
     through `_toolbar_context['status']` so the prompt-toolkit toolbar
     surfaces it instead.

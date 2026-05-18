@@ -1,15 +1,9 @@
-"""Phase-class object for prompt assembly + pre-turn pipeline execution.
+"""Stage object for prompt assembly + pre-turn pipeline execution.
 
 Owns the source slice that previously lived inline at the top of
 ``TurnRunner._run_turn`` between the ProviderAndToolsStage seam and the
 runtime-budget resolve. The harness invokes ``PromptAssemblerStage.run``
 once per turn, AFTER ProviderAndToolsStage and BEFORE AgentBootstrapStage.
-
-Activated by ``OPENSQUILLA_HARNESS_PROMPT_ASSEMBLER=new``. Default is
-``legacy`` — the inline body remains the source of truth until the
-equivalence harness has run for one release cycle (PR-C-9 deletes the
-legacy arm).
-
 Side-effect contract: re-raises any exception from the prompt-assembly
 helpers, the pre-turn pipeline, or the prompt-finalization helper exactly
 as the inline body did. The harness catches it through the existing
@@ -37,7 +31,6 @@ if TYPE_CHECKING:
     from opensquilla.observability.prompt_report import PromptReport
     from opensquilla.tools.types import ToolContext
 
-
 # ---------------------------------------------------------------------------
 # RunPipelineRequest — typed dataclass that folds the 6 inline
 # ``_accepts_keyword_arg(self._run_pipeline, ...)`` introspection calls.
@@ -46,7 +39,6 @@ if TYPE_CHECKING:
 # them as a keyword today; the stage consistently passes the value or
 # ``None`` and the pipeline branches on truthiness internally.
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class RunPipelineRequest:
@@ -75,14 +67,12 @@ class RunPipelineRequest:
     flags_text_override: str | None = None
     tool_context: ToolContext | None = None
 
-
 # ---------------------------------------------------------------------------
 # Ports — narrow Protocols so the stage is unit-testable without the full
 # TurnRunner. The runtime adapters in ``harness.py`` bind these to the
 # concrete TurnRunner methods (or to the module-level helper for prompt
 # report).
 # ---------------------------------------------------------------------------
-
 
 @runtime_checkable
 class PromptAssemblerPort(Protocol):
@@ -105,7 +95,6 @@ class PromptAssemblerPort(Protocol):
         bootstrap_context_mode: str | None,
     ) -> str | tuple[str, str]: ...
 
-
 @runtime_checkable
 class PipelineExecutionPort(Protocol):
     """Wraps ``TurnRunner._run_pipeline``.
@@ -121,7 +110,6 @@ class PipelineExecutionPort(Protocol):
         self,
         request: RunPipelineRequest,
     ) -> tuple[Any, Any]: ...
-
 
 @runtime_checkable
 class RouterContextPort(Protocol):
@@ -141,7 +129,6 @@ class RouterContextPort(Protocol):
         exclude_last_user: bool,
     ) -> dict[str, Any]: ...
 
-
 @runtime_checkable
 class PromptConfigResolverPort(Protocol):
     """Wraps ``TurnRunner._resolve_prompt_config``.
@@ -154,7 +141,6 @@ class PromptConfigResolverPort(Protocol):
         self,
         turn: Any,
     ) -> tuple[str, list[Any] | None, str | None]: ...
-
 
 @runtime_checkable
 class PromptReportBuilderPort(Protocol):
@@ -179,7 +165,6 @@ class PromptReportBuilderPort(Protocol):
         tool_profile: str | None,
     ) -> PromptReport: ...
 
-
 @runtime_checkable
 class SessionIdResolverPort(Protocol):
     """Wraps ``TurnRunner._resolve_session_id_for_log``.
@@ -194,7 +179,6 @@ class SessionIdResolverPort(Protocol):
         session_key: str,
     ) -> str | None: ...
 
-
 @runtime_checkable
 class MemoryFingerprintPort(Protocol):
     """Wraps ``TurnRunner._config.memory_mode_fingerprint`` if present.
@@ -206,11 +190,9 @@ class MemoryFingerprintPort(Protocol):
 
     def memory_mode_fingerprint(self) -> dict[str, str] | None: ...
 
-
 # ---------------------------------------------------------------------------
 # Stage I/O dataclasses (frozen)
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class PromptAssemblerStageInput:
@@ -244,7 +226,6 @@ class PromptAssemblerStageInput:
     history_has_persisted_user: bool
     persist_input: bool
     ingress_pipeline_steps: list[PipelineStepRecord] | None
-
 
 @dataclass(frozen=True)
 class PromptAssemblerStageOutput:
@@ -295,11 +276,9 @@ class PromptAssemblerStageOutput:
     selector_model: str
     squilla_router_tier: Any = None
 
-
 # ---------------------------------------------------------------------------
 # Stage
 # ---------------------------------------------------------------------------
-
 
 class PromptAssemblerStage:
     """Assemble identity prompt + run pre-turn pipeline + finalize prompt.
@@ -453,7 +432,7 @@ class PromptAssemblerStage:
                 selector_model = (
                     getattr(inp.cloned_selector.current_config, "model", "") or ""
                 )
-            except Exception:  # noqa: BLE001 - match legacy defensive arm
+            except Exception:  # noqa: BLE001 - defensive
                 selector_model = ""
         resolved_model = inp.model or turn.model or selector_model
         provider_name = (

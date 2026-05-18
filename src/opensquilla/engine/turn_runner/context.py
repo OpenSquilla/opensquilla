@@ -1,19 +1,18 @@
 """TurnContext — mutable accumulator owned by the TurnRunner harness.
 
-Cross-cutting state threaded across Phase C ordered phase classes. Owned
-exclusively by the harness; phase classes read it through typed StageInput
-dataclasses and write it via StageOutput return values the harness applies.
+Cross-cutting state threaded across ordered TurnRunner stages. Owned exclusively
+by the harness; stage classes read it through typed StageInput dataclasses and
+write it via StageOutput return values the harness applies.
 
 Direct mutation of TurnContext from inside a stage is forbidden — a stage
 that needs to mutate cross-cutting state returns it via its Output.
 
-PR-C-1 populates the three InputStage output fields. PR-C-2 grows the
-dataclass with the six ProviderAndToolsStage output fields. Subsequent
-PRs grow the dataclass with prompt/agent/stream/finalizer fields.
+The dataclass starts with InputStage and ProviderAndToolsStage output fields and
+can grow as later stages move behind the harness boundary.
 
 Note: distinct from ``opensquilla.engine.pipeline.TurnContext`` which is
-the pre-turn pipeline value object. The two will coexist during Phase C
-and the pipeline TurnContext stays in place. Import this one as::
+the pre-turn pipeline value object. The two coexist while the pipeline
+TurnContext stays in place. Import this one as::
 
     from opensquilla.engine.turn_runner.context import TurnContext as HarnessTurnContext
 
@@ -32,17 +31,16 @@ if TYPE_CHECKING:
     from opensquilla.provider.types import ModelCapabilities
     from opensquilla.tools.types import ToolContext
 
-
 @dataclass
 class TurnContext:
-    """Cross-cutting state accumulated across phase classes."""
+    """Cross-cutting state accumulated across stage classes."""
 
-    # Populated by InputStage (PR-C-1)
+    # Populated by InputStage
     runtime_message: str = ""
     semantic_input: str = ""
     extra_prompt_context: dict[str, str] | None = None
 
-    # Populated by ProviderAndToolsStage (PR-C-2)
+    # Populated by ProviderAndToolsStage
     provider: Any = None
     cloned_selector: Any = None
     tool_defs: list[Any] = field(default_factory=list)
@@ -50,7 +48,7 @@ class TurnContext:
     effective_tool_context: ToolContext | None = None
     tool_metadata: dict[str, Any] = field(default_factory=dict)
 
-    # Populated by PromptAssemblerStage (PR-C-3). The ``provider`` field
+    # Populated by PromptAssemblerStage. The ``provider`` field
     # above is OVERWRITTEN by this stage's output (the stage may have
     # wrapped it in ``_SelectorFallbackProvider``).
     turn: Any = None  # post-pipeline pipeline.TurnContext
@@ -65,7 +63,7 @@ class TurnContext:
     selector_model: str = ""
     squilla_router_tier: Any = None
 
-    # Populated by AgentBootstrapStage (PR-C-4)
+    # Populated by AgentBootstrapStage
     agent: Agent | None = None
     agent_config: AgentConfig | None = None
     effective_runtime_timeout: float = 0.0
@@ -78,19 +76,19 @@ class TurnContext:
     private_memory_allowed: bool = False
     sync_manager: Any = None
 
-    # Populated by CompactionAndHistoryStage (PR-C-5)
+    # Populated by CompactionAndHistoryStage
     t3_upgrade_status: str = ""
     preflight_invoked: bool = False
     loaded_compaction_summary_context: str | None = None
     final_request_context_prompt: str | None = None
 
-    # Populated by AttachmentStage (PR-C-6)
+    # Populated by AttachmentStage
     extra_attachment_messages: list[Any] | None = None
     turn_input: str = ""
 
-    # Populated by StreamConsumerStage (PR-C-7). Written by the harness
+    # Populated by StreamConsumerStage. Written by the harness
     # from the _StreamState passed into the stage after the stream
-    # generator exhausts. PR-C-8/PR-C-9 consume these fields.
+    # generator exhausts./consume these fields.
     stream_final_text_parts: list[str] = field(default_factory=list)
     stream_turn_segments: list[dict] = field(default_factory=list)
     stream_turn_artifacts: list[dict[str, Any]] = field(default_factory=list)
@@ -98,14 +96,14 @@ class TurnContext:
     stream_pending_error_event: Any | None = None  # ErrorEvent | None
     stream_done_event: Any | None = None  # DoneEvent | None
 
-    # Populated by TurnFinalizerStage (PR-C-8). Written by the harness
+    # Populated by TurnFinalizerStage. Written by the harness
     # from TurnFinalizerStageOutput.
-    # Consumed by PR-C-10 (TurnHook.after_turn fan-out): the seven
+    # Consumed by (TurnHook.after_turn fan-out): the seven
     # finalized_* fields here carry the post-stage state that the
     # after_turn hook payload needs (final_text, turn_segments,
     # turn_artifacts, error_message, pending_error_event, done_event,
-    # cost_rollup). PR-C-9 keeps them populated unconditionally so
-    # PR-C-10 can read them without re-deriving from local scope.
+    # cost_rollup). keeps them populated unconditionally so
+    # can read them without re-deriving from local scope.
     finalized_final_text: str = ""
     finalized_turn_segments: list[dict] = field(default_factory=list)
     finalized_turn_artifacts: list[dict[str, Any]] = field(default_factory=list)

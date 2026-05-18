@@ -1,6 +1,6 @@
-"""Generic StageOutcome value: the universal phase-class return shape.
+"""Generic StageOutcome value: the universal stage return shape.
 
-Every Phase C stage that owns a terminal-event branch returns
+Every TurnRunner stage that owns a terminal-event branch returns
 ``StageOutcome[StageOutputT]`` so the harness can sequence stages
 uniformly without per-stage adapters.
 
@@ -27,10 +27,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from opensquilla.engine.types import AgentEvent
 
-
 @dataclass(frozen=True)
 class StageOutcome[StageOutputT]:
-    """Universal return value for a Phase C phase-class stage.
+    """Universal return value for a TurnRunner stage.
 
     Either carries a stage-specific ``output`` (success path) or an
     ``early_yield`` ``AgentEvent`` plus ``terminate=True`` (the stage
@@ -61,6 +60,20 @@ class StageOutcome[StageOutputT]:
                 raise ValueError(
                     "StageOutcome(terminate=False) requires output"
                 )
+
+    def require_output(self) -> StageOutputT:
+        """Return the success output, preserving the runtime invariant for type checkers."""
+
+        if self.terminate or self.output is None:
+            raise ValueError("StageOutcome does not carry output")
+        return self.output
+
+    def require_early_yield(self) -> AgentEvent:
+        """Return the terminal event, preserving the runtime invariant for type checkers."""
+
+        if not self.terminate or self.early_yield is None:
+            raise ValueError("StageOutcome does not carry early_yield")
+        return self.early_yield
 
     @classmethod
     def success(cls, output: StageOutputT) -> StageOutcome[StageOutputT]:

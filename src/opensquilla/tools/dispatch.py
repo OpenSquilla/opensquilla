@@ -5,7 +5,7 @@ by every caller (gateway, CLI, cron, channel adapters). The pipeline is:
 
 1. Ingress injection guard — before registry lookup.
 2. Registry lookup — before any policy check.
-3. Optional ``ToolHook.before_tool`` fan-out (Phase B seam).
+3. Optional ``ToolHook.before_tool`` fan-out (engine hook seam seam).
 4. Policy chain (:func:`opensquilla.tools.policy.run_chain_with_emit`) —
    first denial wins; chain log emission flows through one site.
 5. Handler dispatch inside ``current_tool_context.set(effective_ctx)``.
@@ -261,7 +261,7 @@ def build_tool_handler(
         if registered is None:
             return _resolve_registry_miss(tool_call, known, effective_ctx)
 
-        # 3. ToolHook.before_tool — observability seam (Phase B).
+        # 3. ToolHook.before_tool — observability seam (engine hook seam).
         hook_call = ToolHookCall(tool_call=tool_call, ctx=effective_ctx) if hooks else None
         if hook_call is not None:
             for hook in hooks:

@@ -1,6 +1,6 @@
-"""S3 acceptance — turn-as-child-task + Ctrl+G cancel + pending FIFO.
+"""Turn-as-child-task + Ctrl+G cancel + pending FIFO.
 
-S3 moves turn execution off the main REPL coroutine onto a child task so the
+Turn execution moves off the main REPL coroutine onto a child task so the
 input task keeps accepting keystrokes during streaming. Ctrl+G cancels the
 in-flight turn task via the registered cancel callback; the engine treats
 `asyncio.CancelledError` as the abort signal at the next `await` point
@@ -264,7 +264,7 @@ async def test_user_can_type_during_stream() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Pending-commands FIFO (S3) via _run_concurrent_repl                         #
+# Pending-commands FIFO via _run_concurrent_repl                              #
 # --------------------------------------------------------------------------- #
 
 
@@ -272,7 +272,7 @@ async def test_user_can_type_during_stream() -> None:
 async def test_pending_commands_queue_during_turn(monkeypatch) -> None:
     """Inputs that arrive during a turn process in FIFO order after it ends.
 
-    Drives the S3 `_run_concurrent_repl` helper directly with a fake
+    Drives the `_run_concurrent_repl` helper directly with a fake
     `interactive_session` whose `next_line()` releases inputs paced to
     expose the ordering invariant. The dispatch records each call in
     order; the assertion is that the 2nd and 3rd inputs run after the 1st
@@ -476,7 +476,7 @@ async def test_ctrl_g_cancels_inflight_turn_through_helper(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# S4 — Slash classification routing through _run_concurrent_repl              #
+# Slash classification routing through _run_concurrent_repl                   #
 # --------------------------------------------------------------------------- #
 
 
@@ -484,7 +484,7 @@ from contextlib import asynccontextmanager  # noqa: E402
 
 
 class _FakeHandle:
-    """Reusable fake `interactive_session` handle for S4 tests.
+    """Reusable fake `interactive_session` handle for slash-routing tests.
 
     Reads inputs from an injected asyncio.Queue and captures cancel
     callbacks so the test driver can inspect them. Mirrors the surface
@@ -595,7 +595,7 @@ async def test_clear_cancels_inflight_turn(monkeypatch) -> None:
 async def test_clear_purges_pending_queue(monkeypatch) -> None:
     """`/clear` mid-turn drops everything queued behind it AND cancels the turn.
 
-    Plan §4 criterion `test_clear_purges_pending_queue`: when a slow turn
+    Slash-routing criterion `test_clear_purges_pending_queue`: when a slow turn
     is streaming and B, C, D are queued behind it, `/clear` arriving must
     drop all three queued items, cancel the current turn, and run only
     the `/clear` handler.
@@ -671,7 +671,7 @@ async def test_clear_purges_pending_queue(monkeypatch) -> None:
 async def test_model_command_queued_until_turn_ends(monkeypatch) -> None:
     """`/model gpt-5` mid-turn enqueues — it runs AFTER the current turn ends.
 
-    The state-mutation set MUST NOT cancel the active turn. Plan §S4
+    The state-mutation set MUST NOT cancel the active turn. The slash policy
     locks `/model` to the enqueue path.
     """
     from opensquilla.cli import chat_cmd
@@ -735,7 +735,7 @@ async def test_model_command_queued_until_turn_ends(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_help_during_turn_is_queued_not_immediate(monkeypatch) -> None:
-    """`/help` mid-turn is queued, not immediate-executed (locked OQ#4).
+    """`/help` mid-turn is queued, not immediate-executed.
 
     Open Question #4 is locked to ALWAYS enqueue pure-info slash
     commands — no threshold, no immediate-execute branch. This pins the
@@ -780,9 +780,9 @@ async def test_help_during_turn_is_queued_not_immediate(monkeypatch) -> None:
     for _ in range(20):
         await asyncio.sleep(0)
 
-    # /help MUST NOT have run yet — locked OQ#4 always enqueues.
+    # /help MUST NOT have run yet; the slash policy always enqueues.
     assert "/help" not in executed, (
-        "/help must enqueue, not run immediately (OQ#4 lock)"
+        "/help must enqueue, not run immediately"
     )
 
     # Release A; /help must now run from the drained deque.
@@ -800,7 +800,7 @@ async def test_help_during_turn_is_queued_not_immediate(monkeypatch) -> None:
 async def test_exit_drains_queue_then_terminates(monkeypatch) -> None:
     """`/exit` drains the pending queue, then terminates the loop.
 
-    Plan §S4 locks `/exit` / `/quit` to drain-then-exit semantics.
+    The slash policy locks `/exit` / `/quit` to drain-then-exit semantics.
     Queued user inputs MUST run before the loop terminates so the user
     does not lose work to an exit.
     """
@@ -868,7 +868,7 @@ async def test_exit_drains_queue_then_terminates(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_pending_queue_caps_at_max_size(monkeypatch) -> None:
-    """D2 lock (plan §S4): the pending deque is capped at
+    """The pending deque is capped at
     `_PENDING_QUEUE_MAX_SIZE` items. Once full, further inputs are
     rejected with a console toast and the rejected input is dropped.
 

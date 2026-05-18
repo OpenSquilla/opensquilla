@@ -1,9 +1,9 @@
-"""S2′ acceptance — Option B″ inline approval (suspend → fresh PromptSession → resume).
+"""Inline approval via suspend → fresh PromptSession → resume.
 
 The legacy `prompt_approval` re-entered the long-lived cached `PromptSession`
 via `prompt_user(chrome=False)`, which can deadlock or corrupt the in-flight
-input buffer when the outer Application is concurrent (Option B″ design).
-S2′ replaces that path with `prompt_approval_inline`: suspend the outer
+input buffer when the outer Application is concurrent.
+The inline path replaces that behavior with `prompt_approval_inline`: suspend the outer
 `ChatApplication`, construct a fresh one-shot `PromptSession`, then resume.
 
 These tests pin:
@@ -13,7 +13,8 @@ These tests pin:
   - the typed buffer on the outer Application survives the suspend window;
   - the `_approval_in_flight` Event toggles as expected;
   - the bottom-toolbar status block renders "thinking…" only when set;
-  - `Live(` has been excised from `stream.py` (R6 + locked OQ#5 contract).
+  - `Live(` has been excised from `stream.py` so stream rendering does not
+    own the prompt surface during approval.
 """
 
 from __future__ import annotations
@@ -214,9 +215,9 @@ def test_approval_long_panel_scrolls(restore_chat_apps) -> None:
 
 
 def test_typed_chars_preserved_across_approval(restore_chat_apps) -> None:
-    """D1 regression gate — outer buffer text survives the approval cycle.
+    """Outer buffer text survives the approval cycle.
 
-    The Option B″ contract is that the outer `ChatApplication`'s buffer is
+    The inline approval contract is that the outer `ChatApplication`'s buffer is
     untouched across `set_approval_in_flight(True)` → inline-session →
     `set_approval_in_flight(False)`. The full suspend_to_background path is
     integration-tested elsewhere; here we lock the buffer-state invariant
@@ -233,7 +234,7 @@ def test_typed_chars_preserved_across_approval(restore_chat_apps) -> None:
     # Simulate the inline approval session by running a noop coroutine — we
     # only need to assert the buffer text was not stomped by the toggling
     # itself. The real suspend/resume is owned by prompt-toolkit and was
-    # validated in the S0 spike.
+    # validated by the prompt-toolkit terminal handoff checks.
     chat_app.set_approval_in_flight(False)
 
     assert chat_app._buffer.text == "hello wor"
@@ -256,9 +257,9 @@ def test_turn_completes_during_approval_does_not_print_until_resume(
     restore_chat_apps,
     monkeypatch,
 ) -> None:
-    """R13 suspend-window gap: turn-task writes block until approval clears.
+    """Suspend-window gap: turn-task writes block until approval clears.
 
-    The S2b output-lock acquirer awaits `wait_approval_idle()` inside the
+    The output-lock acquirer awaits `wait_approval_idle()` inside the
     lock; while `_approval_in_flight` is set the awaiting task cannot run
     its write, so no bytes hit the terminal until the inline approval
     `PromptSession` releases and the outer Application resumes.
@@ -304,9 +305,9 @@ def test_toolbar_status_thinking_then_clear(restore_toolbar_status) -> None:
 
 
 def test_stream_py_has_no_live_constructor() -> None:
-    """Lock the locked OQ#5 / S2′ acceptance: no `Live(` in cli/repl/stream.py.
+    """Lock the inline approval invariant: no `Live(` in cli/repl/stream.py.
 
-    R6 + R13 + OQ#5 all rely on the pre-token surface being the
+    The approval path relies on the pre-token surface being the
     prompt-toolkit `bottom_toolbar` slot, not a Rich `Live` region. Run
     `grep` as a subprocess so the assertion fails loudly if a future
     regression re-introduces `Live(`.

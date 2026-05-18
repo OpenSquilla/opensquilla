@@ -1,17 +1,11 @@
-"""Phase-class object for BEFORE-turn compaction + transcript history load.
+"""Stage object for before-turn compaction + transcript history load.
 
-Owns the source slice that previously lived inline at
-``TurnRunner._run_turn`` between the AgentBootstrapStage seam (Agent
+Owns the per-turn slice between the AgentBootstrapStage seam (Agent
 construction) and the StreamConsumerStage seam (the
 ``async for event in agent.run_turn(...)`` loop). The harness invokes
 ``CompactionAndHistoryStage.run`` once per turn, AFTER
 AgentBootstrapStage and BEFORE the attachment-message build +
 stream-consumer loop.
-
-Activated by ``OPENSQUILLA_HARNESS_COMPACTION_AND_HISTORY=new``. Default
-is ``legacy`` — the inline body remains the source of truth until the
-equivalence harness has run for one release cycle (PR-C-9 deletes the
-legacy arm).
 
 Side-effect contract:
 
@@ -29,21 +23,21 @@ Side-effect contract:
 
 ``CompactionAndHistoryStage`` IS the first consumer of
 ``CompactionHook.before_compact`` / ``CompactionHook.after_compact``
-(Phase B reserved the protocol; this is where it lights up). Hook
+(engine hook seam reserved the protocol; this is where it lights up). Hook
 invocations are isolated with ``except Exception: pass`` to satisfy the
-Phase B isolation contract.
+engine hook seam isolation contract.
 
 NEVER terminates. Always returns ``StageOutcome.success(...)``. The
 ``StageOutcome`` shape is preserved for forward-compatibility with a
 future ``ErrorEvent`` early-yield branch.
 
-Phase D forward-compat: the four ports
+compaction forward-compat: the four ports
 (``T3UpgradeCompactionPort``, ``PreflightCompactionPort``,
 ``HistoryLoaderPort``, ``RequestContextPrependPort``) are shaped so
-Phase D can drop in replacement implementations (e.g. an incremental
+compaction can drop in replacement implementations (e.g. an incremental
 cut-point compactor) without revising the stage interface. The IN-TURN
 compaction seam (``CompactionEvent`` → ``persist_compaction_result``)
-lives in StreamConsumerStage (PR-C-7), NOT here, preserving the
+lives in StreamConsumerStage, NOT here, preserving the
 cache-friendly system-prompt-rebuild contract.
 """
 
@@ -57,24 +51,21 @@ if TYPE_CHECKING:
     from opensquilla.engine.hooks.types import CompactionHook
     from opensquilla.engine.turn_runner.outcome import StageOutcome
 
-
 # Internal sentinels mirroring the runtime.py module-level constants. The
 # stage body branches on ``t3_status`` to decide whether to fall through
 # to preflight; keeping a local copy avoids a runtime → stage import.
 _T3_NOT_APPLICABLE: str = "not_applicable"
 _T3_FLUSH_FAILED: str = "flush_failed"
 
-
 # ---------------------------------------------------------------------------
 # Ports — four narrow Protocols
 # ---------------------------------------------------------------------------
-
 
 @runtime_checkable
 class T3UpgradeCompactionPort(Protocol):
     """Wraps ``TurnRunner._maybe_compact_on_t3_upgrade``.
 
-    The legacy helper performs router-state inspection, circuit-breaker
+    The helper performs router-state inspection, circuit-breaker
     checks, flush coordination, and the actual
     ``SessionManager.compact`` call. The port wraps the public contract:
 
@@ -89,7 +80,7 @@ class T3UpgradeCompactionPort(Protocol):
 
     The port preserves the BEFORE-turn DB-mutation seam: every successful
     compaction writes to DB via the SessionManager before this method
-    returns. Phase D's eventual replacement implementation MUST also
+    returns. compaction's eventual replacement implementation MUST also
     write to DB before returning.
     """
 
@@ -102,7 +93,6 @@ class T3UpgradeCompactionPort(Protocol):
         compaction_provider: Any | None,
         compaction_model: str | None,
     ) -> str: ...
-
 
 @runtime_checkable
 class PreflightCompactionPort(Protocol):
@@ -127,7 +117,6 @@ class PreflightCompactionPort(Protocol):
         compaction_provider: Any | None,
         compaction_model: str | None,
     ) -> None: ...
-
 
 @runtime_checkable
 class HistoryLoaderPort(Protocol):
@@ -154,7 +143,6 @@ class HistoryLoaderPort(Protocol):
         trim_last_user: bool,
     ) -> str | None: ...
 
-
 @runtime_checkable
 class RequestContextPrependPort(Protocol):
     """Wraps ``_prepend_request_context_prompt`` (module-level pure helper).
@@ -177,11 +165,9 @@ class RequestContextPrependPort(Protocol):
         prepended: str | None,
     ) -> str | None: ...
 
-
 # ---------------------------------------------------------------------------
 # Stage I/O dataclasses (frozen)
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class CompactionAndHistoryStageInput:
@@ -195,10 +181,10 @@ class CompactionAndHistoryStageInput:
     ``_run_turn`` call site.
     """
 
-    # From AgentBootstrapStage (PR-C-4)
+    # From AgentBootstrapStage
     agent: Agent
     context_window_tokens: int
-    # From PromptAssemblerStage (PR-C-3)
+    # From PromptAssemblerStage
     provider: Any
     resolved_model: str
     turn: Any  # post-pipeline pipeline.TurnContext
@@ -207,14 +193,13 @@ class CompactionAndHistoryStageInput:
     agent_id: str
     history_has_persisted_user: bool
 
-
 @dataclass(frozen=True)
 class CompactionAndHistoryStageOutput:
     """The pieces of state subsequent stages and the harness consume.
 
     - ``t3_upgrade_status``: one of the four ``_T3_*`` sentinels.
       Surfaced for observability + the equivalence harness snapshot;
-      NOT consumed by downstream stages. The legacy slice uses it only
+      NOT consumed by downstream stages. It is used only
       to decide whether to call preflight (folded into the stage body).
     - ``preflight_invoked``: ``True`` if ``preflight.maybe_compact``
       was called (i.e. the t3 path returned a fall-through sentinel),
@@ -222,7 +207,7 @@ class CompactionAndHistoryStageOutput:
     - ``compaction_summary_context``: the string passed to the
       prepender. ``None`` when no durable summaries exist. The
       equivalence harness asserts this is bit-identical between
-      legacy and new.
+      previous and current.
     - ``final_request_context_prompt``: the result of the prepend.
       The harness applies this to
       ``agent.config.request_context_prompt`` after the stage returns.
@@ -235,11 +220,9 @@ class CompactionAndHistoryStageOutput:
     compaction_summary_context: str | None
     final_request_context_prompt: str | None
 
-
 # ---------------------------------------------------------------------------
 # Stage
 # ---------------------------------------------------------------------------
-
 
 class CompactionAndHistoryStage:
     """Compact (if needed), load history, prepend compaction context.
@@ -261,7 +244,7 @@ class CompactionAndHistoryStage:
 
     Exception model: re-raises ``asyncio.CancelledError`` from any
     port. Other exceptions from t3/preflight ports are swallowed
-    internally by the helpers (the legacy slice has no surrounding
+    internally by the helpers (no surrounding
     try/except). History/prepender exceptions propagate to the outer
     terminal handler in ``_run_turn``.
     """
@@ -356,7 +339,7 @@ class CompactionAndHistoryStage:
         for hook in self._compaction_hooks:
             try:
                 await hook.before_compact(state)
-            except Exception:  # noqa: BLE001 — Phase B hook isolation contract
+            except Exception:  # noqa: BLE001 — engine hook seam hook isolation contract
                 # A buggy hook MUST NOT break the turn. Swallow per
                 # protocol; observability is the runtime's concern.
                 pass
@@ -365,5 +348,5 @@ class CompactionAndHistoryStage:
         for hook in self._compaction_hooks:
             try:
                 await hook.after_compact(state, outcome)
-            except Exception:  # noqa: BLE001 — Phase B hook isolation contract
+            except Exception:  # noqa: BLE001 — engine hook seam hook isolation contract
                 pass

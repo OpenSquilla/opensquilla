@@ -255,11 +255,10 @@ class ServiceContainer:
     model_catalog: ModelCatalog | None = None
     agent_registry: Any = None
     memory_managers: dict[str, MemoryManager] = field(default_factory=dict)
-    # Legacy per-tier dicts. As of Step 1A these are derived views over
+    # Legacy per-tier dicts. These are derived views over
     # `memory_managers` populated in build_services(); direct ServiceContainer
-    # constructors (e.g. tests) may still set them independently. Step 1B
-    # will collapse the consumers in TurnRunner / CLI onto `memory_managers`,
-    # at which point these legacy fields can be removed.
+    # constructors (e.g. tests) may still set them independently. Once all
+    # consumers use `memory_managers`, these legacy fields can be removed.
     memory_stores: dict[str, LongTermMemoryStore] = field(default_factory=dict)
     memory_sync_managers: dict[str, MemoryFileWatcher] = field(default_factory=dict)
     memory_watchers: list[MemoryFileWatcher] = field(default_factory=list)
@@ -1241,7 +1240,7 @@ async def build_services(
         memory_managers = await build_memory_managers(config, agent_ids)
 
         # Derive legacy per-tier views from the managers. These remain in
-        # `ServiceContainer` until Step 1B migrates downstream consumers
+        # `ServiceContainer` until downstream consumers
         # (TurnRunner, CLI, memory_tools) onto `memory_managers` directly.
         memory_stores = {aid: m.store for aid, m in memory_managers.items()}
         memory_retrievers = {aid: m.retriever for aid, m in memory_managers.items()}
@@ -1470,7 +1469,7 @@ def build_turn_runner_from_services(
     resolved_config = config if config is not None else svc.config
     # Standalone lock dict for CLI / test paths (no TaskRuntime involved).
     # Gateway path replaces this with task_runtime._get_session_lock_for_turn
-    # immediately after task_runtime is constructed (see boot.py §7b wiring).
+    # immediately after task_runtime is constructed.
     _standalone_locks: dict[str, _asyncio.Lock] = {}
 
     def _standalone_lock_provider(session_key: str) -> _asyncio.Lock:
@@ -1490,9 +1489,9 @@ def build_turn_runner_from_services(
         session_flush_service=getattr(svc, "flush_service", None),
         session_lock_provider=_standalone_lock_provider,
         diagnostics_state=diagnostics_state,
-        # Phase B + Phase C hook registries — forwarded from services when
-        # present so any future user-registered TurnHook / CompactionHook
-        # instance flows through to TurnRunner without another boot edit.
+        # Hook registries forwarded from services when present so any future
+        # user-registered TurnHook / CompactionHook instance flows through to
+        # TurnRunner without another boot edit.
         # None today (no production services expose either registry); the
         # plumbing stays here so the path is wired end-to-end.
         turn_hooks=getattr(svc, "turn_hooks", None),

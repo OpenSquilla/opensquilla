@@ -59,10 +59,10 @@ def _make_resolve_provider_probe(state: _ProbeState):
         # Walk up the call stack until we find ``_run_turn``'s frame —
         # identified by the presence of ``runtime_message`` AND
         # ``semantic_input`` AND ``extra_prompt_context`` in ``f_locals``.
-        # When PR-C-2's ProviderAndToolsStage is active (``=new``),
+        # When's ProviderAndToolsStage is active (``=new``),
         # ``_resolve_provider`` is invoked one+ frames below ``_run_turn``;
         # the legacy arm calls it directly. This lets the same probe work
-        # under both PR-C-2 modes.
+        # under both modes.
         frame = sys._getframe(1)
         while frame is not None:
             locs = frame.f_locals
