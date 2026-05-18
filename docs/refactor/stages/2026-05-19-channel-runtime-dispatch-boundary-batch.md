@@ -306,11 +306,32 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 ## Completion Record
 
 - Worker commits:
-  - channel-inflight:
-  - channel-replies-streaming:
-  - channel-message-io:
+  - channel-inflight: `a231f96` (`Extract channel inflight boundary`)
+  - channel-replies-streaming: `7464f24` (`Extract channel replies and streaming relay`)
+  - channel-message-io: `f925850` (`Extract channel message IO boundary`)
 - Child integration commits:
+  - `c16f169` (`Merge channel inflight boundary worker`)
+  - `237f2f0` (`Merge channel replies streaming worker`)
+  - `e9b39af` (`Merge channel message IO worker`)
+  - `6a7ef56` (`Resolve channel runtime boundary import ordering`)
 - Integration merge:
+  - Pending integration branch merge.
 - Verification evidence:
+  - Worker `channel-inflight` RED: `uv run --extra dev pytest tests/test_gateway/test_channel_inflight_boundary.py -q` failed as expected because `opensquilla.gateway.channel_inflight` did not exist.
+  - Worker `channel-replies-streaming` RED: `uv run --extra dev pytest tests/test_gateway/test_channel_replies_streaming_boundary.py -q` failed as expected because `channel_replies` / `channel_streaming` did not exist and moved definitions still lived in `channel_dispatch.py`.
+  - Worker `channel-message-io` RED: `uv run --extra dev pytest tests/test_gateway/test_channel_message_io_boundary.py -q` failed as expected because `channel_message_io` did not exist and moved helper definitions still lived in `channel_dispatch.py`.
+  - Worker full gates passed independently:
+    - `channel-inflight`: `2493 passed, 8 skipped`; gateway smoke passed.
+    - `channel-replies-streaming`: `2495 passed, 8 skipped`; gateway smoke passed.
+    - `channel-message-io`: `2493 passed, 8 skipped`; gateway smoke passed.
+  - Main merge focused check after conflict resolution:
+    - `uv run --extra dev pytest tests/test_gateway/test_channel_inflight_boundary.py tests/test_gateway/test_channel_replies_streaming_boundary.py tests/test_gateway/test_channel_message_io_boundary.py tests/test_gateway/test_channel_concurrent_dispatch.py tests/test_gateway/test_channel_dispatch_realtime.py tests/test_gateway/test_channel_dispatch_ghost_turn.py tests/test_channels/test_channel_manager_ingress.py -q`
+    - `67 passed`.
+  - Main touched-file ruff: all checks passed.
+  - Main mypy: success, no issues found in 521 source files.
+  - Main `git diff --check`: clean.
+  - Child full gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 521 source files; whitespace passed; pytest `2505 passed, 8 skipped, 2 warnings`; gateway smoke start/status/stop/status passed.
 - Residual risk:
+  - Low to medium. Behavior was preserved by existing runtime, realtime, artifact, ghost-turn, and in-flight tests, and compatibility aliases remain on `gateway.channel_dispatch`. The orchestrator still owns several smaller runtime helpers (`_build_reply_message`, `_status_reactor`, `_streaming_reply_kwargs`, `_text_delta_from_event`) that can move in a later cleanup after this larger boundary batch settles.
 - Next recommended slice:
+  - Continue with a Tools/Sandbox security boundary batch or a Web UI RPC/view-state contract batch; Channels now has a cleaner dispatch runtime boundary and should rest unless integration gate finds regressions.
