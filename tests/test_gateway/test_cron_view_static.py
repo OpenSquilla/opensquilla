@@ -67,3 +67,15 @@ def test_cron_form_exposes_timezone_and_advanced_delivery() -> None:
     assert "payload.tz = tz" in source
     assert "payload.wakeMode = wakeMode" in source
     assert "payload.delivery = delivery" in source
+
+
+def test_cron_form_exposes_all_schedule_kinds_and_sends_schedule_object() -> None:
+    source = CRON_JS.read_text(encoding="utf-8")
+
+    assert '<option value="cron">Cron expression</option>' in source
+    assert '<option value="every">Fixed interval</option>' in source
+    assert '<option value="at">One-time ISO time</option>' in source
+    assert "payload.schedule = { kind: 'cron'" in source
+    assert "payload.schedule = { kind: 'every'" in source
+    assert "payload.schedule = { kind: 'at'" in source
+    assert "Only cron expressions are supported currently" not in source

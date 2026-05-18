@@ -44,6 +44,27 @@ async def test_ops_add_cron_persists_canonical_expression(tmp_path: Path) -> Non
         await store.close()
 
 
+async def test_ops_add_persists_creator_owner_boundary(tmp_path: Path) -> None:
+    store, ops = await _open_ops(tmp_path)
+    try:
+        job = await ops.add(
+            name="owner-job",
+            handler_key="agent_run",
+            payload=make_agent_turn_payload("ping"),
+            session_target=SessionTarget.ISOLATED,
+            schedule_kind=ScheduleKind.CRON,
+            schedule_value="*/5 * * * *",
+            creator_is_owner=True,
+        )
+
+        reloaded = await store.get(job.id)
+
+        assert reloaded is not None
+        assert reloaded.creator_is_owner is True
+    finally:
+        await store.close()
+
+
 async def test_ops_add_every_seconds_records_anchor(tmp_path: Path) -> None:
     store, ops = await _open_ops(tmp_path)
     try:

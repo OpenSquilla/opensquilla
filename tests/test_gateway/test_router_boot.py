@@ -800,3 +800,62 @@ async def test_task_runtime_turn_applies_cron_job_tool_policy() -> None:
     assert tool_context.allowed_tools == {"session_status"}
     assert "exec_command" in tool_context.denied_tools
     assert "web_fetch" in tool_context.denied_tools
+
+
+@pytest.mark.asyncio
+async def test_task_runtime_turn_uses_owner_boundary_for_owner_cron_job() -> None:
+    class RecordingTurnRunner:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def run(self, message: str, session_key: str, **kwargs: Any):
+            self.calls.append(kwargs)
+            yield DoneEvent()
+
+    async def emit(session_key: str, event_name: str, payload: dict[str, Any]) -> None:
+        return None
+
+    job = CronJob(
+        id="cron-owner",
+        name="Owner",
+        payload={"kind": "agent_turn", "agent_id": "ops"},
+        creator_is_owner=True,
+        tool_policy={
+            "profile": "minimal",
+            "also_allow": ["memory_search", "exec_command"],
+            "deny": ["web_fetch"],
+        },
+    )
+    run = SimpleNamespace(
+        agent_id="ops",
+        task_id="task-1",
+        session_key="cron:cron-owner:run:1",
+        message="hello",
+        envelope=build_cron_route_envelope(
+            job,
+            session_key="cron:cron-owner:run:1",
+            agent_id="ops",
+        ),
+        attachments=[],
+        input_provenance={},
+        run_kind="cron_turn",
+        no_memory_capture=False,
+        ingress_pipeline_steps=[],
+        semantic_message=None,
+        stream_event_sink=None,
+    )
+    runner = RecordingTurnRunner()
+
+    await dispatch_task_runtime_turn(
+        run,
+        config=GatewayConfig(),
+        session_manager=None,
+        turn_runner=runner,
+        event_emitter=emit,
+    )
+
+    tool_context = runner.calls[0]["tool_context"]
+    assert tool_context.is_owner is True
+    assert tool_context.allowed_tools is None
+    assert tool_context.tool_policy == job.tool_policy
+    assert "exec_command" not in tool_context.denied_tools

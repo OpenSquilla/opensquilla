@@ -11,6 +11,7 @@ from opensquilla.gateway.routing import (
     build_web_route_envelope,
     tool_context_from_envelope,
 )
+from opensquilla.gateway.boot import _task_runtime_envelope_owner
 from opensquilla.tools.policy import ToolSurfaceCapabilities, resolve_runtime_tool_surface
 from opensquilla.tools.types import CallerKind, InteractionMode
 
@@ -84,3 +85,41 @@ def test_unattended_cli_denies_runtime_dependent_tools_but_keeps_session_reads()
     assert "sessions_list" not in ctx.denied_tools
     assert "sessions_history" not in ctx.denied_tools
     assert "session_status" not in ctx.denied_tools
+
+
+def test_owner_cron_route_carries_owner_principal_for_task_runtime() -> None:
+    cron_job = SimpleNamespace(id="job-owner", name="owner", creator_is_owner=True)
+
+    envelope = build_cron_route_envelope(cron_job, session_key="cron:job-owner")
+
+    assert envelope.metadata["principal_is_owner"] is True
+    assert _task_runtime_envelope_owner(envelope) is True
+
+
+def test_owner_cron_route_uses_owner_grade_tool_boundary() -> None:
+    cron_job = SimpleNamespace(id="job-owner", name="owner", creator_is_owner=True)
+    envelope = build_cron_route_envelope(cron_job, session_key="cron:job-owner")
+
+    ctx = tool_context_from_envelope(
+        envelope,
+        is_owner=_task_runtime_envelope_owner(envelope),
+    )
+
+    assert ctx.caller_kind is CallerKind.CRON
+    assert ctx.is_owner is True
+    assert ctx.allowed_tools is None
+    assert "exec_command" not in ctx.denied_tools
+    assert "write_file" not in ctx.denied_tools
+
+
+def test_non_owner_cron_route_keeps_restricted_tool_boundary() -> None:
+    cron_job = SimpleNamespace(id="job-user", name="user")
+    envelope = build_cron_route_envelope(cron_job, session_key="cron:job-user")
+
+    ctx = tool_context_from_envelope(envelope)
+
+    assert ctx.caller_kind is CallerKind.CRON
+    assert ctx.is_owner is False
+    assert ctx.allowed_tools is not None
+    assert "exec_command" not in ctx.allowed_tools
+    assert "exec_command" in ctx.denied_tools

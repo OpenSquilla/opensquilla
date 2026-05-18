@@ -86,6 +86,8 @@ const CronView = (() => {
             <label class="cron-field__label" for="cp-type">Schedule type</label>
             <select class="cron-field__input" id="cp-type">
               <option value="cron">Cron expression</option>
+              <option value="every">Fixed interval</option>
+              <option value="at">One-time ISO time</option>
             </select>
           </div>
 
@@ -112,8 +114,8 @@ const CronView = (() => {
           </div>
 
           <div class="cron-field" id="cp-at-row" hidden>
-            <label class="cron-field__label" for="cp-at">Time (HH:MM)</label>
-            <input class="cron-field__input" id="cp-at" type="text" placeholder="09:00">
+            <label class="cron-field__label" for="cp-at">ISO time</label>
+            <input class="cron-field__input cron-field__input--mono" id="cp-at" type="text" placeholder="2026-05-18T09:00:00+08:00">
           </div>
 
           <div class="cron-field" id="cp-tz-row">
@@ -889,6 +891,8 @@ const CronView = (() => {
     const tpl = template || {};
     const name = job ? (job.name || '') : (tpl.name || '');
     const message = job ? (job.message || job.prompt || '') : (tpl.message || '');
+    const scheduleKind = job ? (job.scheduleKind || job.schedule_kind || 'cron')
+      : (tpl.scheduleKind || tpl.schedule_kind || 'cron');
     const expression = job ? (job.expression || '') : (tpl.expression || '');
     const activeSessionKey = _activeChatSessionKey();
     const payloadKind = job ? (job.payloadKind || 'agent_turn')
@@ -904,10 +908,14 @@ const CronView = (() => {
     _el.querySelector('#cp-payload-kind').value = payloadKind;
     _el.querySelector('#cp-session-target').value = sessionTarget;
     _el.querySelector('#cp-target-session-key').value = targetSessionKey;
-    _el.querySelector('#cp-type').value = 'cron';
+    _el.querySelector('#cp-type').value = scheduleKind;
     _el.querySelector('#cp-cron').value = expression;
-    _el.querySelector('#cp-every').value = job ? (job.every_seconds || '') : '';
-    _el.querySelector('#cp-at').value = job ? (job.at_time || '') : '';
+    _el.querySelector('#cp-every').value = scheduleKind === 'every'
+      ? (job ? (job.scheduleRaw || job.schedule_raw || '') : (tpl.every_seconds || ''))
+      : '';
+    _el.querySelector('#cp-at').value = scheduleKind === 'at'
+      ? (job ? (job.scheduleRaw || job.schedule_raw || '') : (tpl.at || ''))
+      : '';
     _el.querySelector('#cp-tz').value = job ? (job.tz || '') : (tpl.tz || '');
     _el.querySelector('#cp-wake-mode').value = job ? (job.wakeMode || job.wake_mode || 'now') : (tpl.wakeMode || 'now');
     _populateDeliveryFields(job);
@@ -1128,11 +1136,26 @@ const CronView = (() => {
     const targetSessionKey = _el.querySelector('#cp-target-session-key').value.trim();
 
     const payload = { name, enabled, payloadKind, agentId, sessionTarget, text: message };
-    if (type !== 'cron') { UI.toast('Only cron expressions are supported currently', 'warn'); return; }
-    payload.expression = _el.querySelector('#cp-cron').value.trim();
+    if (type === 'cron') {
+      payload.schedule = { kind: 'cron', expr: _el.querySelector('#cp-cron').value.trim() };
+    } else if (type === 'every') {
+      const everySeconds = Number(_el.querySelector('#cp-every').value);
+      if (!Number.isInteger(everySeconds) || everySeconds < 1) {
+        UI.toast('Interval must be an integer number of seconds', 'warn');
+        return;
+      }
+      payload.schedule = { kind: 'every', every_seconds: everySeconds };
+    } else if (type === 'at') {
+      const at = _el.querySelector('#cp-at').value.trim();
+      if (!at) { UI.toast('ISO time is required', 'warn'); return; }
+      payload.schedule = { kind: 'at', at };
+    }
 
     const tz = _el.querySelector('#cp-tz').value.trim();
-    if (tz) payload.tz = tz;
+    if (tz) {
+      payload.tz = tz;
+      if (payload.schedule && payload.schedule.kind === 'cron') payload.schedule.tz = tz;
+    }
 
     const wakeMode = _el.querySelector('#cp-wake-mode').value;
     if (wakeMode && wakeMode !== 'now') payload.wakeMode = wakeMode;

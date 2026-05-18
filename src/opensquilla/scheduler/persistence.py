@@ -90,6 +90,7 @@ _NEW_COLUMNS: list[tuple[str, str]] = [
     ("anchor_at", "TEXT"),
     ("creator_session_key", "TEXT NOT NULL DEFAULT ''"),
     ("creator_sender_id", "TEXT NOT NULL DEFAULT ''"),
+    ("creator_is_owner", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -140,6 +141,7 @@ def _row_to_job(row: aiosqlite.Row) -> CronJob:
         anchor_at=_dt(_get("anchor_at")),
         creator_session_key=_get("creator_session_key", "") or "",
         creator_sender_id=_get("creator_sender_id", "") or "",
+        creator_is_owner=bool(_get("creator_is_owner", 0)),
         session_target=session_target,
         session_key=session_key,
         timeout_seconds=_get("timeout_seconds", 600.0) or 600.0,
@@ -447,8 +449,8 @@ class JobStore:
                  consecutive_errors, delivery_json, origin_session_key,
                  reservation_token, reserved_at, reserved_by, reservation_source,
                  scheduled_run_at, tool_policy_json, tz, anchor_at,
-                 creator_session_key, creator_sender_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 creator_session_key, creator_sender_id, creator_is_owner)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
                 cron_expr=excluded.cron_expr,
@@ -484,7 +486,8 @@ class JobStore:
                 tz=excluded.tz,
                 anchor_at=excluded.anchor_at,
                 creator_session_key=excluded.creator_session_key,
-                creator_sender_id=excluded.creator_sender_id
+                creator_sender_id=excluded.creator_sender_id,
+                creator_is_owner=excluded.creator_is_owner
             """,
             (
                 job.id,
@@ -524,6 +527,7 @@ class JobStore:
                 self._iso(job.anchor_at),
                 job.creator_session_key or "",
                 job.creator_sender_id or "",
+                1 if job.creator_is_owner else 0,
             ),
         )
 

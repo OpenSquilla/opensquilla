@@ -57,6 +57,32 @@ def test_cron_route_tool_policy_can_only_narrow_or_extend_cron_baseline() -> Non
     assert "exec_command" in result.denied_tools
 
 
+def test_owner_cron_route_does_not_apply_non_owner_cron_allowlist() -> None:
+    job = CronJob(
+        id="owner-policy",
+        name="Owner Policy",
+        creator_is_owner=True,
+        tool_policy={
+            "profile": "minimal",
+            "also_allow": ["memory_search", "exec_command"],
+            "deny": ["web_fetch"],
+        },
+    )
+
+    envelope = build_cron_route_envelope(
+        job,
+        session_key="cron:owner-policy:run:1",
+        agent_id="main",
+    )
+    result = tool_context_from_envelope(envelope, is_owner=True)
+
+    assert result.caller_kind is CallerKind.CRON
+    assert result.is_owner is True
+    assert result.allowed_tools is None
+    assert result.tool_policy == job.tool_policy
+    assert "exec_command" not in result.denied_tools
+
+
 def test_policy_deny_lists_do_not_reference_removed_agent_wrapper_tools() -> None:
     assert "spawn_subagent" not in SUBAGENT_TOOL_DENY
     assert "send_message" not in SUBAGENT_TOOL_DENY

@@ -121,8 +121,10 @@ def private_memory_read_tools_blocked(ctx: ToolContext | None) -> bool:
 
     if ctx is None:
         return False
-    if ctx.caller_kind in {CallerKind.SUBAGENT, CallerKind.CRON}:
+    if ctx.caller_kind is CallerKind.SUBAGENT:
         return True
+    if ctx.caller_kind is CallerKind.CRON:
+        return not ctx.is_owner
     if ctx.caller_kind is CallerKind.CHANNEL and not ctx.session_key:
         return True
     if not ctx.session_key:

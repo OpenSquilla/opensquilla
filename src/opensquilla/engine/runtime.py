@@ -2842,6 +2842,15 @@ class TurnRunner:
                 available_tools=self._tool_registry.list_names(),
                 config=self._config,
             )
+            if ctx.tool_policy:
+                from opensquilla.tools.policy import apply_tool_policy_layer
+
+                ctx = apply_tool_policy_layer(
+                    ctx,
+                    ctx.tool_policy,
+                    available_tools=self._tool_registry.list_names(),
+                    hard_denied=None,
+                )
             ctx = self._apply_runtime_capability_denies(ctx)
             log.debug(
                 "tool_policy.policy_pre",

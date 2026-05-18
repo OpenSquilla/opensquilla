@@ -242,6 +242,17 @@ class ToolRegistry:
             )
         if explicit_kind is CallerKind.CRON or (session_key and session_key.startswith("cron:")):
             mode = explicit_interaction or InteractionMode.UNATTENDED
+            if is_owner:
+                ctx = ToolContext(
+                    is_owner=True,
+                    caller_kind=CallerKind.CRON,
+                    interaction_mode=mode,
+                    agent_id=agent_id or "main",
+                )
+                return resolve_runtime_tool_surface(
+                    ctx,
+                    capabilities=tool_surface_capabilities,
+                )
             ctx = ToolContext(
                 is_owner=False,
                 caller_kind=CallerKind.CRON,

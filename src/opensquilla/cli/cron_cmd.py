@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import typer
 from rich.table import Table
@@ -65,6 +65,72 @@ def _parse_duration_seconds(value: str | float | None) -> float | None:
     qty = float(match.group(1))
     unit = match.group(2) or ""
     return qty * _DURATION_UNIT_SECONDS[unit]
+
+
+def _build_schedule_param(
+    *,
+    expression: str | None,
+    cron: str | None,
+    every: str | int | float | None,
+    at: str | None,
+    tz: str | None,
+) -> dict[str, Any]:
+    sources = [
+        ("expression", expression.strip() if isinstance(expression, str) else expression),
+        ("cron", cron.strip() if isinstance(cron, str) else cron),
+        ("every", every),
+        ("at", at.strip() if isinstance(at, str) else at),
+    ]
+    provided = [(name, value) for name, value in sources if value not in (None, "")]
+    if len(provided) != 1:
+        raise typer.BadParameter(
+            "provide exactly one schedule source: --expression, --cron, --every, or --at"
+        )
+    name, value = provided[0]
+    if name == "expression":
+        return {"expression": str(value)}
+    if name == "cron":
+        schedule: dict[str, Any] = {"kind": "cron", "expr": str(value)}
+        if tz:
+            schedule["tz"] = tz
+        return {"schedule": schedule}
+    if name == "every":
+        seconds = _parse_duration_seconds(value)
+        if seconds is None or seconds < 1:
+            raise typer.BadParameter("--every must be a duration >= 1 second")
+        if not seconds.is_integer():
+            raise typer.BadParameter("--every must resolve to whole seconds")
+        return {"schedule": {"kind": "every", "every_seconds": int(seconds)}}
+    return {"schedule": {"kind": "at", "at": str(value)}}
+
+
+def _build_optional_schedule_param(
+    *,
+    expression: str | None,
+    cron: str | None,
+    every: str | int | float | None,
+    at: str | None,
+    tz: str | None,
+) -> dict[str, Any]:
+    sources = [
+        expression.strip() if isinstance(expression, str) else expression,
+        cron.strip() if isinstance(cron, str) else cron,
+        every,
+        at.strip() if isinstance(at, str) else at,
+    ]
+    if all(value in (None, "") for value in sources):
+        return {}
+    if sum(1 for value in sources if value not in (None, "")) > 1:
+        raise typer.BadParameter(
+            "provide at most one schedule source: --expression, --cron, --every, or --at"
+        )
+    return _build_schedule_param(
+        expression=expression,
+        cron=cron,
+        every=every,
+        at=at,
+        tz=tz,
+    )
 
 
 def _resolve_webhook_token(
@@ -353,7 +419,18 @@ def cron_status(
 
 @cron_app.command("add")
 def cron_add(
-    expression: str = typer.Option(..., "--expression", help="Cron expression"),
+    expression: Annotated[
+        str | None, typer.Option("--expression", help="Cron expression")
+    ] = None,
+    cron: Annotated[
+        str | None, typer.Option("--cron", help="Cron expression schedule")
+    ] = None,
+    every: Annotated[
+        str | None, typer.Option("--every", help="Fixed interval, e.g. 30s, 5m, 1h")
+    ] = None,
+    at: Annotated[
+        str | None, typer.Option("--at", help="One-time ISO-8601 time with timezone")
+    ] = None,
     text: str = typer.Option(..., "--text", help="Prompt text to run"),
     name: str | None = typer.Option(None, "--name", help="Display name"),
     agent: str | None = typer.Option(None, "--agent", help="Agent id"),
@@ -490,7 +567,22 @@ def cron_add(
     """Add a scheduled cron job."""
 
     target = _validate_session_target(session_target)
-    params: dict[str, Any] = {"expression": expression, "text": text, "sessionTarget": target}
+    if target == "current":
+        raise typer.BadParameter(
+            "--session-target current is only available from session-bound clients; "
+            "use the WebUI/current chat surface or choose --session-target isolated"
+        )
+    params: dict[str, Any] = {
+        **_build_schedule_param(
+            expression=expression,
+            cron=cron,
+            every=every,
+            at=at,
+            tz=tz,
+        ),
+        "text": text,
+        "sessionTarget": target,
+    }
     if name:
         params["name"] = name
     if agent:
@@ -553,7 +645,18 @@ def cron_add(
 @cron_app.command("update")
 def cron_update(
     job_id: str = typer.Argument(..., help="Cron job id"),
-    expression: str | None = typer.Option(None, "--expression", help="Cron expression"),
+    expression: Annotated[
+        str | None, typer.Option("--expression", help="Cron expression")
+    ] = None,
+    cron: Annotated[
+        str | None, typer.Option("--cron", help="Cron expression schedule")
+    ] = None,
+    every: Annotated[
+        str | None, typer.Option("--every", help="Fixed interval, e.g. 30s, 5m, 1h")
+    ] = None,
+    at: Annotated[
+        str | None, typer.Option("--at", help="One-time ISO-8601 time with timezone")
+    ] = None,
     text: str | None = typer.Option(None, "--text", help="Prompt text to run"),
     name: str | None = typer.Option(None, "--name", help="Display name"),
     enabled: bool | None = typer.Option(None, "--enabled/--disabled", help="Enable/disable job"),
@@ -628,8 +731,15 @@ def cron_update(
     """
 
     params: dict[str, Any] = {"id": job_id}
-    if expression is not None:
-        params["expression"] = expression
+    params.update(
+        _build_optional_schedule_param(
+            expression=expression,
+            cron=cron,
+            every=every,
+            at=at,
+            tz=tz,
+        )
+    )
     if text is not None:
         params["text"] = text
     if name is not None:

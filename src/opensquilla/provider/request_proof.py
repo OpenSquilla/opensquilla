@@ -205,6 +205,16 @@ def _compact_tool_input(value: Any) -> Any:
     }
 
 
+def _compact_text_block(block: dict[str, Any], *, emergency: bool = False) -> None:
+    text = block.get("text")
+    if not isinstance(text, str):
+        return
+    if emergency:
+        block["text"] = _emergency_compact_string(text, label="text_block")
+    else:
+        block["text"] = _compact_tail_string(text, label="text_block")
+
+
 def _compact_tool_payload_once(payload: dict[str, Any]) -> dict[str, Any]:
     compacted = deepcopy(payload)
     for message in compacted.get("messages", []):
@@ -292,6 +302,8 @@ def _compact_recent_tail_payload_once(
                     block["thinking"],
                     label="thinking_block",
                 )
+            elif message.get("role") == "assistant" and block.get("type") == "text":
+                _compact_text_block(block)
     return compacted, {"aggregate_tool_arguments_compacted": aggregate_tool_arguments}
 
 
@@ -352,6 +364,8 @@ def _emergency_compact_current_turn_payload_once(payload: dict[str, Any]) -> dic
                     block["thinking"],
                     label="thinking_block",
                 )
+            elif role == "assistant" and block.get("type") == "text":
+                _compact_text_block(block, emergency=True)
     return compacted
 
 

@@ -438,6 +438,35 @@ async def test_doctor_memory_status_deep_redacts_paths_and_raw_errors(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_doctor_memory_status_accepts_memory_backend_protocol_health(tmp_path):
+    class ProtocolBackend:
+        async def health(self):
+            return {
+                "backend": "sqlite",
+                "status": "ok",
+                "entryCount": 4,
+                "sizeBytes": 5,
+            }
+
+    manager = FakeMemoryManager(workspace_dir=tmp_path)
+    ctx = _ctx(memory_managers={"main": manager})
+    ctx.memory_backend = ProtocolBackend()
+
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "doctor.memory.status",
+        {"agentId": "main"},
+        ctx,
+    )
+
+    assert res.error is None, res.error
+    assert res.payload["backend"] == "sqlite"
+    assert res.payload["status"] == "ok"
+    assert res.payload["entryCount"] == 4
+    assert res.payload["sizeBytes"] == 5
+
+
+@pytest.mark.asyncio
 async def test_memory_index_force_rebuilds_then_force_syncs(tmp_path):
     store = FakeStore()
     manager = FakeMemoryManager(workspace_dir=tmp_path, store=store)

@@ -3,23 +3,17 @@
 from __future__ import annotations
 
 import json
-import re
-import unicodedata
 from typing import Any, Protocol
 
 import structlog
 
-from opensquilla.scheduler.parser import (
-    CronParseError,
-    parse_cron,
-    parse_iso_at,
-    validate_tz,
-)
 from opensquilla.scheduler.payloads import (
     SYSTEM_EVENT_KIND,
     make_agent_turn_payload,
     make_system_event_payload,
 )
+from opensquilla.scheduler.prompt_safety import scan_cron_prompt as _scan_cron_prompt
+from opensquilla.scheduler.schedule_normalizer import coerce_schedule_from_params
 from opensquilla.scheduler.types import (
     DeliveryConfig,
     DeliveryMode,
@@ -33,63 +27,6 @@ from opensquilla.tools.types import ToolError
 log = structlog.get_logger(__name__)
 
 _VALID_CRON_ACTIONS = ("list", "add", "remove", "run")
-
-
-# ---------------------------------------------------------------------------
-# Cron prompt injection scanner
-# ---------------------------------------------------------------------------
-
-# Hard-block patterns — always rejected
-_HARD_BLOCK_PATTERNS: list[re.Pattern[str]] = [
-    # Invisible unicode characters
-    re.compile(r"[\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]"),
-    # Exfiltration via curl/wget with variable interpolation
-    re.compile(r"(curl|wget)\s+.*(\{\{|\\$[\w{])", re.IGNORECASE),
-    # Destructive system commands
-    re.compile(r"rm\s+-rf\s+/", re.IGNORECASE),
-    re.compile(r"mkfs\.", re.IGNORECASE),
-    re.compile(r":(){ :\|:& };:", re.IGNORECASE),  # fork bomb
-]
-
-# Soft-block patterns — logged as warning, still rejected
-_SOFT_BLOCK_PATTERNS: list[re.Pattern[str]] = [
-    # Instruction injection
-    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
-    re.compile(r"you\s+are\s+now\s+", re.IGNORECASE),
-    re.compile(r"system\s*:\s*", re.IGNORECASE),
-    re.compile(r"<\|im_start\|>", re.IGNORECASE),
-    re.compile(r"disregard\s+(all\s+)?prior", re.IGNORECASE),
-    # SQL destructive
-    re.compile(r"\b(DROP|TRUNCATE)\s+(TABLE|DATABASE)\b", re.IGNORECASE),
-]
-
-
-def _scan_cron_prompt(task: str) -> tuple[bool, str]:
-    """Scan a cron task prompt for injection/exfiltration patterns.
-
-    Returns (blocked: bool, reason: str). If blocked is True, the prompt
-    should be rejected.
-    """
-    # Check for invisible unicode characters
-    for char in task:
-        cat = unicodedata.category(char)
-        if cat in ("Cf", "Mn", "Cc") and char not in ("\n", "\r", "\t"):
-            log.warning("cron_prompt_blocked", pattern="invisible_unicode", char=repr(char))
-            return True, f"Blocked: invisible unicode character detected ({repr(char)})"
-
-    # Hard-block patterns
-    for pattern in _HARD_BLOCK_PATTERNS:
-        if pattern.search(task):
-            log.warning("cron_prompt_blocked", pattern=pattern.pattern)
-            return True, f"Blocked: dangerous pattern detected ({pattern.pattern})"
-
-    # Soft-block patterns
-    for pattern in _SOFT_BLOCK_PATTERNS:
-        if pattern.search(task):
-            log.warning("cron_prompt_blocked", pattern=pattern.pattern, severity="soft")
-            return True, f"Blocked: potential injection pattern ({pattern.pattern})"
-
-    return False, ""
 
 
 _VALID_GATEWAY_ACTIONS = ("restart", "config_get", "config_set")
@@ -119,6 +56,7 @@ class _SchedulerProtocol(Protocol):
         jitter_seconds: float | None = None,
         creator_session_key: str = "",
         creator_sender_id: str = "",
+        creator_is_owner: bool = False,
     ) -> Any: ...
 
     async def update_job(self, job_id: str, **patch: Any) -> Any: ...
@@ -162,6 +100,8 @@ def gateway_config_available() -> bool:
 
 def _coerce_tool_schedule(
     schedule: Any,
+    *,
+    tz: str = "",
 ) -> tuple[ScheduleKind, str, str]:
     """Validate the structured `schedule` param from the LLM tool call.
 
@@ -177,88 +117,10 @@ def _coerce_tool_schedule(
             "{kind: 'cron'|'every'|'at', ...}; "
             f"got {type(schedule).__name__}"
         )
-    kind_raw = schedule.get("kind")
-    if not isinstance(kind_raw, str) or not kind_raw:
-        raise ToolError("schedule.kind must be one of: cron, every, at")
     try:
-        kind = ScheduleKind(kind_raw)
+        return coerce_schedule_from_params({"schedule": schedule, "tz": tz})
     except ValueError as exc:
-        raise ToolError(
-            f"schedule.kind must be one of: cron, every, at; got {kind_raw!r}"
-        ) from exc
-
-    if kind == ScheduleKind.CRON:
-        expr = schedule.get("expr")
-        if not isinstance(expr, str) or not expr.strip():
-            raise ToolError(
-                "schedule.expr required when kind='cron'; "
-                "expected 5-field POSIX cron, e.g. '*/5 * * * *'"
-            )
-        expr = expr.strip()
-        try:
-            parse_cron(expr)
-        except CronParseError as exc:
-            raise ToolError(
-                f"schedule.expr invalid: {exc}; expected 5-field POSIX cron"
-            ) from exc
-        tz_raw = schedule.get("tz") or ""
-        if not isinstance(tz_raw, str):
-            raise ToolError(
-                "schedule.tz must be a string IANA timezone name like 'Asia/Shanghai'"
-            )
-        tz_value = tz_raw.strip()
-        try:
-            validate_tz(tz_value)
-        except ValueError as exc:
-            raise ToolError(
-                f"schedule.tz invalid: {exc}; expected IANA name like 'Asia/Shanghai'"
-            ) from exc
-        return kind, expr, tz_value
-
-    if kind == ScheduleKind.EVERY:
-        every_seconds = schedule.get("every_seconds")
-        if not isinstance(every_seconds, int) or isinstance(every_seconds, bool):
-            raise ToolError(
-                "schedule.every_seconds required (integer >= 1) when kind='every'"
-            )
-        if every_seconds < 1:
-            raise ToolError("schedule.every_seconds must be >= 1 second")
-        anchor_at = schedule.get("anchor_at")
-        if anchor_at is not None and anchor_at != "":
-            if not isinstance(anchor_at, str):
-                raise ToolError(
-                    "schedule.anchor_at must be ISO-8601 with timezone, "
-                    "e.g. '2026-05-15T09:00:00+08:00'"
-                )
-            try:
-                parse_iso_at(anchor_at)
-            except CronParseError as exc:
-                raise ToolError(
-                    f"schedule.anchor_at must be ISO-8601 with timezone: {exc}"
-                ) from exc
-        return kind, str(every_seconds), ""
-
-    # kind == ScheduleKind.AT
-    at_raw = schedule.get("at")
-    if not isinstance(at_raw, str) or not at_raw.strip():
-        raise ToolError(
-            "schedule.at required when kind='at'; "
-            "expected ISO-8601 with timezone, e.g. '2026-05-15T09:00:00+08:00'"
-        )
-    try:
-        parse_iso_at(at_raw)
-    except CronParseError as exc:
-        msg = str(exc)
-        if "timezone" in msg.lower():
-            raise ToolError(
-                "schedule.at must include a timezone offset, "
-                "e.g. '2026-05-15T09:00:00+08:00'"
-            ) from exc
-        raise ToolError(
-            f"schedule.at invalid: {exc}; "
-            "expected ISO-8601 with timezone like '2026-05-15T09:00:00+08:00'"
-        ) from exc
-    return kind, at_raw.strip(), ""
+        raise ToolError(str(exc)) from exc
 
 
 def _owns_cron_job(job: Any, sender_id: str, session_key: str) -> bool:
@@ -283,7 +145,10 @@ def _owns_cron_job(job: Any, sender_id: str, session_key: str) -> bool:
         "Use this tool (NOT exec_command or background_process) for any recurring/timed "
         "task scheduling or reminders. Translate any natural language into the "
         "structured schedule shape yourself; the tool will not parse free-form text. "
-        "For reminders, use job_kind=system_event and session_target=main. "
+        "For proactive channel reminders, use job_kind=agent_turn and "
+        "session_target=isolated so the scheduled run can deliver back without "
+        "main-session history. Use job_kind=system_event and session_target=main "
+        "only for internal main-session events. "
         "For recurring background agent tasks such as 'every morning summarize "
         "yesterday's emails', use job_kind=agent_turn with session_target=isolated. "
         "Channel users can create reminders and tasks bound to the calling channel; "
@@ -300,7 +165,8 @@ def _owns_cron_job(job: Any, sender_id: str, session_key: str) -> bool:
                 "Structured schedule. Choose one shape. "
                 "Do not pass human language in schedule; translate it before the tool call. "
                 "Examples: "
-                "for '每5分钟提醒我喝水' call schedule={kind:'cron', expr:'*/5 * * * *'}; "
+                "for '每5分钟提醒我喝水' call schedule={kind:'cron', expr:'*/5 * * * *'}, "
+                "job_kind='agent_turn', session_target='isolated'; "
                 "for '45分钟后提醒我' call "
                 "schedule={kind:'at', at:'<now+45min as ISO-8601 with timezone>'}; "
                 "for '每30秒打印一次' call schedule={kind:'every', every_seconds:30}; "
@@ -325,10 +191,6 @@ def _owns_cron_job(job: Any, sender_id: str, session_key: str) -> bool:
                     "minimum": 1,
                     "description": "Interval in seconds (kind=every)",
                 },
-                "anchor_at": {
-                    "type": "string",
-                    "description": "Optional ISO-8601 first-fire anchor (kind=every)",
-                },
                 "at": {
                     "type": "string",
                     "description": "ISO-8601 with timezone (kind=at)",
@@ -348,10 +210,11 @@ def _owns_cron_job(job: Any, sender_id: str, session_key: str) -> bool:
         "session_target": {
             "type": "string",
             "description": (
-                "Target session mode for add. Use main for reminders and isolated/session"
-                " for agent_turn jobs."
+                "Target session mode for add. Use main for internal system events, "
+                "isolated for proactive reminders, current to bind the caller's "
+                "current session, or session with target_session_key for a named session."
             ),
-            "enum": ["main", "isolated", "session"],
+            "enum": ["main", "isolated", "current", "session"],
         },
         "target_session_key": {
             "type": "string",
@@ -474,7 +337,10 @@ async def cron(
         assert schedule is not None
         assert task is not None
         wake_mode = str(wake_mode or "now").strip().lower()
-        schedule_kind, schedule_value, schedule_tz = _coerce_tool_schedule(schedule)
+        schedule_kind, schedule_value, schedule_tz = _coerce_tool_schedule(
+            schedule,
+            tz=tz,
+        )
 
         # Scan prompt for injection/exfiltration before scheduling
         blocked, reason = _scan_cron_prompt(task)
@@ -483,12 +349,16 @@ async def cron(
 
         if job_kind not in ("system_event", "agent_turn"):
             raise ToolError("job_kind must be system_event or agent_turn")
-        if session_target not in ("main", "isolated", "session"):
-            raise ToolError("session_target must be main, isolated, or session")
+        if session_target not in ("main", "isolated", "current", "session"):
+            raise ToolError("session_target must be main, isolated, current, or session")
         if job_kind == "system_event" and session_target != "main":
             raise ToolError("system_event jobs must use session_target=main")
         if job_kind == "agent_turn" and session_target == "main":
             raise ToolError("agent_turn jobs cannot use session_target=main")
+        if session_target == "current" and not caller_session_key:
+            raise ToolError(
+                "session_target=current requires a caller session context"
+            )
         if session_target == "session" and not target_session_key:
             raise ToolError("target_session_key is required when session_target=session")
         if wake_mode not in ("now", "next-heartbeat"):
@@ -547,25 +417,43 @@ async def cron(
                 to=ctx.channel_id or "",
             )
             if delivery is None:
+                if session_target == "main":
+                    delivery_mode = DeliveryMode.NONE
+                    channel_name = ""
+                    channel_id = ""
+                else:
+                    delivery_mode = DeliveryMode.ORIGIN
+                    channel_name = ctx.channel_kind or ""
+                    channel_id = ctx.channel_id or ""
                 delivery = DeliveryConfig(
-                    mode=DeliveryMode.NONE,
+                    mode=delivery_mode,
+                    channel_name=channel_name,
+                    channel_id=channel_id,
                     originating_reply_target=snapshot,
                 )
             else:
                 delivery.originating_reply_target = snapshot
+                if session_target != "main" and delivery.mode == DeliveryMode.NONE:
+                    delivery.mode = DeliveryMode.ORIGIN
+                    delivery.channel_name = ctx.channel_kind or ""
+                    delivery.channel_id = ctx.channel_id or ""
 
         payload = (
             make_system_event_payload(task, agent_id)
             if job_kind == SYSTEM_EVENT_KIND
             else make_agent_turn_payload(task, agent_id)
         )
-        effective_tz = (tz or schedule_tz or "").strip()
+        effective_tz = (schedule_tz or tz or "").strip()
         job = await sched.add_job(
             name=task or "cron-tool-job",
             handler_key="system_event" if job_kind == SYSTEM_EVENT_KIND else "agent_run",
             payload=payload,
             session_target=SessionTarget(session_target),
-            session_key=target_session_key or "",
+            session_key=(
+                caller_session_key
+                if session_target == "current"
+                else (target_session_key or "")
+            ),
             wake_mode=wake_mode,
             delivery=delivery,
             origin_session_key=caller_session_key,
@@ -573,6 +461,7 @@ async def cron(
             tz=effective_tz,
             creator_session_key=caller_session_key,
             creator_sender_id=caller_sender_id,
+            creator_is_owner=is_owner_caller,
             schedule_kind=schedule_kind,
             schedule_value=schedule_value,
             schedule_tz=effective_tz,

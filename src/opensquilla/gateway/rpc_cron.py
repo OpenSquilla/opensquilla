@@ -6,12 +6,6 @@ from dataclasses import asdict
 from typing import Any, TypeGuard
 
 from opensquilla.gateway.rpc import RpcContext, RpcUnavailableError, get_dispatcher
-from opensquilla.scheduler.parser import (
-    CronParseError,
-    parse_cron,
-    parse_iso_at,
-    validate_tz,
-)
 from opensquilla.scheduler.payloads import (
     AGENT_TURN_KIND,
     SYSTEM_EVENT_KIND,
@@ -20,6 +14,10 @@ from opensquilla.scheduler.payloads import (
     payload_agent_id,
     payload_kind,
     payload_text,
+)
+from opensquilla.scheduler.schedule_normalizer import (
+    coerce_schedule,
+    coerce_schedule_from_params,
 )
 from opensquilla.scheduler.types import (
     DeliveryConfig,
@@ -251,77 +249,12 @@ def _iso(dt: object) -> str | None:
 
 
 def _coerce_schedule(raw: Any) -> tuple[ScheduleKind, str, str]:
-    """Validate a discriminated-union schedule payload from the wire.
-
-    Accepts ``{"kind":"cron","expr":...,"tz":...}``, ``{"kind":"every",
-    "every_seconds":int,"anchor_at":...}``, or ``{"kind":"at","at":...}``.
-    Returns ``(ScheduleKind, canonical_value_str, tz_str)`` ready for
-    ``scheduler.add_job(schedule_kind=..., schedule_value=..., schedule_tz=...)``.
-    """
     if not isinstance(raw, dict):
         raise ValueError(
             "schedule must be an object {kind:'cron'|'every'|'at', ...}; "
             f"got {type(raw).__name__}"
         )
-    kind_raw = raw.get("kind")
-    if not isinstance(kind_raw, str) or not kind_raw:
-        raise ValueError("schedule.kind required; one of: cron, every, at")
-    try:
-        kind = ScheduleKind(kind_raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"schedule.kind must be one of: cron, every, at; got {kind_raw!r}"
-        ) from exc
-
-    if kind == ScheduleKind.CRON:
-        expr = raw.get("expr")
-        if not isinstance(expr, str) or not expr.strip():
-            raise ValueError(
-                "schedule.expr required when kind='cron'; expected 5-field POSIX cron"
-            )
-        expr = expr.strip()
-        try:
-            parse_cron(expr)
-        except CronParseError as exc:
-            raise ValueError(
-                f"schedule.expr invalid: {exc}; expected 5-field POSIX cron"
-            ) from exc
-        tz_raw = raw.get("tz") or ""
-        if not isinstance(tz_raw, str):
-            raise ValueError("schedule.tz must be a string IANA timezone name")
-        tz_value = tz_raw.strip()
-        try:
-            validate_tz(tz_value)
-        except ValueError as exc:
-            raise ValueError(
-                f"schedule.tz invalid: {exc}; expected IANA name like 'Asia/Shanghai'"
-            ) from exc
-        return kind, expr, tz_value
-
-    if kind == ScheduleKind.EVERY:
-        every_seconds = raw.get("every_seconds")
-        if not isinstance(every_seconds, int) or isinstance(every_seconds, bool):
-            raise ValueError(
-                "schedule.every_seconds required (integer >= 1) when kind='every'"
-            )
-        if every_seconds < 1:
-            raise ValueError("schedule.every_seconds must be >= 1 second")
-        return kind, str(every_seconds), ""
-
-    # kind == ScheduleKind.AT
-    at_raw = raw.get("at")
-    if not isinstance(at_raw, str) or not at_raw.strip():
-        raise ValueError(
-            "schedule.at required when kind='at'; expected ISO-8601 with timezone"
-        )
-    try:
-        parse_iso_at(at_raw)
-    except CronParseError as exc:
-        raise ValueError(
-            f"schedule.at invalid: {exc}; "
-            "expected ISO-8601 with timezone like '2026-05-15T09:00:00+08:00'"
-        ) from exc
-    return kind, at_raw.strip(), ""
+    return coerce_schedule(raw)
 
 
 def _schedule_from_params(params: dict[str, Any]) -> tuple[ScheduleKind, str, str]:
@@ -332,15 +265,7 @@ def _schedule_from_params(params: dict[str, Any]) -> tuple[ScheduleKind, str, st
     string, treat it as ``{kind:'cron', expr, tz}`` so legacy CLI callers
     (cli/cron_cmd.py) keep working without an extra wrapper.
     """
-    schedule_raw = params.get("schedule")
-    if isinstance(schedule_raw, dict):
-        return _coerce_schedule(schedule_raw)
-    expression = params.get("expression")
-    if isinstance(expression, str) and expression.strip():
-        return _coerce_schedule(
-            {"kind": "cron", "expr": expression, "tz": params.get("tz", "") or ""}
-        )
-    raise ValueError("params required: schedule (object) or expression (string)")
+    return coerce_schedule_from_params(params)
 
 
 def _resolve_session_target(params: dict[str, Any]) -> SessionTarget:
@@ -684,6 +609,7 @@ async def _finalize_cron_add(
         tool_policy=_tool_policy_from_params(params),
         tz=tz_value,
         jitter_seconds=jitter_seconds,
+        creator_is_owner=True,
         schedule_kind=schedule_kind,
         schedule_value=schedule_value,
         schedule_tz=tz_value,
@@ -712,14 +638,21 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
     if "name" in params:
         patch["name"] = params["name"]
 
+    tz_was_supplied = "tz" in params or "timezone" in params
     if "schedule" in params or "expression" in params:
         sched_kind, sched_value, sched_tz = _schedule_from_params(params)
         patch["schedule_kind"] = sched_kind
         patch["schedule_value"] = sched_value
-        if sched_tz:
+        schedule_raw = params.get("schedule")
+        schedule_tz_was_supplied = (
+            isinstance(schedule_raw, dict) and "tz" in schedule_raw
+        )
+        if sched_kind == ScheduleKind.CRON and (
+            sched_tz or tz_was_supplied or schedule_tz_was_supplied
+        ):
             patch["schedule_tz"] = sched_tz
 
-    if "tz" in params or "timezone" in params:
+    if tz_was_supplied:
         tz_value = params.get("tz") if "tz" in params else params.get("timezone")
         patch["tz"] = tz_value if isinstance(tz_value, str) else ""
 
@@ -737,6 +670,15 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
     current_job = await scheduler.get_job(params["id"])
     if current_job is None:
         raise KeyError(f"Cron job not found: {params['id']}")
+
+    if (
+        tz_was_supplied
+        and "schedule_kind" not in patch
+        and current_job.schedule_kind == ScheduleKind.CRON
+    ):
+        patch["schedule_kind"] = ScheduleKind.CRON
+        patch["schedule_value"] = current_job.cron_expr
+        patch["schedule_tz"] = patch.get("tz", "")
 
     payload_related = any(
         key in params

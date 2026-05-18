@@ -310,6 +310,31 @@ async def test_effective_tools_hide_private_memory_reads_for_cron_and_subagents(
     assert subagent_names == {"read_file"}
 
 
+@pytest.mark.asyncio
+async def test_effective_tools_keep_private_memory_reads_for_owner_cron() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec("memory_get"), _handler)
+    registry.register(_spec("memory_search"), _handler)
+    registry.register(_spec("session_search"), _handler)
+    registry.register(_spec("read_file"), _handler)
+
+    cron_names = {
+        tool["name"]
+        for tool in await registry.effective_tools(
+            session_key="cron:owner:run:1",
+            agent_id="main",
+            caller_kind=CallerKind.CRON,
+            interaction_mode=InteractionMode.UNATTENDED,
+            tool_surface_capabilities=ToolSurfaceCapabilities(session_manager=True),
+            is_owner=True,
+        )
+    }
+
+    assert "memory_get" in cron_names
+    assert "memory_search" in cron_names
+    assert "session_search" in cron_names
+
+
 def test_subagent_schema_hides_publish_artifact_without_artifact_context() -> None:
     import opensquilla.tools.builtin  # noqa: F401
     from opensquilla.tools.registry import get_default_registry

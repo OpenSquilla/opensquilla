@@ -391,6 +391,43 @@ def test_cron_add_with_announce_and_channel(stub_gateway) -> None:
     }
 
 
+def test_cron_add_rejects_current_target_without_session_binding(stub_gateway) -> None:
+    with pytest.raises(typer.BadParameter, match="current.*session-bound"):
+        cron_cmd.cron_add(
+            expression="0 9 * * *",
+            text="Daily brief",
+            name=None,
+            agent=None,
+            session_target="current",
+            timeout=None,
+            tz=None,
+            wake=None,
+            exact=False,
+            jitter=None,
+            announce=False,
+            no_deliver=False,
+            channel=None,
+            to=None,
+            account=None,
+            best_effort_deliver=False,
+            webhook_url=None,
+            webhook_token=None,
+            webhook_token_env=None,
+            webhook_token_file=None,
+            failure_mode=None,
+            failure_channel=None,
+            failure_to=None,
+            failure_account=None,
+            failure_webhook_url=None,
+            failure_webhook_token=None,
+            failure_webhook_token_env=None,
+            failure_webhook_token_file=None,
+            json_output=False,
+        )
+
+    assert stub_gateway.calls == []
+
+
 def test_cron_add_with_webhook(stub_gateway, monkeypatch) -> None:
     monkeypatch.setenv("HOOK_TOKEN", "from-env")
     cron_cmd.cron_add(
@@ -516,6 +553,126 @@ def test_cron_add_with_wake_and_jitter_duration(stub_gateway) -> None:
     assert "delivery" not in params  # no delivery flags → not sent
 
 
+def test_cron_add_with_every_builds_canonical_schedule(stub_gateway) -> None:
+    cron_cmd.cron_add(
+        expression=None,
+        cron=None,
+        every="5m",
+        at=None,
+        text="Drink water",
+        name=None,
+        agent=None,
+        session_target="isolated",
+        timeout=None,
+        tz=None,
+        wake=None,
+        exact=False,
+        jitter=None,
+        announce=False,
+        no_deliver=False,
+        channel=None,
+        to=None,
+        account=None,
+        best_effort_deliver=False,
+        webhook_url=None,
+        webhook_token=None,
+        webhook_token_env=None,
+        webhook_token_file=None,
+        failure_mode=None,
+        failure_channel=None,
+        failure_to=None,
+        failure_account=None,
+        failure_webhook_url=None,
+        failure_webhook_token=None,
+        failure_webhook_token_env=None,
+        failure_webhook_token_file=None,
+        json_output=False,
+    )
+
+    method, params = stub_gateway.calls[-1]
+    assert method == "cron.add"
+    assert params["schedule"] == {"kind": "every", "every_seconds": 300}
+    assert "expression" not in params
+
+
+def test_cron_add_rejects_multiple_schedule_sources(stub_gateway) -> None:
+    with pytest.raises(typer.BadParameter, match="exactly one"):
+        cron_cmd.cron_add(
+            expression="*/5 * * * *",
+            cron="0 9 * * *",
+            every=None,
+            at=None,
+            text="x",
+            name=None,
+            agent=None,
+            session_target="isolated",
+            timeout=None,
+            tz=None,
+            wake=None,
+            exact=False,
+            jitter=None,
+            announce=False,
+            no_deliver=False,
+            channel=None,
+            to=None,
+            account=None,
+            best_effort_deliver=False,
+            webhook_url=None,
+            webhook_token=None,
+            webhook_token_env=None,
+            webhook_token_file=None,
+            failure_mode=None,
+            failure_channel=None,
+            failure_to=None,
+            failure_account=None,
+            failure_webhook_url=None,
+            failure_webhook_token=None,
+            failure_webhook_token_env=None,
+            failure_webhook_token_file=None,
+            json_output=False,
+        )
+
+
+def test_cron_add_rejects_fractional_every(stub_gateway) -> None:
+    with pytest.raises(typer.BadParameter, match="whole seconds"):
+        cron_cmd.cron_add(
+            expression=None,
+            cron=None,
+            every="1.9s",
+            at=None,
+            text="x",
+            name=None,
+            agent=None,
+            session_target="isolated",
+            timeout=None,
+            tz=None,
+            wake=None,
+            exact=False,
+            jitter=None,
+            announce=False,
+            no_deliver=False,
+            channel=None,
+            to=None,
+            account=None,
+            best_effort_deliver=False,
+            webhook_url=None,
+            webhook_token=None,
+            webhook_token_env=None,
+            webhook_token_file=None,
+            failure_mode=None,
+            failure_channel=None,
+            failure_to=None,
+            failure_account=None,
+            failure_webhook_url=None,
+            failure_webhook_token=None,
+            failure_webhook_token_env=None,
+            failure_webhook_token_file=None,
+            json_output=False,
+        )
+
+    assert stub_gateway.calls == []
+
+
 def test_cron_add_rejects_invalid_wake(stub_gateway) -> None:
     with pytest.raises(typer.BadParameter, match="now or next-heartbeat"):
         cron_cmd.cron_add(
@@ -547,6 +704,9 @@ def test_cron_update_with_wake(stub_gateway) -> None:
     cron_cmd.cron_update(
         job_id="job-1",
         expression=None,
+        cron=None,
+        every=None,
+        at=None,
         text=None,
         name=None,
         enabled=None,
@@ -567,6 +727,91 @@ def test_cron_update_with_wake(stub_gateway) -> None:
     assert method == "cron.update"
     assert params["id"] == "job-1"
     assert params["wakeMode"] == "now"
+
+
+def test_cron_update_with_every_builds_canonical_schedule(stub_gateway) -> None:
+    cron_cmd.cron_update(
+        job_id="job-1",
+        expression=None,
+        cron=None,
+        every="10m",
+        at=None,
+        text=None,
+        name=None,
+        enabled=None,
+        timeout=None,
+        tz=None,
+        wake=None,
+        failure_mode=None,
+        failure_channel=None,
+        failure_to=None,
+        failure_account=None,
+        failure_webhook_url=None,
+        failure_webhook_token=None,
+        failure_webhook_token_env=None,
+        failure_webhook_token_file=None,
+        json_output=False,
+    )
+
+    method, params = stub_gateway.calls[-1]
+    assert method == "cron.update"
+    assert params["schedule"] == {"kind": "every", "every_seconds": 600}
+    assert "expression" not in params
+
+
+def test_cron_update_with_tz_only_sends_timezone_patch(stub_gateway) -> None:
+    cron_cmd.cron_update(
+        job_id="job-1",
+        expression=None,
+        cron=None,
+        every=None,
+        at=None,
+        text=None,
+        name=None,
+        enabled=None,
+        timeout=None,
+        tz="Asia/Shanghai",
+        wake=None,
+        failure_mode=None,
+        failure_channel=None,
+        failure_to=None,
+        failure_account=None,
+        failure_webhook_url=None,
+        failure_webhook_token=None,
+        failure_webhook_token_env=None,
+        failure_webhook_token_file=None,
+        json_output=False,
+    )
+
+    method, params = stub_gateway.calls[-1]
+    assert method == "cron.update"
+    assert params == {"id": "job-1", "tz": "Asia/Shanghai"}
+
+
+def test_cron_update_rejects_multiple_schedule_sources(stub_gateway) -> None:
+    with pytest.raises(typer.BadParameter, match="at most one"):
+        cron_cmd.cron_update(
+            job_id="job-1",
+            expression="*/5 * * * *",
+            cron="0 9 * * *",
+            every=None,
+            at=None,
+            text=None,
+            name=None,
+            enabled=None,
+            timeout=None,
+            tz=None,
+            wake=None,
+            failure_mode=None,
+            failure_channel=None,
+            failure_to=None,
+            failure_account=None,
+            failure_webhook_url=None,
+            failure_webhook_token=None,
+            failure_webhook_token_env=None,
+            failure_webhook_token_file=None,
+            json_output=False,
+        )
 
 
 def test_cron_update_requires_at_least_one_field(stub_gateway) -> None:

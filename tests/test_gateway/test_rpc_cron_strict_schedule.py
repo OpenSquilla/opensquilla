@@ -41,6 +41,7 @@ class _FakeScheduler:
             origin_session_key=kwargs.get("origin_session_key", ""),
             delivery=kwargs.get("delivery") or DeliveryConfig(),
             tz=kwargs.get("schedule_tz") or kwargs.get("tz", "") or "",
+            creator_is_owner=bool(kwargs.get("creator_is_owner", False)),
         )
         return self.job
 
@@ -80,6 +81,7 @@ async def test_rpc_create_with_structured_cron_returns_normalized_expression() -
     assert scheduler.added is not None
     assert scheduler.added["schedule_kind"] == ScheduleKind.CRON
     assert scheduler.added["schedule_value"] == "*/5 * * * *"
+    assert scheduler.added["creator_is_owner"] is True
     assert result["expression"] == "*/5 * * * *"
     assert result["scheduleRaw"] == "*/5 * * * *"
     assert result["scheduleKind"] == "cron"
@@ -124,6 +126,48 @@ async def test_rpc_create_with_legacy_expression_string_still_works() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rpc_create_with_every_schedule() -> None:
+    scheduler = _FakeScheduler()
+
+    result = await _handle_cron_add(
+        {
+            "name": "interval",
+            "schedule": {"kind": "every", "every_seconds": 300},
+            "payloadKind": AGENT_TURN_KIND,
+            "text": "ping",
+            "agentId": "main",
+        },
+        RpcContext(conn_id="test", cron_scheduler=scheduler),
+    )
+
+    assert scheduler.added["schedule_kind"] == ScheduleKind.EVERY
+    assert scheduler.added["schedule_value"] == "300"
+    assert result["scheduleKind"] == "every"
+    assert result["scheduleRaw"] == "300"
+
+
+@pytest.mark.asyncio
+async def test_rpc_create_with_at_schedule() -> None:
+    scheduler = _FakeScheduler()
+
+    result = await _handle_cron_add(
+        {
+            "name": "once",
+            "schedule": {"kind": "at", "at": "2026-05-18T09:00:00+08:00"},
+            "payloadKind": AGENT_TURN_KIND,
+            "text": "ping",
+            "agentId": "main",
+        },
+        RpcContext(conn_id="test", cron_scheduler=scheduler),
+    )
+
+    assert scheduler.added["schedule_kind"] == ScheduleKind.AT
+    assert scheduler.added["schedule_value"] == "2026-05-18T09:00:00+08:00"
+    assert result["scheduleKind"] == "at"
+    assert result["scheduleRaw"] == "2026-05-18T09:00:00+08:00"
+
+
+@pytest.mark.asyncio
 async def test_rpc_update_via_legacy_expression_returns_normalized_wire() -> None:
     scheduler = _FakeScheduler()
     scheduler.job = CronJob(
@@ -147,6 +191,60 @@ async def test_rpc_update_via_legacy_expression_returns_normalized_wire() -> Non
     assert scheduler.updated["schedule_kind"] == ScheduleKind.CRON
     assert scheduler.updated["schedule_value"] == "0 9 * * *"
     assert result["expression"] == "0 9 * * *"
+
+
+@pytest.mark.asyncio
+async def test_rpc_update_tz_only_recomputes_existing_cron_schedule() -> None:
+    scheduler = _FakeScheduler()
+    scheduler.job = CronJob(
+        id="job-A",
+        name="orig",
+        cron_expr="0 9 * * *",
+        schedule_raw="0 9 * * *",
+        schedule_kind=ScheduleKind.CRON,
+        handler_key="agent_run",
+        tz="",
+    )
+
+    await _handle_cron_update(
+        {
+            "id": "job-A",
+            "tz": "Asia/Shanghai",
+        },
+        RpcContext(conn_id="test", cron_scheduler=scheduler),
+    )
+
+    assert scheduler.updated is not None
+    assert scheduler.updated["schedule_kind"] == ScheduleKind.CRON
+    assert scheduler.updated["schedule_value"] == "0 9 * * *"
+    assert scheduler.updated["schedule_tz"] == "Asia/Shanghai"
+
+
+@pytest.mark.asyncio
+async def test_rpc_update_tz_only_can_clear_existing_cron_timezone() -> None:
+    scheduler = _FakeScheduler()
+    scheduler.job = CronJob(
+        id="job-A",
+        name="orig",
+        cron_expr="0 9 * * *",
+        schedule_raw="0 9 * * *",
+        schedule_kind=ScheduleKind.CRON,
+        handler_key="agent_run",
+        tz="Asia/Shanghai",
+    )
+
+    await _handle_cron_update(
+        {
+            "id": "job-A",
+            "tz": "",
+        },
+        RpcContext(conn_id="test", cron_scheduler=scheduler),
+    )
+
+    assert scheduler.updated is not None
+    assert scheduler.updated["schedule_kind"] == ScheduleKind.CRON
+    assert scheduler.updated["schedule_value"] == "0 9 * * *"
+    assert scheduler.updated["schedule_tz"] == ""
 
 
 def test_job_to_wire_serializes_normalized_expression() -> None:

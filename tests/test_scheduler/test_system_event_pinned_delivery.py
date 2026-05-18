@@ -7,6 +7,8 @@ forwards its result through to heartbeat run_once.
 
 from __future__ import annotations
 
+import pytest
+
 import opensquilla.scheduler.handlers as handlers_mod
 from opensquilla.scheduler.handlers import (
     _resolve_system_event_heartbeat_delivery_override,
@@ -148,6 +150,40 @@ class _CapturingHeartbeat:
         return _R()
 
 
+class _FailingHeartbeat:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def run_once(self, **kwargs):
+        self.calls.append(kwargs)
+
+        class _R:
+            status = "skipped"
+            reason = "delivery_failed"
+            delivery_status = "delivery_failed"
+
+        return _R()
+
+
+class _BusyLoop:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.requests: list[dict] = []
+
+    async def run_once_now(self, **kwargs):
+        self.calls.append(kwargs)
+
+        class _R:
+            status = "skipped"
+            reason = "requests-in-flight"
+            delivery_status = "requests-in-flight"
+
+        return _R()
+
+    def request_now(self, **kwargs) -> None:
+        self.requests.append(kwargs)
+
+
 def _main_job(snapshot: ReplyTargetSnapshot | None) -> CronJob:
     delivery = DeliveryConfig(
         mode=DeliveryMode.NONE,
@@ -199,6 +235,89 @@ async def test_handler_forwards_resolver_output_as_delivery_override(monkeypatch
     assert override["channel_id"] == "chat-001"
     assert override["account_id"] == "acct-xyz"
     assert override["thread_id"] == "msg-42"
+
+
+async def test_handler_fails_pinned_delivery_by_default(monkeypatch):
+    """Pinned main-session delivery is required unless best_effort is enabled."""
+    monkeypatch.setattr(
+        handlers_mod,
+        "_build_cron_tool_context",
+        lambda *a, **kw: object(),
+    )
+    snapshot = ReplyTargetSnapshot(
+        channel_name="feishu",
+        channel_type="feishu",
+        to="chat-001",
+    )
+    job = _main_job(snapshot)
+
+    hb = _FailingHeartbeat()
+    handler = make_system_event_handler(
+        delivery_chain=_StubChain(),
+        session_manager_ref=lambda: _StubSessionManager(),
+        heartbeat_service_ref=lambda: hb,
+        heartbeat_loop_ref=lambda: None,
+    )
+
+    with pytest.raises(RuntimeError, match="delivery_failed"):
+        await handler(job)
+
+
+async def test_handler_best_effort_pinned_delivery_failure_succeeds(monkeypatch):
+    monkeypatch.setattr(
+        handlers_mod,
+        "_build_cron_tool_context",
+        lambda *a, **kw: object(),
+    )
+    snapshot = ReplyTargetSnapshot(
+        channel_name="feishu",
+        channel_type="feishu",
+        to="chat-001",
+    )
+    job = _main_job(snapshot)
+    job.delivery.best_effort = True
+
+    hb = _FailingHeartbeat()
+    handler = make_system_event_handler(
+        delivery_chain=_StubChain(),
+        session_manager_ref=lambda: _StubSessionManager(),
+        heartbeat_service_ref=lambda: hb,
+        heartbeat_loop_ref=lambda: None,
+    )
+
+    result = await handler(job)
+
+    assert result.delivery_status == "delivery_failed"
+
+
+async def test_handler_preserves_busy_heartbeat_fallback(monkeypatch):
+    """Busy heartbeat fallback queues delivery later and is not a delivery failure."""
+    monkeypatch.setattr(
+        handlers_mod,
+        "_build_cron_tool_context",
+        lambda *a, **kw: object(),
+    )
+    snapshot = ReplyTargetSnapshot(
+        channel_name="feishu",
+        channel_type="feishu",
+        to="chat-001",
+    )
+    job = _main_job(snapshot)
+
+    loop = _BusyLoop()
+    handler = make_system_event_handler(
+        delivery_chain=_StubChain(),
+        session_manager_ref=lambda: _StubSessionManager(),
+        heartbeat_service_ref=lambda: _CapturingHeartbeat(),
+        heartbeat_loop_ref=lambda: loop,
+        wake_now_busy_max_wait_seconds=0.0,
+        wake_now_busy_retry_delay_seconds=0.0,
+    )
+
+    result = await handler(job)
+
+    assert result.delivery_status == "not-requested"
+    assert loop.requests
 
 
 async def test_handler_omits_override_when_resolver_returns_none(monkeypatch):

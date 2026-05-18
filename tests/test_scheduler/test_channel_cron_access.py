@@ -1,8 +1,8 @@
 """Channel-callable cron tool.
 
 Drives the contract:
-- A Feishu / Slack chat user can create reminders (system_event + main) AND
-  background tasks (agent_turn + isolated) — both are normal use cases the
+- A Feishu / Slack chat user can create reminders and background tasks
+  (agent_turn + isolated) — both are normal use cases the
   model picks up from "提醒我喝水" / "每天早上总结邮件" style prompts.
 - target_session_key and tool_policy are owner-only knobs; passing them as a
   non-owner is rejected with a clear ToolError (the model would only emit
@@ -98,6 +98,7 @@ class _FakeScheduler:
             delivery=kwargs.get("delivery") or DeliveryConfig(),
             creator_session_key=kwargs.get("creator_session_key", "") or "",
             creator_sender_id=kwargs.get("creator_sender_id", "") or "",
+            creator_is_owner=bool(kwargs.get("creator_is_owner", False)),
         )
         self.jobs.append(job)
         return job
@@ -233,8 +234,8 @@ async def test_channel_user_can_add_reminder(fake_scheduler) -> None:
             action="add",
             schedule={"kind": "every", "every_seconds": 60},
             task="提醒喝水",
-            job_kind="system_event",
-            session_target="main",
+            job_kind="agent_turn",
+            session_target="isolated",
         )
 
     resp = json.loads(raw)
@@ -242,7 +243,11 @@ async def test_channel_user_can_add_reminder(fake_scheduler) -> None:
     kwargs = fake_scheduler.add_calls[-1]
     assert kwargs["creator_sender_id"] == "feishu-user-1"
     assert kwargs["creator_session_key"] == "agent:main:feishu:user-1"
+    assert kwargs["creator_is_owner"] is False
+    assert kwargs["handler_key"] == "agent_run"
+    assert kwargs["session_target"] == SessionTarget.ISOLATED
     assert kwargs["delivery"].originating_reply_target.to == "oc_chat_001"
+    assert kwargs["delivery"].mode.value == "origin"
 
 
 async def test_channel_user_can_schedule_isolated_agent_turn(fake_scheduler) -> None:
@@ -319,8 +324,8 @@ async def test_channel_user_without_session_snapshot_falls_back_to_ctx(monkeypat
                 action="add",
                 schedule={"kind": "every", "every_seconds": 60},
                 task="hi",
-                job_kind="system_event",
-                session_target="main",
+                job_kind="agent_turn",
+                session_target="isolated",
             )
     finally:
         admin_mod.set_scheduler(None)  # type: ignore[arg-type]
@@ -329,6 +334,7 @@ async def test_channel_user_without_session_snapshot_falls_back_to_ctx(monkeypat
     snap = sched.add_calls[-1]["delivery"].originating_reply_target
     assert snap.channel_name == "feishu"
     assert snap.to == "oc_chat_fresh"
+    assert sched.add_calls[-1]["delivery"].mode.value == "origin"
 
 
 # --- Cross-user privacy isolation ----------------------------------------

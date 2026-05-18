@@ -331,7 +331,7 @@ async def run_channel_dispatch(
                 key: str = session_key,
                 _ifl: _ChannelInFlightSet = cast(_ChannelInFlightSet, _in_flight),
             ) -> None:
-                await _dispatch_combined_message_after_debounce(channel, combined, turn_runner, session_manager, key, session_prefix, task_runtime, config, event_bridge, _ifl)  # noqa: E501
+                await _dispatch_combined_message_after_debounce(channel, combined, turn_runner, session_manager, key, session_prefix, task_runtime, config, event_bridge, _ifl, channel_rpc_context_factory=channel_rpc_context_factory)  # noqa: E501
 
             await debounce_coordinator.schedule(session_key, msg, window_s=debounce_window_s, on_fire=_on_debounce_fire)  # noqa: E501
             continue
@@ -666,7 +666,7 @@ async def _dispatch_channel_new_command(
 
 
 # fmt: off
-async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any, turn_runner: Any, session_manager: Any, session_key: str, session_prefix: str, task_runtime: Any, config: Any = None, event_bridge: EventBridge | None = None, _in_flight: _ChannelInFlightSet | None = None) -> None:  # noqa: E501
+async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any, turn_runner: Any, session_manager: Any, session_key: str, session_prefix: str, task_runtime: Any, config: Any = None, event_bridge: EventBridge | None = None, _in_flight: _ChannelInFlightSet | None = None, channel_rpc_context_factory: Callable[[Any], Any] | None = None) -> None:  # noqa: E501
     from opensquilla.gateway.routing import build_channel_route_envelope
 
     msg = combined.message
@@ -675,6 +675,9 @@ async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any,
     session_lock = _get_lock(session_key) if callable(_get_lock) else None
     async with _maybe_lock(session_lock):
         await _record_delivery_context(session_manager, session_key, msg, session_prefix, route_envelope=route_envelope)  # noqa: E501
+
+        if _should_skip_unmentioned(channel, msg, session_key):
+            return
 
     ingested = await _ingest_channel_message_attachments(channel=channel, msg=msg)
 

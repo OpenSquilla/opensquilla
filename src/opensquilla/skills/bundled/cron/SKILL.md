@@ -36,7 +36,7 @@ Three accepted schedule shapes:
 
 - `{"kind": "cron", "expr": "<5-field POSIX cron>", "tz": "<optional IANA timezone>"}`
   Recurring on a calendar pattern. Example: `{"kind": "cron", "expr": "0 9 * * 1-5", "tz": "Asia/Shanghai"}` for weekdays at 09:00 Shanghai wall time.
-- `{"kind": "every", "every_seconds": <integer ≥ 1>, "anchor_at": "<optional ISO-8601 first-fire anchor>"}`
+- `{"kind": "every", "every_seconds": <integer ≥ 1>}`
   Recurring on a fixed sub-minute or odd interval. Example: `{"kind": "every", "every_seconds": 30}` for every 30 seconds.
 - `{"kind": "at", "at": "<ISO-8601 with timezone>"}`
   One-shot at an absolute time. The timestamp must include a timezone offset.

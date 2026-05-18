@@ -175,7 +175,11 @@ async def _handle_doctor_memory_status(params: dict | None, ctx: RpcContext) -> 
     health: dict[str, Any] = {}
     try:
         if memory_backend is not None:
-            health = await memory_backend.health_check()
+            health_call = getattr(memory_backend, "health", None)
+            if not callable(health_call):
+                health_call = getattr(memory_backend, "health_check", None)
+            if callable(health_call):
+                health = await health_call()
     except Exception as exc:
         health = {
             "backend": "unknown",

@@ -142,6 +142,7 @@ class CronJob:
     anchor_at: datetime | None = None  # EVERY+interval anchor (UTC)
     creator_session_key: str = ""  # Session key of the caller that created the job
     creator_sender_id: str = ""  # Channel sender id (when created from a channel)
+    creator_is_owner: bool = False
     session_target: SessionTarget = SessionTarget.ISOLATED
     session_key: str = ""
     origin_session_key: str = ""

@@ -41,6 +41,7 @@ class _FakeScheduler:
             origin_session_key=kwargs["origin_session_key"],
             delivery=kwargs.get("delivery") or DeliveryConfig(),
             tool_policy=kwargs.get("tool_policy") or {},
+            creator_is_owner=bool(kwargs.get("creator_is_owner", False)),
         )
 
     async def update_job(self, job_id, **patch) -> CronJob:
@@ -95,6 +96,16 @@ class _FakeTurnRunner:
         return events()
 
 
+class _FailingChannelAdapter:
+    async def send(self, _msg) -> None:
+        raise RuntimeError("channel down")
+
+
+class _FakeChannelManager:
+    def get(self, _name: str):
+        return _FailingChannelAdapter()
+
+
 def test_rpc_current_session_params_bind_target_and_origin_session() -> None:
     params = {
         "payloadKind": AGENT_TURN_KIND,
@@ -140,6 +151,7 @@ async def test_rpc_create_current_session_job_passes_session_binding_to_schedule
     assert scheduler.added["session_key"] == SESSION_KEY
     assert scheduler.added["origin_session_key"] == SESSION_KEY
     assert scheduler.added["handler_key"] == "agent_run"
+    assert scheduler.added["creator_is_owner"] is True
     assert result["sessionTarget"] == "current"
     assert result["targetSessionKey"] == SESSION_KEY
     assert result["originSessionKey"] == SESSION_KEY
@@ -401,3 +413,92 @@ async def test_current_session_agent_run_uses_bound_session_transcript_without_f
         {"role": "assistant", "content": "drink logged"},
     ]
     assert forward_calls == []
+
+
+@pytest.mark.asyncio
+async def test_owner_current_session_agent_run_uses_owner_tool_boundary() -> None:
+    session_manager = _FakeSessionManager()
+    turn_runner = _FakeTurnRunner(session_manager)
+
+    job = CronJob(
+        id="drink",
+        name="Drink",
+        handler_key="agent_run",
+        payload={"kind": AGENT_TURN_KIND, "task": "drink water", "agent_id": "main"},
+        session_target=SessionTarget.CURRENT,
+        session_key=SESSION_KEY,
+        origin_session_key=SESSION_KEY,
+        creator_is_owner=True,
+        tool_policy={
+            "profile": "minimal",
+            "also_allow": ["memory_search", "exec_command"],
+            "deny": ["web_fetch"],
+        },
+    )
+    handler = make_agent_run_handler(
+        DeliveryChain(session_forwarder=None),
+        turn_runner_ref=lambda: turn_runner,
+        session_manager_ref=lambda: session_manager,
+    )
+
+    await handler(job)
+
+    tool_context = turn_runner.calls[0]["tool_context"]
+    assert tool_context.is_owner is True
+    assert tool_context.allowed_tools is None
+    assert tool_context.tool_policy == job.tool_policy
+    assert "exec_command" not in tool_context.denied_tools
+
+
+@pytest.mark.asyncio
+async def test_agent_run_delivery_failure_fails_job_by_default() -> None:
+    session_manager = _FakeSessionManager()
+    turn_runner = _FakeTurnRunner(session_manager)
+    job = CronJob(
+        id="drink",
+        name="Drink",
+        handler_key="agent_run",
+        payload={"kind": AGENT_TURN_KIND, "task": "drink water", "agent_id": "main"},
+        session_target=SessionTarget.ISOLATED,
+        delivery=DeliveryConfig(
+            mode=DeliveryMode.CHANNEL,
+            channel_name="feishu",
+            channel_id="chat-1",
+        ),
+    )
+    handler = make_agent_run_handler(
+        DeliveryChain(channel_manager_ref=lambda: _FakeChannelManager()),
+        turn_runner_ref=lambda: turn_runner,
+        session_manager_ref=lambda: session_manager,
+    )
+
+    with pytest.raises(RuntimeError, match="delivery failed"):
+        await handler(job)
+
+
+@pytest.mark.asyncio
+async def test_agent_run_best_effort_delivery_failure_does_not_fail_job() -> None:
+    session_manager = _FakeSessionManager()
+    turn_runner = _FakeTurnRunner(session_manager)
+    job = CronJob(
+        id="drink",
+        name="Drink",
+        handler_key="agent_run",
+        payload={"kind": AGENT_TURN_KIND, "task": "drink water", "agent_id": "main"},
+        session_target=SessionTarget.ISOLATED,
+        delivery=DeliveryConfig(
+            mode=DeliveryMode.CHANNEL,
+            channel_name="feishu",
+            channel_id="chat-1",
+            best_effort=True,
+        ),
+    )
+    handler = make_agent_run_handler(
+        DeliveryChain(channel_manager_ref=lambda: _FakeChannelManager()),
+        turn_runner_ref=lambda: turn_runner,
+        session_manager_ref=lambda: session_manager,
+    )
+
+    result = await handler(job)
+
+    assert result.delivery_status == "delivery_failed|ws:skipped|fwd:skipped"

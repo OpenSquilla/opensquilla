@@ -67,6 +67,7 @@ class ToolContext:
     # Additive per-call tool surface overrides (surfaced tools are made visible even
     # when exposed_by_default=False). Does NOT relax allowed_tools strict denylist.
     surfaced_tools: set[str] | None = None
+    tool_policy: dict[str, Any] | None = None
     tool_result_budget_policy: Any | None = None
     tool_result_budget_tracker_factory: Callable[[], Any] | None = None
 

@@ -69,29 +69,24 @@ memory_app.add_typer(raw_fallbacks_app, name="raw-fallbacks")
 def _build_cli_dream(agent: str, *, force: bool = False, need_provider: bool = True):
     """Assemble a Dream instance for CLI runs.
 
-    Uses the local ``.opensquilla`` workspace root and the project's default
-    provider factory. Unit tests monkeypatch this function to inject a
-    mock Dream without touching provider wiring. When ``need_provider``
-    is False (e.g. ``--status`` / ``--reset-cursor``), skip provider
-    construction so the command works offline.
+    Uses the same configured agent workspace resolver as gateway Dream runs.
+    Unit tests monkeypatch this function to inject a mock Dream without
+    touching provider wiring. When ``need_provider`` is False (e.g. ``--status``
+    / ``--reset-cursor``), skip provider construction so the command works
+    offline.
     """
     import os
-    from pathlib import Path
 
     from opensquilla.gateway.config import GatewayConfig
     from opensquilla.memory.dream_factory import build_dream_factory
 
     gw = GatewayConfig.load(os.environ.get("OPENSQUILLA_GATEWAY_CONFIG_PATH"))
 
-    def _workspace_for_agent(agent_id: str) -> Path:
-        return Path.cwd() / ".opensquilla" / "agents" / agent_id
-
     dream = build_dream_factory(
         config=gw,
         provider_selector=None,
         tool_registry=None,
         turn_runner=None,
-        workspace_for_agent=_workspace_for_agent,
         need_provider=need_provider,
     )
     dream_obj = dream(agent)

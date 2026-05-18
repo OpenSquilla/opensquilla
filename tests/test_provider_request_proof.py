@@ -328,6 +328,36 @@ def test_provider_request_proof_compacts_assistant_reasoning_content() -> None:
     assert reasoning != payload["messages"][1]["reasoning_content"]
 
 
+def test_provider_request_proof_compacts_segmented_assistant_text_tail() -> None:
+    payload = {
+        "messages": [
+            {"role": "system", "content": "system prompt\n" + ("s" * 6400)},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "previous result\n" + ("x" * 20_000)}
+                ],
+            },
+            {"role": "user", "content": "每过五分钟提醒我喝水"},
+        ]
+    }
+
+    compacted, proof = prove_or_compact_provider_payload(
+        payload,
+        projection_adapter="openrouter",
+        proof_budget=12_000,
+        status_projection_mode="content_envelope",
+    )
+
+    assert proof is not None
+    assert proof["fits"] is True
+    assert proof["retry_count"] == 2
+    assert proof["recent_tail_too_large"] is False
+    assistant_text = compacted["messages"][1]["content"][0]["text"]
+    assert "[provider_request_text_block_compacted:" in assistant_text
+    assert assistant_text != payload["messages"][1]["content"][0]["text"]
+
+
 def test_provider_request_proof_reports_recent_tail_after_tail_compaction_fails() -> None:
     payload = {
         "messages": [

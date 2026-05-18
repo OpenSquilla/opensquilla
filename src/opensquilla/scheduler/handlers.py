@@ -58,6 +58,47 @@ def _resolve_session_key(job: CronJob) -> str:
             return f"cron:{job.id}"
 
 
+def _required_delivery_error(job: CronJob, report: Any) -> str | None:
+    """Return an error when required primary delivery failed."""
+    if job.delivery.best_effort:
+        return None
+    mode = (
+        job.delivery.mode
+        if isinstance(job.delivery.mode, DeliveryMode)
+        else DeliveryMode(job.delivery.mode)
+    )
+    channel_status = getattr(report, "channel_status", "skipped")
+    session_status = getattr(report, "session_status", "skipped")
+    if channel_status == "delivery_failed":
+        return f"Cron job '{job.name}' delivery failed"
+    if (
+        mode in {DeliveryMode.CHANNEL, DeliveryMode.ORIGIN, DeliveryMode.WEBHOOK}
+        and channel_status == "skipped"
+    ):
+        return f"Cron job '{job.name}' delivery was skipped"
+    if session_status == "forward_failed":
+        return f"Cron job '{job.name}' session delivery failed"
+    return None
+
+
+def _required_heartbeat_delivery_error(
+    job: CronJob,
+    delivery_override: dict[str, str] | None,
+    hb_result: Any,
+) -> str | None:
+    """Return an error when pinned heartbeat delivery was required but failed."""
+    if job.delivery.best_effort or delivery_override is None:
+        return None
+    hb_status = getattr(hb_result, "status", "")
+    delivery_status = getattr(hb_result, "delivery_status", "")
+    reason = getattr(hb_result, "reason", "")
+    if delivery_status in {"delivery_failed", "forward_failed"}:
+        return str(reason or delivery_status)
+    if hb_status == "skipped":
+        return str(reason or delivery_status or "delivery skipped")
+    return None
+
+
 def _build_cron_tool_context(
     agent_id: str,
     job: CronJob,
@@ -88,7 +129,7 @@ def _build_cron_tool_context(
         workspace_dir, workspace_strict = workspace_resolver(agent_id)
     return tool_context_from_envelope(
         envelope,
-        is_owner=False,
+        is_owner=bool(getattr(job, "creator_is_owner", False)),
         workspace_dir=workspace_dir,
         workspace_strict=workspace_strict,
     )
@@ -309,6 +350,9 @@ def make_agent_run_handler(
         # Signal failure to scheduler pipeline
         if not success:
             raise RuntimeError(error_message or result_text or f"Cron job '{job.name}' failed")
+        delivery_error = _required_delivery_error(job, report)
+        if delivery_error:
+            raise RuntimeError(delivery_error)
 
         return HandlerResult(
             summary=summary,
@@ -481,6 +525,14 @@ def make_system_event_handler(
         hb_reason = getattr(hb_result, "reason", "")
         if hb_status == "failed":
             raise RuntimeError(hb_reason or "heartbeat failed")
+        if not busy_fallback:
+            delivery_error = _required_heartbeat_delivery_error(
+                job,
+                delivery_override,
+                hb_result,
+            )
+            if delivery_error:
+                raise RuntimeError(delivery_error)
 
         if session_event_emitter is not None:
             await session_event_emitter(
