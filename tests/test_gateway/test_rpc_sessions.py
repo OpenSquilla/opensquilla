@@ -398,7 +398,7 @@ class TestSessionsCreate:
 
         assert ("opensquilla.session.rpc_payload", "session_create_response") in imports
         assert ("opensquilla.session.rpc_payload", "session_create_stub_response") in imports
-        assert ("opensquilla.session.rpc_payload", "session_agent_not_found_details") in imports
+        assert ("opensquilla.session.errors", "SessionAgentNotFoundError") in imports
         assert any(
             isinstance(node, ast.Name) and node.id == "session_create_response"
             for node in ast.walk(handler)
@@ -408,7 +408,7 @@ class TestSessionsCreate:
             for node in ast.walk(handler)
         )
         assert any(
-            isinstance(node, ast.Name) and node.id == "session_agent_not_found_details"
+            isinstance(node, ast.Name) and node.id == "SessionAgentNotFoundError"
             for node in ast.walk(handler)
         )
         direct_detail_key_sets = {

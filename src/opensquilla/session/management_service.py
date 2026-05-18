@@ -7,9 +7,9 @@ from typing import Any
 
 import structlog
 
+from opensquilla.session.errors import SessionAgentNotFoundError, SessionUnavailableError
 from opensquilla.session.keys import canonicalize_session_key, normalize_agent_id
 from opensquilla.session.rpc_payload import (
-    session_agent_not_found_details,
     session_create_response,
     session_create_stub_response,
     session_patch_response,
@@ -17,11 +17,6 @@ from opensquilla.session.rpc_payload import (
 from opensquilla.session.services import get_session_storage
 
 log = structlog.get_logger(__name__)
-
-
-def _rpc_error_type(name: str) -> Any:
-    module = __import__("opensquilla.gateway.rpc", fromlist=[name])
-    return getattr(module, name)
 
 
 def require_session_key(params: dict | None) -> str:
@@ -98,17 +93,11 @@ async def create_session(params: dict | None, ctx: Any) -> dict:
         raise ValueError("params.message must be a string")
 
     if not await agent_registry_has(ctx, agent_id):
-        raise _rpc_error_type("RpcHandlerError")(
-            "agent.not_found",
-            f"Agent '{agent_id}' does not exist",
-            details=session_agent_not_found_details(agent_id),
-        )
+        raise SessionAgentNotFoundError(agent_id)
 
     if ctx.session_manager is None:
         if message:
-            raise _rpc_error_type("RpcUnavailableError")(
-                "sessions.create(message=...) requires a session manager"
-            )
+            raise SessionUnavailableError("sessions.create(message=...) requires a session manager")
         key = create_session_key(agent_id, kind)
         return session_create_stub_response(key)
 

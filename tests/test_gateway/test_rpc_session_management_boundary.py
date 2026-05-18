@@ -9,6 +9,7 @@ SESSION = ROOT / "src/opensquilla/session"
 RPC_SESSIONS = GATEWAY / "rpc_sessions.py"
 RPC_SESSION_MANAGEMENT = GATEWAY / "rpc_session_management.py"
 SESSION_MANAGEMENT_SERVICE = SESSION / "management_service.py"
+SESSION_ERRORS = SESSION / "errors.py"
 
 
 def _tree(path: Path) -> ast.Module:
@@ -36,9 +37,14 @@ def _top_level_async_functions(tree: ast.Module) -> dict[str, ast.AsyncFunctionD
     }
 
 
+def _top_level_classes(tree: ast.Module) -> set[str]:
+    return {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
+
+
 def test_session_management_service_owns_create_patch_implementation() -> None:
     assert RPC_SESSION_MANAGEMENT.is_file()
     assert SESSION_MANAGEMENT_SERVICE.is_file()
+    assert SESSION_ERRORS.is_file()
 
     management_tree = _tree(RPC_SESSION_MANAGEMENT)
     management_async_functions = _top_level_async_functions(management_tree)
@@ -47,6 +53,9 @@ def test_session_management_service_owns_create_patch_implementation() -> None:
     service_functions = _top_level_functions(service_tree)
     service_async_functions = _top_level_async_functions(service_tree)
     service_imports = _imports_from(service_tree)
+    service_source = SESSION_MANAGEMENT_SERVICE.read_text(encoding="utf-8")
+    error_imports = _imports_from(_tree(SESSION_ERRORS))
+    error_classes = _top_level_classes(_tree(SESSION_ERRORS))
 
     assert {
         "model_value",
@@ -66,17 +75,32 @@ def test_session_management_service_owns_create_patch_implementation() -> None:
     } == set(management_async_functions.keys())
     assert {
         ("opensquilla.session.services", "get_session_storage"),
+        ("opensquilla.session.errors", "SessionAgentNotFoundError"),
+        ("opensquilla.session.errors", "SessionUnavailableError"),
         ("opensquilla.session.keys", "canonicalize_session_key"),
         ("opensquilla.session.keys", "normalize_agent_id"),
-        ("opensquilla.session.rpc_payload", "session_agent_not_found_details"),
         ("opensquilla.session.rpc_payload", "session_create_response"),
         ("opensquilla.session.rpc_payload", "session_create_stub_response"),
         ("opensquilla.session.rpc_payload", "session_patch_response"),
     } <= service_imports
     assert not any(module == "opensquilla.gateway.rpc" for module, _name in service_imports)
+    assert "opensquilla.gateway.rpc" not in service_source
+    assert {
+        "SessionAgentNotFoundError",
+        "SessionUnavailableError",
+    } <= error_classes
+    assert {
+        ("opensquilla.session.rpc_payload", "session_agent_not_found_details"),
+    } <= error_imports
     assert {
         ("opensquilla.session.management_service", "create_session"),
         ("opensquilla.session.management_service", "patch_session"),
+    } <= management_imports
+    assert {
+        ("opensquilla.gateway.rpc", "RpcHandlerError"),
+        ("opensquilla.gateway.rpc", "RpcUnavailableError"),
+        ("opensquilla.session.errors", "SessionAgentNotFoundError"),
+        ("opensquilla.session.errors", "SessionUnavailableError"),
     } <= management_imports
 
 
