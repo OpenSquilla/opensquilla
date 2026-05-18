@@ -44,6 +44,32 @@ def read_memory_source(
     return content
 
 
+def memory_get_tool_result(
+    agent: ResolvedMemoryAgent,
+    path: str,
+    *,
+    from_line: int | None = None,
+    lines: int | None = None,
+    from_arg: Any | None = None,
+    allow_archive: bool = False,
+) -> str:
+    if from_line is None and from_arg is not None:
+        if isinstance(from_arg, bool) or not isinstance(from_arg, int):
+            return "Error: from must be an integer."
+        from_line = from_arg
+
+    try:
+        return read_memory_source(
+            agent,
+            path,
+            from_line=from_line,
+            lines=lines,
+            allow_archive=allow_archive,
+        )
+    except MemorySourceError as exc:
+        return str(exc)
+
+
 async def delete_memory_source(
     agent: ResolvedMemoryAgent,
     path: str,
@@ -59,6 +85,19 @@ async def delete_memory_source(
     index_path = file_path.resolve().relative_to(workspace_dir.resolve()).as_posix()
     await _store_remove_file(agent.store, index_path)
     return index_path
+
+
+async def memory_delete_tool_result(
+    agent: ResolvedMemoryAgent,
+    path: str,
+    *,
+    allow_archive: bool = False,
+) -> str:
+    try:
+        deleted_path = await delete_memory_source(agent, path, allow_archive=allow_archive)
+    except MemorySourceError as exc:
+        return str(exc)
+    return f"Deleted {deleted_path} and removed from index."
 
 
 def _validated_source_path(
