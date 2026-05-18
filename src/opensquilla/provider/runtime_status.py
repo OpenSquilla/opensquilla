@@ -58,35 +58,6 @@ class ProviderStatusReport:
     rows: tuple[ProviderStatusRow, ...]
 
 
-def provider_model_probe_to_wire(probe: ProviderModelProbe) -> dict[str, Any]:
-    return {
-        "attempted": probe.attempted,
-        "status": probe.status,
-        "count": probe.count,
-        "error": probe.error,
-    }
-
-
-def provider_status_row_to_wire(row: ProviderStatusRow) -> dict[str, Any]:
-    return {
-        "providerId": row.provider_id,
-        "active": row.active,
-        "configured": row.configured,
-        "buildable": row.buildable,
-        "model": row.model,
-        "requiresApiKey": row.requires_api_key,
-        "apiKeyConfigured": row.api_key_configured,
-        "baseUrlConfigured": row.base_url_configured,
-        "error": row.error,
-        "modelProbe": provider_model_probe_to_wire(row.model_probe),
-    }
-
-
-def provider_status_report_to_wire(report: ProviderStatusReport) -> dict[str, Any]:
-    rows = [provider_status_row_to_wire(row) for row in report.rows]
-    return {"activeProvider": report.active_provider, "providers": rows, "count": len(rows)}
-
-
 async def build_provider_status_payload(
     specs: Iterable[ProviderStatusSpec],
     *,
@@ -96,7 +67,7 @@ async def build_provider_status_payload(
     probe_models: bool = False,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build the provider status payload exposed by adapter surfaces."""
+    """Compatibility wrapper for provider status payload callers."""
 
     report = await build_provider_status_report(
         specs,
@@ -106,15 +77,27 @@ async def build_provider_status_payload(
         probe_models=probe_models,
         environ=environ,
     )
-    return provider_status_report_to_wire(report)
-
-
-def _provider_status_rpc_params(params: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    if params is None:
-        return {}
-    if not isinstance(params, Mapping):
-        raise ValueError("params must be an object")
-    return params
+    rows = [
+        {
+            "providerId": row.provider_id,
+            "active": row.active,
+            "configured": row.configured,
+            "buildable": row.buildable,
+            "model": row.model,
+            "requiresApiKey": row.requires_api_key,
+            "apiKeyConfigured": row.api_key_configured,
+            "baseUrlConfigured": row.base_url_configured,
+            "error": row.error,
+            "modelProbe": {
+                "attempted": row.model_probe.attempted,
+                "status": row.model_probe.status,
+                "count": row.model_probe.count,
+                "error": row.model_probe.error,
+            },
+        }
+        for row in report.rows
+    ]
+    return {"activeProvider": report.active_provider, "providers": rows, "count": len(rows)}
 
 
 async def build_provider_status_rpc_payload(
@@ -125,9 +108,14 @@ async def build_provider_status_rpc_payload(
     config: Any | None,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build the provider status RPC payload from request params."""
+    """Compatibility wrapper for provider status RPC payload callers."""
 
-    raw = _provider_status_rpc_params(params)
+    if params is None:
+        raw: Mapping[str, Any] = {}
+    elif isinstance(params, Mapping):
+        raw = params
+    else:
+        raise ValueError("params must be an object")
     provider_filter = raw.get("provider")
     return await build_provider_status_payload(
         specs,

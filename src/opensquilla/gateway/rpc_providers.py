@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from opensquilla.gateway.provider_rpc_payloads import build_provider_status_rpc_payload
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
-from opensquilla.provider.runtime_status import build_provider_status_rpc_payload
 
 _d = get_dispatcher()
 
