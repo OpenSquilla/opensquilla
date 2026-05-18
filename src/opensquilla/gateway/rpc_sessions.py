@@ -10,7 +10,6 @@ from typing import Any
 
 import structlog
 
-from opensquilla.engine.start_turn import start_turn_via_runtime
 from opensquilla.gateway import attachment_ingest as _attachment_ingest
 from opensquilla.gateway import rpc_session_send_inputs as _session_send_inputs
 from opensquilla.gateway.agent_tasks import get_agent_task_registry
@@ -21,6 +20,7 @@ from opensquilla.gateway.rpc_session_send_inputs import (
     trusted_elevated_hint,
     validate_session_attachments,
 )
+from opensquilla.gateway.rpc_session_turn_runtime import enqueue_session_turn_via_runtime
 from opensquilla.gateway.session_services import (
     get_session_epoch,
     get_session_lock,
@@ -55,8 +55,6 @@ from opensquilla.session.rpc_payload import (
     session_reset_response,
     session_resolve_response,
     session_send_accepted_response,
-    session_send_queue_full_details,
-    session_send_queue_full_dirty_details,
 )
 
 _d = get_dispatcher()
@@ -614,87 +612,20 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
             or "followup"
         )
         runtime_mode = "interrupt" if requested_mode == "steer" else requested_mode
-        try:
-            handle = await start_turn_via_runtime(
-                task_runtime,
-                route_envelope,
-                message_text,
-                attachments=raw_attachments,
-                mode=runtime_mode,
-                run_kind=run_kind,
-                no_memory_capture=bool(capture_controls["no_memory_capture"]),
-                semantic_message=semantic_message_text,
-            )
-        except Exception as exc:
-            # Ensure the uuid eviction does NOT fire on this
-            # path. The locked semantic mandates that any rejection /
-            # rollback / queue-full leaves the uuid alive until TTL so
-            # the user can retry against the same uuid.
-            _consumed_file_uuids = []  # noqa: F841 — explicit no-evict marker
-            from opensquilla.gateway.task_runtime import TaskQueueFullError
-
-            if not isinstance(exc, TaskQueueFullError):
-                raise
-
-            # Roll back the just-appended user turn so a retry doesn't leave
-            # a ghost message in the transcript. If rollback fails (e.g.
-            # storage error under load), surface a non-retryable error and
-            # hand the orphan message_id to the client as an idempotency
-            # token — clients must dedup before retrying.
-            orphan_id = getattr(persisted_entry, "message_id", None)
-            rollback_ok = False
-            if orphan_id and hasattr(ctx.session_manager, "remove_message"):
-                try:
-                    rollback_ok = await ctx.session_manager.remove_message(key, orphan_id)
-                except Exception as rb_exc:  # noqa: BLE001 — rollback is best-effort
-                    log.warning(
-                        "sessions.send.rollback_failed",
-                        session_key=key,
-                        message_id=orphan_id,
-                        error=str(rb_exc),
-                    )
-                    rollback_ok = False
-
-            if rollback_ok:
-                raise RpcHandlerError(
-                    "QUEUE_FULL",
-                    "The session task queue is full. Try again after queued work completes.",
-                    details=session_send_queue_full_details(
-                        session_key=exc.session_key,
-                        max_pending=exc.max_pending,
-                        rollback_message_id=orphan_id,
-                    ),
-                    retryable=True,
-                ) from exc
-            raise RpcHandlerError(
-                "QUEUE_FULL_DIRTY",
-                (
-                    "The session task queue is full and the just-appended user "
-                    "turn could not be rolled back. The transcript now contains "
-                    "an orphan message; clients must dedup by orphan_message_id "
-                    "before retrying."
-                ),
-                details=session_send_queue_full_dirty_details(
-                    session_key=exc.session_key,
-                    max_pending=exc.max_pending,
-                    orphan_message_id=orphan_id,
-                ),
-                retryable=False,
-            ) from exc
-        # Eviction hook: turn was accepted into the runtime,
-        # post-resolution + post-engine-acceptance. Evict consumed uuids
-        # so memory does not linger for the full TTL window. Locked
-        # semantic mandates this fires ONLY here on the success path.
-        if _consumed_file_uuids:
-            from opensquilla.gateway.uploads import get_upload_store
-
-            _store = get_upload_store()
-            for _u in _consumed_file_uuids:
-                try:
-                    await _store.evict(_u)
-                except Exception:  # noqa: BLE001 — eviction is best-effort
-                    log.warning("uploads.evict_failed_post_turn uuid=%s", _u[:8])
-        return session_send_accepted_response(key, task_id=handle.task_id)
+        return await enqueue_session_turn_via_runtime(
+            task_runtime,
+            route_envelope=route_envelope,
+            message_text=message_text,
+            raw_attachments=raw_attachments,
+            runtime_mode=runtime_mode,
+            run_kind=run_kind,
+            no_memory_capture=bool(capture_controls["no_memory_capture"]),
+            semantic_message_text=semantic_message_text,
+            session_manager=ctx.session_manager,
+            session_key=key,
+            persisted_entry=persisted_entry,
+            consumed_file_uuids=_consumed_file_uuids,
+        )
 
     # 2. Run agent turn in background via TurnRunner
     async def _run() -> None:
