@@ -16,7 +16,7 @@ import pytest
 
 from opensquilla.agents.registry import AgentRegistry
 from opensquilla.engine.types import DoneEvent
-from opensquilla.gateway import rpc_sessions
+from opensquilla.gateway import rpc_session_lifecycle, rpc_sessions
 from opensquilla.gateway.agent_tasks import get_agent_task_registry
 from opensquilla.gateway.attachment_ingest import (
     MAX_STAGED_PDF_BYTES,
@@ -1234,7 +1234,7 @@ class TestSessionsAbort:
         assert res.ok is True  # no-op
 
     def test_gateway_abort_delegates_payload_to_session_boundary(self):
-        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
             (node.module, alias.name)
@@ -1245,7 +1245,7 @@ class TestSessionsAbort:
         handler = next(
             node
             for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_sessions_abort"
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_abort"
         )
 
         assert ("opensquilla.session.rpc_payload", "session_abort_response") in imports
@@ -1378,7 +1378,7 @@ class TestSessionsReset:
         assert runtime.cancelled is False
 
     def test_gateway_reset_delegates_payload_to_session_boundary(self):
-        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
             (node.module, alias.name)
@@ -1389,7 +1389,7 @@ class TestSessionsReset:
         handler = next(
             node
             for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_sessions_reset"
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_reset"
         )
         dict_key_sets = {
             tuple(
@@ -1523,7 +1523,7 @@ class TestSessionsDelete:
         assert len(res.payload["errors"]) == 1
 
     def test_gateway_delete_delegates_payload_to_session_boundary(self):
-        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
             (node.module, alias.name)
@@ -1534,7 +1534,7 @@ class TestSessionsDelete:
         handler = next(
             node
             for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_sessions_delete"
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_delete"
         )
         return_value = next(
             node.value for node in ast.walk(handler) if isinstance(node, ast.Return)
@@ -1566,7 +1566,7 @@ class TestSessionsCompact:
         assert res.ok is True
 
     def test_gateway_compact_delegates_payload_to_session_boundary(self):
-        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
             (node.module, alias.name)
@@ -1577,7 +1577,7 @@ class TestSessionsCompact:
         handler = next(
             node
             for node in tree.body
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_sessions_compact"
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_compact"
         )
         handler_constants = {
             node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
@@ -1779,7 +1779,7 @@ class TestSessionsContextCompact:
         assert manager.compact_calls == [(session.session_key, 1234)]
 
     def test_gateway_context_compact_delegates_payload_to_session_boundary(self):
-        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
             (node.module, alias.name)
@@ -1791,7 +1791,7 @@ class TestSessionsContextCompact:
             node
             for node in tree.body
             if isinstance(node, ast.AsyncFunctionDef)
-            and node.name == "_handle_sessions_context_compact"
+            and node.name == "handle_sessions_context_compact"
         )
         handler_constants = {
             node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
@@ -1810,9 +1810,9 @@ class TestSessionsContextCompact:
         assert "context_window_tokens" not in handler_constants
 
     def test_gateway_context_compact_delegates_inputs_to_gateway_boundary(self):
-        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
-        boundary_path = Path(rpc_sessions.__file__).with_name("rpc_compaction_inputs.py")
+        boundary_path = Path(rpc_session_lifecycle.__file__).with_name("rpc_compaction_inputs.py")
 
         assert boundary_path.exists()
 
@@ -1832,14 +1832,12 @@ class TestSessionsContextCompact:
             node
             for node in tree.body
             if isinstance(node, ast.AsyncFunctionDef)
-            and node.name == "_handle_sessions_context_compact"
+            and node.name == "handle_sessions_context_compact"
         )
 
         assert {
             ("opensquilla.gateway.rpc_compaction_inputs", "build_gateway_compaction_config"),
             ("opensquilla.gateway.rpc_compaction_inputs", "context_window_tokens"),
-            ("opensquilla.gateway.rpc_compaction_inputs", "effective_compaction_model"),
-            ("opensquilla.gateway.rpc_compaction_inputs", "resolve_compaction_provider"),
         } <= imports
         assert {
             "build_gateway_compaction_config",
