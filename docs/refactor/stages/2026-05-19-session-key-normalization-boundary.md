@@ -131,7 +131,7 @@ boundary, preserving current error messages and canonicalization behavior.
       existing feature coverage.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
