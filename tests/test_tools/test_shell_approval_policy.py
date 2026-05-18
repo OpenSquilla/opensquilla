@@ -12,6 +12,7 @@ from opensquilla.sandbox.integration import configure_runtime, reset_runtime
 from opensquilla.sandbox.intent_cache import get_intent_cache, reset_intent_cache
 from opensquilla.tools.builtin import code_exec, filesystem, shell
 from opensquilla.tools.builtin.code_exec import execute_code
+from opensquilla.tools.builtin.shell_policy import PolicyResult
 from opensquilla.tools.types import (
     CallerKind,
     InteractionMode,
@@ -299,6 +300,15 @@ async def test_approved_background_process_uses_host_grant_when_sandbox_enabled(
         raise AssertionError("sandbox background backend should not run after approval")
 
     monkeypatch.setattr(shell, "_spawn_sandboxed_background_process", fail_sandbox)
+    monkeypatch.setattr(
+        shell,
+        "check_safe_bin",
+        lambda command: PolicyResult(
+            allowed=True,
+            reason=f"command requires approval: {command}",
+            needs_approval=True,
+        ),
+    )
 
     pending = json.loads(await shell.background_process("rm target.txt", workdir=str(tmp_path)))
     assert pending["status"] == "approval_required"
