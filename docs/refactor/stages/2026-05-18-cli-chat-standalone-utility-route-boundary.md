@@ -117,15 +117,15 @@ Extract standalone `/tool-compress` and `/save` route-name execution into a focu
 - [x] Implement the smallest behavior-compatible change.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 
 ## Child Gate
 
@@ -151,8 +151,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion Record
 
-- Child commit: `ff39835`.
-- Integration merge:
+- Child commit: `e43b52d`.
+- Integration merge: `6e2d7ee`.
 - Verification evidence:
   - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-cli-chat-standalone-utility-route-boundary` passed on branch `codex/refactor-cli-chat-standalone-utility-route-boundary` at `1ba7d48`.
   - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_standalone_utility_routes_use_executor_boundary tests/test_cli/test_chat_cmd.py::test_standalone_utility_route_executor_delegates_known_routes -q` failed as expected because `chat_standalone_utility_route_workflows.py` did not exist.
@@ -160,7 +160,10 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_standalone_utility_route_workflows.py tests/test_cli/test_chat_cmd.py` passed.
   - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py -q` passed, `139 passed in 1.21s`.
   - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2402 passed, 8 skipped, 2 warnings in 28.09s`; gateway smoke start/status/stop passed on `127.0.0.1:57398`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `1ba7d48`.
+  - Integration merge: `git merge --no-ff codex/refactor-cli-chat-standalone-utility-route-boundary` produced merge commit `6e2d7ee`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2404 passed, 6 skipped, 2 warnings in 32.08s`; gateway smoke start/status/stop passed on `127.0.0.1:57680`.
 - Residual risk:
-  - Pending integration merge and integration gate.
+  - Low. This slice only moves standalone utility route-name execution into a thin executor; existing tool-compression and transcript-export helpers still own behavior.
 - Next recommended slice:
   - Continue reducing `_standalone_repl` by extracting remaining non-stateful display/help route execution or pivot to the next non-CLI architecture boundary with higher impact.
