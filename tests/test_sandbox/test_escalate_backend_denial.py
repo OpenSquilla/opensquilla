@@ -83,7 +83,7 @@ def _reset() -> None:
 async def test_escalate_routes_to_approval_gate_with_require_approval(tmp_path: Path) -> None:
     queue = _ApproveQueue(approve=True)
     configure_runtime(
-        SandboxSettings(sandbox=True, security_grading=False),
+        SandboxSettings(sandbox=True, backend="noop", security_grading=False),
         approval_queue=queue,
         workspace=tmp_path,
     )
@@ -101,7 +101,7 @@ async def test_escalate_routes_to_approval_gate_with_require_approval(tmp_path: 
 @pytest.mark.asyncio
 async def test_escalate_returns_allow_on_user_approval(tmp_path: Path) -> None:
     configure_runtime(
-        SandboxSettings(sandbox=True, security_grading=False),
+        SandboxSettings(sandbox=True, backend="noop", security_grading=False),
         approval_queue=_ApproveQueue(approve=True),
         workspace=tmp_path,
     )
@@ -116,7 +116,7 @@ async def test_escalate_returns_allow_on_user_approval(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_escalate_returns_seatbelt_denied_on_rejection(tmp_path: Path) -> None:
     configure_runtime(
-        SandboxSettings(sandbox=True, security_grading=False),
+        SandboxSettings(sandbox=True, backend="noop", security_grading=False),
         approval_queue=_ApproveQueue(approve=False),
         workspace=tmp_path,
     )

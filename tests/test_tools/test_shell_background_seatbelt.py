@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,11 @@ from opensquilla.sandbox.types import (
     SecurityLevel,
 )
 from opensquilla.tools.builtin import shell
+
+pytestmark = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="Seatbelt background test models macOS/POSIX paths",
+)
 
 
 class _FakeProcess:

@@ -192,7 +192,7 @@ async def test_notify_compaction_fires_after_persist(
     monkeypatch.setattr(
         runtime_mod,
         "notify_compaction",
-        lambda session_key: notify_calls.append(session_key),
+        lambda session_key, **_: notify_calls.append(session_key),
     )
     # The runtime adapter imports notify_compaction lazily from
     # cache_break_monitor; patch the source module too.
@@ -201,7 +201,7 @@ async def test_notify_compaction_fires_after_persist(
     monkeypatch.setattr(
         cbm,
         "notify_compaction",
-        lambda session_key: notify_calls.append(session_key),
+        lambda session_key, **_: notify_calls.append(session_key),
     )
 
     case = _baseline_case()

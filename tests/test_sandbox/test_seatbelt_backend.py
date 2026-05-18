@@ -25,6 +25,11 @@ from opensquilla.sandbox.types import (
     SecurityLevel,
 )
 
+pytestmark = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="Seatbelt backend tests model macOS/POSIX paths",
+)
+
 
 def _policy(
     workspace: Path,
