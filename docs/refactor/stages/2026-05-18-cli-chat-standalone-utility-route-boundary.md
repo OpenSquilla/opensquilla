@@ -154,15 +154,15 @@ Co-authored-by: Codex <noreply@openai.com>
 - Child commit: `e43b52d`.
 - Integration merge: `6e2d7ee`.
 - Verification evidence:
-  - Preflight: `scripts/refactor_preflight.sh --allow-dirty --expect-branch codex/refactor-cli-chat-standalone-utility-route-boundary` passed on branch `codex/refactor-cli-chat-standalone-utility-route-boundary` at `1ba7d48`.
-  - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_standalone_utility_routes_use_executor_boundary tests/test_cli/test_chat_cmd.py::test_standalone_utility_route_executor_delegates_known_routes -q` failed as expected because `chat_standalone_utility_route_workflows.py` did not exist.
-  - Focused green: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_standalone_utility_routes_use_executor_boundary tests/test_cli/test_chat_cmd.py::test_standalone_utility_route_executor_delegates_known_routes tests/test_cli/test_chat_cmd.py::test_standalone_tool_compress_toggles_config tests/test_cli/test_chat_cmd.py::test_standalone_save_transcript_writes_memory_transcript -q` passed, `4 passed in 0.77s`.
+  - Preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-cli-chat-standalone-utility-route-boundary` passed on branch `codex/refactor-cli-chat-standalone-utility-route-boundary` at `1ba7d48`.
+  - Red: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_save_transcript_uses_export_boundary tests/test_cli/test_chat_cmd.py::test_standalone_utility_routes_use_executor_boundary tests/test_cli/test_chat_cmd.py::test_standalone_utility_route_executor_delegates_known_routes -q` failed as expected because `chat_standalone_utility_route_workflows.py` did not exist and `_standalone_repl` still owned direct utility route execution.
+  - Focused green: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py::test_chat_save_transcript_uses_export_boundary tests/test_cli/test_chat_cmd.py::test_standalone_utility_routes_use_executor_boundary tests/test_cli/test_chat_cmd.py::test_standalone_utility_route_executor_delegates_known_routes tests/test_cli/test_chat_cmd.py::test_standalone_tool_compress_toggles_config tests/test_cli/test_chat_cmd.py::test_standalone_save_transcript_writes_memory_transcript -q` passed, `5 passed in 0.54s`.
   - Touched ruff: `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_standalone_utility_route_workflows.py tests/test_cli/test_chat_cmd.py` passed.
-  - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py -q` passed, `139 passed in 1.21s`.
-  - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2402 passed, 8 skipped, 2 warnings in 28.09s`; gateway smoke start/status/stop passed on `127.0.0.1:57398`.
-  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `1ba7d48`.
+  - Touched tests: `uv run --extra dev pytest tests/test_cli/test_chat_cmd.py -q` passed, `139 passed in 1.17s`.
+  - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2402 passed, 8 skipped, 2 warnings in 27.67s`; gateway smoke start/status/stop passed on `127.0.0.1:57316`.
+  - Integration preflight: `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture` passed on branch `codex/refactor-architecture` at `6e2d7ee`.
   - Integration merge: `git merge --no-ff codex/refactor-cli-chat-standalone-utility-route-boundary` produced merge commit `6e2d7ee`.
-  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2404 passed, 6 skipped, 2 warnings in 32.08s`; gateway smoke start/status/stop passed on `127.0.0.1:57680`.
+  - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 488 source files; whitespace passed; pytest passed with `2404 passed, 6 skipped, 2 warnings in 27.38s`; gateway smoke start/status/stop passed on `127.0.0.1:57891`.
 - Residual risk:
   - Low. This slice only moves standalone utility route-name execution into a thin executor; existing tool-compression and transcript-export helpers still own behavior.
 - Next recommended slice:
