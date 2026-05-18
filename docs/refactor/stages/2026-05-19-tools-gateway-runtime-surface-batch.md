@@ -314,7 +314,7 @@ Co-authored-by: Codex <noreply@openai.com>
   - Integration `scripts/refactor_gate.sh`: ruff passed; mypy passed over 530
     source files; pytest `2552 passed, 6 skipped, 2 warnings`; gateway smoke
     passed.
-  - Cleanup: `git worktree remove /Users/cwan0785/opensquilla-refactor-active`
+  - Cleanup: `git worktree remove ../opensquilla-refactor-active`
     and `git worktree prune` completed; `git worktree list` no longer shows
     `../opensquilla-refactor-active`.
 - Residual risk:
