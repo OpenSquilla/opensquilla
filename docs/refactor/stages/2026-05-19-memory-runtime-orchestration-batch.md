@@ -92,12 +92,12 @@ state.
 - `superpowers:writing-plans`:
   - Evidence: read the skill; wrote this stage plan before production edits.
 - `superpowers:test-driven-development`:
-  - Evidence: read the skill; each implementation worker must add RED boundary
-    or behavior tests and record the expected failure before production edits.
+  - Evidence: read the skill; workers added RED boundary/behavior tests before
+    implementation and recorded expected failures.
 - `superpowers:verification-before-completion`:
-  - Evidence: read the skill; this stage cannot be claimed complete until
-    focused tests, touched-file checks, child `scripts/refactor_gate.sh`,
-    integration `scripts/refactor_gate.sh`, and cleanup audit are recorded.
+  - Evidence: read the skill; child focused tests, touched-file checks, and
+    child `scripts/refactor_gate.sh` are recorded below. Integration gate and
+    cleanup audit still must be recorded after merge.
 - Parallelism decision:
   - `superpowers:dispatching-parallel-agents` used for three read-only audits:
     memory tool runtime surface, gateway boot/runtime assembly, and
@@ -106,8 +106,14 @@ state.
     dispatch Memory Tool Surface and Memory Gateway Runtime workers in parallel
     with disjoint file ownership.
   - `spawn_agent` probe: availability probe returned `spawn_agent available`.
-  - External worker fallback: not needed unless same-thread worker spawning
-    fails during implementation.
+  - Same-thread workers used:
+    - Memory Gateway Runtime worker commit `3e289ae`.
+    - Memory Tool Surface worker commit `5972473`.
+  - Read-only review agents used after worker commits:
+    - Spec reviewer found no implementation boundary violations and required
+      stage-record evidence updates.
+    - Code-quality reviewer found no blocking issues.
+  - External worker fallback was not needed.
 - Historical evidence note:
   - Do not infer Superpowers usage from older stages. This stage records only
     current command/log evidence.
@@ -241,16 +247,51 @@ do not revert unrelated changes, and stop rather than editing outside ownership.
     `memory_tools.py` still owns runtime surface orchestration inline.
   - Worker B fails because `opensquilla.memory.gateway_runtime` does not exist
     and `gateway.boot` still owns memory runtime assembly inline.
+- Actual RED evidence:
+  - Memory Tool Surface worker:
+    `uv run --extra dev pytest tests/test_memory_tool_runtime.py tests/test_memory_tool_search.py tests/test_memory_tool_sources.py tests/test_memory_tool_writes.py tests/test_tools/test_memory_profile_guidance.py tests/test_tools/test_builtin_loader.py -q`
+    failed as expected with `2 failed, 32 passed`.
+  - Memory Gateway Runtime worker:
+    `uv run --extra dev pytest tests/test_gateway/test_router_boot.py::test_gateway_boot_delegates_memory_runtime_to_memory_boundary tests/test_gateway/test_router_boot.py::test_build_services_memory_gateway_runtime_failure_is_fail_open tests/test_memory_gateway_runtime.py -q`
+    failed as expected with `4 failed`.
 - Behavior compatibility coverage:
   - Memory tool runtime, search/source/write behavior, profile guidance, builtin
     loader, router boot, memory config defaults, memory source RPC, and session
     lifecycle memory tests.
 - Combined focused GREEN:
   - `uv run --extra dev pytest tests/test_memory_tool_runtime.py tests/test_memory_tool_search.py tests/test_memory_tool_sources.py tests/test_memory_tool_writes.py tests/test_tools/test_memory_profile_guidance.py tests/test_tools/test_builtin_loader.py tests/test_gateway/test_router_boot.py tests/test_gateway/test_config_memory_defaults.py tests/test_gateway/test_rpc_config_memory_embedding.py tests/test_memory_manager_embedding_config.py tests/test_memory_source_rpc.py tests/test_session/test_session_lifecycle_memory.py -q`
+  - Result after worker commits: `120 passed`.
 - Additional touched-file checks:
   - `uv run --extra dev ruff check src/opensquilla/memory src/opensquilla/tools/builtin/memory_tools.py src/opensquilla/gateway/boot.py tests/test_memory_tool_runtime.py tests/test_memory_tool_search.py tests/test_memory_tool_sources.py tests/test_memory_tool_writes.py tests/test_memory_gateway_runtime.py tests/test_gateway/test_router_boot.py tests/test_tools/test_memory_profile_guidance.py tests/test_tools/test_builtin_loader.py`
   - `uv run --extra dev mypy src/opensquilla/memory src/opensquilla/tools/builtin/memory_tools.py src/opensquilla/gateway/boot.py --show-error-codes`
   - `git diff --check`
+  - Result after worker commits: Ruff passed; mypy reported
+    `Success: no issues found in 31 source files`; `git diff --check` clean.
+
+## Worker and review commits
+
+- Stage plan: `d25beee`.
+- Memory Gateway Runtime worker: `3e289ae`.
+  - GREEN:
+    `uv run --extra dev pytest tests/test_gateway/test_router_boot.py tests/test_gateway/test_config_memory_defaults.py tests/test_gateway/test_rpc_config_memory_embedding.py tests/test_memory_manager_embedding_config.py tests/test_memory_source_rpc.py tests/test_session/test_session_lifecycle_memory.py tests/test_memory_gateway_runtime.py -q`
+  - Result: `88 passed`.
+- Memory Tool Surface worker: `5972473`.
+  - GREEN:
+    `uv run --extra dev pytest tests/test_memory_tool_runtime.py tests/test_memory_tool_search.py tests/test_memory_tool_sources.py tests/test_memory_tool_writes.py tests/test_tools/test_memory_profile_guidance.py tests/test_tools/test_builtin_loader.py -q`
+  - Result: `34 passed`.
+
+## Review evidence
+
+- Spec-compliance reviewer:
+  - No blocking implementation/spec boundary issue found.
+  - Confirmed worker ownership respected and out-of-scope engine/session files
+    were not changed.
+  - Required stage-record evidence updates before completion.
+- Code-quality reviewer:
+  - No blocking code-quality issues found.
+  - Focused review reported memory tool output strings compatible, archive
+    gating preserved through `index_captured_turns`, boot fail-open behavior
+    preserved, and no import cycle in checked paths.
 
 ## Files
 
@@ -274,13 +315,13 @@ do not revert unrelated changes, and stop rather than editing outside ownership.
 - [x] Create fixed child worktree `../opensquilla-refactor-active`.
 - [x] Run child preflight.
 - [x] Run baseline focused command and record result.
-- [ ] Dispatch Memory Tool Surface and Memory Gateway Runtime workers with
+- [x] Dispatch Memory Tool Surface and Memory Gateway Runtime workers with
       explicit ownership and TDD RED/GREEN.
-- [ ] Review each worker diff for public API compatibility, import cycles, and
+- [x] Review each worker diff for public API compatibility, import cycles, and
       ownership violations.
-- [ ] Run combined focused GREEN.
-- [ ] Run touched-file Ruff, mypy, and `git diff --check`.
-- [ ] Run `scripts/refactor_gate.sh`.
+- [x] Run combined focused GREEN.
+- [x] Run touched-file Ruff, mypy, and `git diff --check`.
+- [x] Run `scripts/refactor_gate.sh`.
 - [ ] Commit with:
 
 ```text
@@ -301,6 +342,12 @@ Co-authored-by: Codex <noreply@openai.com>
 - `git diff --check`
 - `uv run --extra dev pytest`
 - gateway smoke through `scripts/refactor_gate.sh`
+- Result after worker commits: passed.
+  - Ruff: passed.
+  - Mypy: `Success: no issues found in 533 source files`.
+  - Whitespace: clean.
+  - Pytest: `2566 passed, 8 skipped, 2 warnings`.
+  - Gateway smoke: start/status/stop/status passed on `127.0.0.1:49530`.
 
 ## Integration gate
 
@@ -321,8 +368,13 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Child commit:
+  - Pending stage-record commit after this update.
 - Integration merge:
 - Verification evidence:
+  - Baseline focused: `120 passed`.
+  - Combined focused: `120 passed`.
+  - Touched-file Ruff/mypy/diff-check: passed.
+  - Child `scripts/refactor_gate.sh`: passed with `2566 passed, 8 skipped`.
 - Residual risk:
   - Engine/session flush hot paths intentionally remain out of scope because
     they require a later exclusive runtime/session lifecycle stage.
