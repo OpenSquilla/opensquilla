@@ -35,9 +35,8 @@ from opensquilla.memory.runtime import (
 )
 from opensquilla.memory.tool_search import MEMORY_SEARCH_DEFAULT_RESULTS, search_memory_tool
 from opensquilla.memory.tool_sources import (
-    MemorySourceError,
-    delete_memory_source,
-    read_memory_source,
+    memory_delete_tool_result,
+    memory_get_tool_result,
 )
 from opensquilla.memory.tool_writes import (
     MemoryWriteError,
@@ -214,22 +213,14 @@ def create_memory_tools(
         lines: int | None = None,
         **kwargs: Any,
     ) -> str:
-        from_arg = kwargs.get("from")
-        if from_line is None and from_arg is not None:
-            if isinstance(from_arg, bool) or not isinstance(from_arg, int):
-                return "Error: from must be an integer."
-            from_line = from_arg
-
-        try:
-            return read_memory_source(
-                _resolve(),
-                path,
-                from_line=from_line,
-                lines=lines,
-                allow_archive=_allow_archive_memory_source(),
-            )
-        except MemorySourceError as exc:
-            return str(exc)
+        return memory_get_tool_result(
+            _resolve(),
+            path,
+            from_line=from_line,
+            lines=lines,
+            from_arg=kwargs.get("from"),
+            allow_archive=_allow_archive_memory_source(),
+        )
 
     @tool(
         name="memory_delete",
@@ -248,17 +239,14 @@ def create_memory_tools(
         registry=registry,
     )
     async def memory_delete(path: str) -> str:
-        try:
-            await delete_memory_source(
-                _resolve(),
-                path,
-                allow_archive=_allow_archive_memory_source(),
-            )
-        except MemorySourceError as exc:
-            return str(exc)
-
-        logger.info("memory_delete.ok", path=path)
-        return f"Deleted {path} and removed from index."
+        result = await memory_delete_tool_result(
+            _resolve(),
+            path,
+            allow_archive=_allow_archive_memory_source(),
+        )
+        if result.startswith("Deleted "):
+            logger.info("memory_delete.ok", path=path)
+        return result
 
     logger.info(
         "memory_tools_registered",

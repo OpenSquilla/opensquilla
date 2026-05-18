@@ -8,6 +8,8 @@ from opensquilla.memory.runtime import ResolvedMemoryAgent, reset_memory_tools_r
 from opensquilla.memory.tool_sources import (
     MemorySourceError,
     delete_memory_source,
+    memory_delete_tool_result,
+    memory_get_tool_result,
     read_memory_source,
 )
 from opensquilla.tools.builtin.memory_tools import create_memory_tools
@@ -68,6 +70,68 @@ def test_read_memory_source_returns_tool_facing_errors(tmp_path: Path) -> None:
         read_memory_source(_agent(workspace), "memory/missing.md")
 
 
+def test_memory_tool_source_boundary_owns_tool_results() -> None:
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    memory_tools_path = root / "src/opensquilla/tools/builtin/memory_tools.py"
+    tree = ast.parse(memory_tools_path.read_text(encoding="utf-8"))
+    imports = {
+        (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+        for alias in node.names
+    }
+
+    assert (
+        "opensquilla.memory.tool_sources",
+        "memory_get_tool_result",
+    ) in imports
+    assert (
+        "opensquilla.memory.tool_sources",
+        "memory_delete_tool_result",
+    ) in imports
+    assert ("opensquilla.memory.tool_sources", "read_memory_source") not in imports
+    assert ("opensquilla.memory.tool_sources", "delete_memory_source") not in imports
+
+
+def test_memory_get_tool_result_preserves_from_alias_and_errors(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "memory" / "note.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("one\ntwo\n", encoding="utf-8")
+
+    assert (
+        memory_get_tool_result(
+            _agent(workspace),
+            "memory/note.md",
+            from_line=None,
+            lines=None,
+            from_arg=2,
+        )
+        == "two"
+    )
+    assert (
+        memory_get_tool_result(
+            _agent(workspace),
+            "memory/note.md",
+            from_line=None,
+            lines=None,
+            from_arg="2",
+        )
+        == "Error: from must be an integer."
+    )
+    assert (
+        memory_get_tool_result(
+            _agent(workspace),
+            "memory/missing.md",
+            from_line=None,
+            lines=None,
+        )
+        == "Error: memory/missing.md not found."
+    )
+
+
 @pytest.mark.asyncio
 async def test_delete_memory_source_removes_disk_and_index(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
@@ -81,6 +145,26 @@ async def test_delete_memory_source_removes_disk_and_index(tmp_path: Path) -> No
     assert index_path == "memory/note.md"
     assert not source.exists()
     assert store.removed == ["memory/note.md"]
+
+
+@pytest.mark.asyncio
+async def test_memory_delete_tool_result_preserves_success_and_errors(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    source = workspace / "memory" / "note.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("forget", encoding="utf-8")
+    store = FakeStore()
+
+    assert (
+        await memory_delete_tool_result(_agent(workspace, store), "memory/note.md")
+        == "Deleted memory/note.md and removed from index."
+    )
+    assert not source.exists()
+    assert store.removed == ["memory/note.md"]
+    assert (
+        await memory_delete_tool_result(_agent(workspace, store), "memory/note.md")
+        == "Error: memory/note.md not found."
+    )
 
 
 @pytest.mark.asyncio
