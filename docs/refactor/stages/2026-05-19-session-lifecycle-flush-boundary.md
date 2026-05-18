@@ -110,7 +110,7 @@ Co-authored-by: Codex <noreply@openai.com>
 - [x] Merge child into integration with `git merge --no-ff`.
 - [x] Run `scripts/refactor_gate.sh` in integration.
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run
+- [x] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
 
@@ -144,6 +144,10 @@ Co-authored-by: Codex <noreply@openai.com>
 
 - Child commit: `e575d36`
 - Integration merge: `c32e222`
+- Stage record commit: `7750a46`
+- Cleanup: removed `../opensquilla-refactor-active`, ran `git worktree prune`,
+  and verified no extra `opensquilla-refactor-*` worktrees remain beyond
+  `../opensquilla-refactor-integration`.
 - Verification evidence:
   - RED: `ModuleNotFoundError` for `opensquilla.session.lifecycle_flush`
   - Focused GREEN: `27 passed`
