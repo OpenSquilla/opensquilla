@@ -766,21 +766,8 @@ class TestSessionsSend:
 
         assert ("opensquilla.session.rpc_payload", "normalize_terminal_event_payload") in imports
         assert ("opensquilla.session.rpc_payload", "session_send_accepted_response") in imports
-        assert ("opensquilla.session.rpc_payload", "session_send_queue_full_details") in imports
-        assert (
-            "opensquilla.session.rpc_payload",
-            "session_send_queue_full_dirty_details",
-        ) in imports
         assert any(
             isinstance(node, ast.Name) and node.id == "session_send_accepted_response"
-            for node in ast.walk(handler)
-        )
-        assert any(
-            isinstance(node, ast.Name) and node.id == "session_send_queue_full_details"
-            for node in ast.walk(handler)
-        )
-        assert any(
-            isinstance(node, ast.Name) and node.id == "session_send_queue_full_dirty_details"
             for node in ast.walk(handler)
         )
         assert ("status", "key") not in dict_key_sets
@@ -852,6 +839,68 @@ class TestSessionsSend:
             "trusted_elevated_hint",
             "normalize_memory_capture_controls",
         } <= boundary_defs
+
+    def test_gateway_sessions_send_delegates_runtime_enqueue_to_gateway_boundary(self):
+        source = Path(rpc_sessions.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        boundary_path = Path(rpc_sessions.__file__).with_name(
+            "rpc_session_turn_runtime.py"
+        )
+
+        assert boundary_path.exists()
+
+        boundary_tree = ast.parse(boundary_path.read_text(encoding="utf-8"))
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        boundary_imports = {
+            (node.module, alias.name)
+            for node in ast.walk(boundary_tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_handle_sessions_send"
+        )
+        handler_calls = {
+            node.func.id
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        handler_names = {node.id for node in ast.walk(handler) if isinstance(node, ast.Name)}
+        boundary_defs = {
+            node.name
+            for node in ast.walk(boundary_tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        assert (
+            "opensquilla.gateway.rpc_session_turn_runtime",
+            "enqueue_session_turn_via_runtime",
+        ) in imports
+        assert "enqueue_session_turn_via_runtime" in handler_calls
+        assert ("opensquilla.engine.start_turn", "start_turn_via_runtime") not in imports
+        assert "start_turn_via_runtime" not in handler_calls
+        assert "TaskQueueFullError" not in handler_names
+        assert "enqueue_session_turn_via_runtime" in boundary_defs
+        assert (
+            "opensquilla.engine.start_turn",
+            "start_turn_via_runtime",
+        ) in boundary_imports
+        assert (
+            "opensquilla.session.rpc_payload",
+            "session_send_queue_full_details",
+        ) in boundary_imports
+        assert (
+            "opensquilla.session.rpc_payload",
+            "session_send_queue_full_dirty_details",
+        ) in boundary_imports
 
     @pytest.mark.asyncio
     async def test_send_queue_full_rolls_back_and_returns_retryable_details(
