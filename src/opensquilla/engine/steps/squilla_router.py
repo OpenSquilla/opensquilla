@@ -17,6 +17,11 @@ import structlog
 
 from opensquilla.engine.pipeline import TurnContext
 from opensquilla.engine.pricing import lookup_price
+from opensquilla.engine.steps._squilla_router_turn_boundary import (
+    append_routing_history,
+    finalize_history_decision,
+    load_routing_history,
+)
 from opensquilla.squilla_router.controller import (
     derive_prompt_policy,
     derive_thinking_mode,
@@ -766,27 +771,14 @@ async def apply_squilla_router(ctx: TurnContext) -> TurnContext:
     # History-aware routers load accumulated routing history for this session.
     routing_history = None
     if _is_history_strategy(strategy_name):
-        routing_history = _history_store.get(ctx.session_key)
-        if not routing_history:
-            persisted = ctx.metadata.get("routing_history")
-            if persisted:
-                now = time.monotonic()
-                routing_history = [{**e, "_ts": now} if "_ts" not in e else e for e in persisted]
-                _history_store.set(ctx.session_key, routing_history)
-                log.debug(
-                    "squilla_router.history_cold_start",
-                    session=ctx.session_key,
-                    restored=len(routing_history),
-                )
-        if routing_history:
-            cutoff = time.monotonic() - _ROUTING_HISTORY_WINDOW
-            routing_history = [e for e in routing_history if e.get("_ts", 0) > cutoff]
-            routing_history = routing_history[-_MAX_ROUTING_HISTORY:]
-            _history_store.set(ctx.session_key, routing_history)
-        log.debug(
-            "squilla_router.history_loaded",
-            session=ctx.session_key,
-            history_len=len(routing_history) if routing_history else 0,
+        routing_history = load_routing_history(
+            session_key=ctx.session_key,
+            metadata=ctx.metadata,
+            history_store=_history_store,
+            max_entries=_MAX_ROUTING_HISTORY,
+            history_window_seconds=_ROUTING_HISTORY_WINDOW,
+            now=time.monotonic,
+            logger=log,
         )
 
     # --- Classification ---
@@ -850,8 +842,8 @@ async def apply_squilla_router(ctx: TurnContext) -> TurnContext:
     # --- Apply decisions ---
     if _is_history_strategy(strategy_name):
         routing_extra = ctx.metadata.setdefault("routing_extra", extra or {})
-        decision = _finalize_decision(
-            decision,
+        decision, thinking_mode, prompt_policy = finalize_history_decision(
+            decision=decision,
             router_cfg=router_cfg,
             tiers=tiers,
             valid_tiers=valid_tiers,
@@ -859,11 +851,10 @@ async def apply_squilla_router(ctx: TurnContext) -> TurnContext:
             routing_history=routing_history,
             strategy_name=strategy_name,
             extra=routing_extra,
-        )
-        thinking_mode, prompt_policy = _reconcile_controller_with_final_tier(
-            thinking_mode,
-            prompt_policy,
-            routing_extra,
+            thinking_mode=thinking_mode,
+            prompt_policy=prompt_policy,
+            finalize_decision=_finalize_decision,
+            reconcile_controller=_reconcile_controller_with_final_tier,
         )
 
     routing_applied = rollout_phase != "observe"
@@ -893,29 +884,17 @@ async def apply_squilla_router(ctx: TurnContext) -> TurnContext:
 
     # History-aware routers accumulate routing_extra into per-session history.
     if _is_history_strategy(strategy_name):
-        extra = ctx.metadata.get("routing_extra")
-        if extra:
-            history = _history_store.setdefault(ctx.session_key, [])
-            entry = {
-                "turn_index": len(history),
-                "_ts": time.monotonic(),
-                "text": semantic_message,
-                **extra,
-                "base_tier": extra.get("base_tier", decision.tier),
-                "final_tier": extra.get("final_tier", decision.tier),
-                "final_route_class": extra.get("final_route_class"),
-            }
-            history.append(entry)
-            if len(history) > _MAX_ROUTING_HISTORY:
-                _history_store.set(ctx.session_key, history[-_MAX_ROUTING_HISTORY:])
-            ctx.metadata["routing_history"] = _history_store.get(ctx.session_key)
-            log.debug(
-                "squilla_router.history_appended",
-                session=ctx.session_key,
-                turn_index=entry["turn_index"],
-                route_class=entry.get("route_class"),
-                total_history=_history_store.length(ctx.session_key),
-            )
+        append_routing_history(
+            session_key=ctx.session_key,
+            metadata=ctx.metadata,
+            history_store=_history_store,
+            message=semantic_message,
+            extra=ctx.metadata.get("routing_extra"),
+            decision_tier=decision.tier,
+            max_entries=_MAX_ROUTING_HISTORY,
+            now=time.monotonic,
+            logger=log,
+        )
 
     # Pull observability fields from routing_extra so operators can see
     # what the model raw-believed (probabilities) vs what was selected
