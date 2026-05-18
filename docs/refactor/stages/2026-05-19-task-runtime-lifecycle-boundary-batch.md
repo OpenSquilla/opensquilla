@@ -305,7 +305,14 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 - [x] Run `scripts/refactor_gate.sh` in integration.
   - Result: `2614 passed, 6 skipped, 2 warnings`; gateway smoke start/status/stop/status passed.
 - [x] Record child hash, integration merge hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active` and all lifecycle worker worktrees, run `git worktree prune`, and verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
+- [x] Remove `../opensquilla-refactor-active` and all lifecycle worker worktrees, run `git worktree prune`, and verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
+  - Removed `../opensquilla-refactor-active`.
+  - Removed `../opensquilla-refactor-agent-lifecycle-execution`.
+  - Removed `../opensquilla-refactor-agent-lifecycle-shutdown`.
+  - Removed `../opensquilla-refactor-agent-lifecycle-terminal-state`.
+  - Ran `git worktree prune`.
+  - Verified all four removed paths are absent.
+  - `git worktree list --porcelain` shows no remaining `opensquilla-refactor-*` worktrees except `../opensquilla-refactor-integration`.
 
 ## Child Gate
 
@@ -349,5 +356,11 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
   - Child `scripts/refactor_gate.sh`: `2612 passed, 8 skipped, 2 warnings`; gateway smoke passed.
   - Integration `scripts/refactor_gate.sh`: `2614 passed, 6 skipped, 2 warnings`; gateway smoke passed.
 - Cleanup evidence:
+  - Removed `../opensquilla-refactor-active`.
+  - Removed `../opensquilla-refactor-agent-lifecycle-execution`.
+  - Removed `../opensquilla-refactor-agent-lifecycle-shutdown`.
+  - Removed `../opensquilla-refactor-agent-lifecycle-terminal-state`.
+  - Ran `git worktree prune`.
+  - Verified all four removed paths are absent and `git worktree list --porcelain` has no extra refactor worktrees beyond `../opensquilla-refactor-integration`.
 - Residual risk: the facade still owns `_mark_running`, `_remove_pending`, storage update/event emission in `_mark_terminal`, and queue collection; these are smaller follow-up boundaries after lifecycle extraction.
 - Next recommended slice: task runtime queue/collection and running-state facade cleanup, or a broader Gateway boot cron-result delivery cleanup noted by the previous stage.
