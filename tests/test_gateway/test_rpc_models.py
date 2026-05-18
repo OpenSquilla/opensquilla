@@ -67,12 +67,16 @@ async def test_models_rpc_list_preserves_wire_shape_and_filters() -> None:
     ]
 
 
-def test_models_rpc_delegates_payload_shape_to_provider_boundary() -> None:
+def test_models_rpc_delegates_payload_shape_to_gateway_provider_facade() -> None:
     imports = _imports_from(RPC_MODELS)
 
     assert (
-        "opensquilla.provider.model_listing",
+        "opensquilla.gateway.provider_rpc_payloads",
         "list_provider_models_rpc_payload",
     ) in imports
+    assert (
+        "opensquilla.provider.model_listing",
+        "list_provider_models_rpc_payload",
+    ) not in imports
     assert ("opensquilla.provider.model_listing", "ProviderModelRow") not in imports
     assert ("opensquilla.provider.model_listing", "list_provider_model_rows") not in imports
