@@ -84,7 +84,7 @@ Refactor the knowledge-service surfaces as one coarse batch:
 ## Superpowers evidence
 
 - `superpowers:using-git-worktrees`:
-  - Evidence: read the skill; verified previous temporary refactor worktrees were removed; created fixed active child worktree with `git worktree add /Users/cwan0785/opensquilla-refactor-active -b codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
+  - Evidence: read the skill; verified previous temporary refactor worktrees were removed; created fixed active child worktree at `../opensquilla-refactor-active` on branch `codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
 - `superpowers:writing-plans`:
   - Evidence: read the skill; created this stage plan before worker implementation; plan includes files, ownership, TDD commands, gates, merge review, and cleanup.
 - `superpowers:test-driven-development`:
@@ -234,39 +234,67 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 - [x] Use Serena project activation and initial instructions.
 - [x] Create fixed active worktree on `codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
 - [x] Write this stage plan before implementation.
-- [ ] Commit this stage plan as the worker base.
+- [x] Commit this stage plan as the worker base.
+  - Commit: `a33b2eb Record knowledge services boundary batch plan`.
 
 ### Task 2: Worker `scheduler-cron-boundary`
 
-- [ ] Create an independent worker worktree/branch.
-- [ ] Write RED boundary tests for scheduler/cron RPC/CLI ownership.
-- [ ] Run the worker RED command and record the expected failure.
-- [ ] Implement one behavior-compatible scheduler/cron boundary move.
-- [ ] Run worker focused tests and touched-file ruff.
-- [ ] Commit with the required co-author trailer.
+- [x] Create an independent worker worktree/branch.
+  - Branch: `codex/refactor-scheduler-cron-boundary-batch`.
+- [x] Write RED boundary tests for scheduler/cron RPC/CLI ownership.
+  - Evidence: added scheduler-domain request assembly boundary tests for cron add/update payload ownership.
+- [x] Run the worker RED command and record the expected failure.
+  - RED command: `uv run --extra dev pytest tests/test_scheduler tests/test_gateway/test_rpc_cron_current_session.py tests/test_gateway/test_cron_view_static.py -q`.
+  - Expected failure: `2 failed, 31 passed`, proving scheduler-domain request assembly helpers did not exist and Gateway still owned that boundary.
+- [x] Implement one behavior-compatible scheduler/cron boundary move.
+  - Evidence: moved cron add/update request assembly into `src/opensquilla/scheduler/rpc_payload.py` while keeping public RPC method names and CLI/static files unchanged.
+- [x] Run worker focused tests and touched-file ruff.
+  - GREEN command: same focused pytest command -> `33 passed`.
+  - Ruff command over touched scheduler/Gateway/test files -> `All checks passed!`.
+  - `git diff --check` and post-commit `git diff --check HEAD^ HEAD` passed.
+- [x] Commit with the required co-author trailer.
+  - Commit: `cbe625b2715e845a5e9f989cd0a77f4e26b756c4 Refactor cron request assembly boundary`.
 
 ### Task 3: Worker `memory-source-flush-boundary`
 
-- [ ] Create an independent worker worktree/branch.
-- [ ] Write RED boundary tests for memory source/flush/tool ownership.
-- [ ] Run the worker RED command and record the expected failure.
-- [ ] Implement one behavior-compatible memory boundary move.
-- [ ] Run worker focused tests and touched-file ruff.
-- [ ] Commit with the required co-author trailer.
+- [x] Create an independent worker worktree/branch.
+  - Branch: `codex/refactor-memory-source-flush-boundary-batch`.
+- [x] Write RED boundary tests for memory source/flush/tool ownership.
+  - Evidence: added memory tool source boundary tests requiring tool result shaping to live in `opensquilla.memory.tool_sources`.
+- [x] Run the worker RED command and record the expected failure.
+  - RED command: `uv run --extra dev pytest tests/test_memory_tool_sources.py -q`.
+  - Expected failure: import failed because `memory_delete_tool_result` and `memory_get_tool_result` did not exist yet.
+- [x] Implement one behavior-compatible memory boundary move.
+  - Evidence: moved `memory_get` and `memory_delete` tool result shaping into `src/opensquilla/memory/tool_sources.py`; kept `memory_tools.py` as thin runtime/tool registration glue.
+- [x] Run worker focused tests and touched-file ruff.
+  - GREEN command: `uv run --extra dev pytest tests/test_memory_*.py tests/test_tools/test_memory_profile_guidance.py tests/test_session/test_session_lifecycle_memory.py tests/test_gateway/test_rpc_config_memory_embedding.py tests/test_gateway/test_config_memory_defaults.py -q` -> `107 passed`.
+  - Ruff command over touched memory/tool files -> `All checks passed!`.
+  - `git diff --check` passed.
+- [x] Commit with the required co-author trailer.
+  - Commit: `06e0401b17c235685b0b8837155746b3ad5d615f Refactor memory tool source boundary`.
 
 ### Task 4: Worker `skills-runtime-hub-boundary`
 
-- [ ] Create an independent worker worktree/branch.
-- [ ] Write RED boundary tests for skills runtime/hub/RPC/CLI ownership.
-- [ ] Run the worker RED command and record the expected failure.
-- [ ] Implement one behavior-compatible skills boundary move.
-- [ ] Run worker focused tests and touched-file ruff.
-- [ ] Commit with the required co-author trailer.
+- [x] Create an independent worker worktree/branch.
+  - Branch: `codex/refactor-skills-runtime-hub-boundary-batch`.
+- [x] Write RED boundary tests for skills runtime/hub/RPC/CLI ownership.
+  - Evidence: added hub search boundary test requiring `hub/search.py` to own top-level search request/outcome types.
+- [x] Run the worker RED command and record the expected failure.
+  - RED command: `uv run --extra dev pytest tests/test_skills_*.py tests/test_skill_*.py tests/test_gateway_static_skills_view.py -q`.
+  - Expected failure: `test_hub_search_module_owns_search_request_and_runtime_boundary` failed because `hub/search.py` did not own top-level `SkillSearchRequest` or `SkillSearchOutcome`.
+- [x] Implement one behavior-compatible skills boundary move.
+  - Evidence: moved skills hub search request/outcome boundary out of `hub/operations.py` into `hub/search.py`.
+- [x] Run worker focused tests and touched-file ruff.
+  - GREEN command: same focused pytest command -> `105 passed, 1 skipped`.
+  - Ruff command over touched skills hub files -> `All checks passed!`.
+  - `git diff --check` and post-commit `git show --check HEAD` passed.
+- [x] Commit with the required co-author trailer.
+  - Commit: `7dbdbb1cea0b9b0a924e5842505b6396fb5c0a32 Refactor skills hub search boundary`.
 
 ### Task 5: Worker `search-runtime-cli-boundary`
 
 - [x] Create an independent worker worktree/branch.
-  - Evidence: verified `pwd` as `/Users/cwan0785/opensquilla-refactor-agent-search-runtime-cli` and branch as `codex/refactor-search-runtime-cli-boundary-batch`.
+  - Evidence: verified assigned worker worktree `../opensquilla-refactor-agent-search-runtime-cli` and branch `codex/refactor-search-runtime-cli-boundary-batch`.
 - [x] Write RED boundary tests for search runtime/provider/RPC/CLI ownership.
   - Evidence: added `tests/test_search/test_search_runtime_boundary.py::test_search_rpc_payload_boundary_owns_request_and_wire_shape` requiring `opensquilla.search.rpc_payload` to own RPC request/wire helpers.
 - [x] Run the worker RED command and record the expected failure.
@@ -280,17 +308,30 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
   - Ruff command: `uv run --extra dev ruff check src/opensquilla/search src/opensquilla/gateway/rpc_search.py src/opensquilla/cli/search_cmd.py src/opensquilla/cli/search_gateway_queries.py src/opensquilla/cli/search_workflows.py src/opensquilla/cli/search_presenters.py tests/test_search tests/test_cli/test_search_cmd.py tests/test_onboarding/test_search_specs.py tests/test_skill_multi_search_engine.py`
   - Ruff result: `All checks passed!`.
 - [x] Commit with the required co-author trailer.
-  - Evidence: worker branch HEAD includes the search boundary refactor commit with `Co-authored-by: Codex <noreply@openai.com>`.
+  - Commit: `262788c93cf41b8c2754a203612b90dd8f49a7cb Refactor search RPC payload boundary`.
 
 ### Task 6: Main Integration Review
 
-- [ ] Wait for all worker branches and read summaries.
-- [ ] Review each branch diff before merge.
-- [ ] Merge worker branches into child branch one by one with `git merge --no-ff`.
-- [ ] Resolve conflicts without reverting another worker's ownership.
-- [ ] Run the focused batch green command.
-- [ ] Run touched-file ruff, mypy, and `git diff --check`.
-- [ ] Run full child `scripts/refactor_gate.sh`.
+- [x] Wait for all worker branches and read summaries.
+- [x] Review each branch diff before merge.
+- [x] Merge worker branches into child branch one by one with `git merge --no-ff`.
+  - Memory merge: `84ffd3b Merge branch 'codex/refactor-memory-source-flush-boundary-batch' into codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
+  - Skills merge: `12b8ce7 Merge branch 'codex/refactor-skills-runtime-hub-boundary-batch' into codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
+  - Scheduler merge: `3dd9ebe Merge branch 'codex/refactor-scheduler-cron-boundary-batch' into codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
+  - Search merge: `66f7432 Merge branch 'codex/refactor-search-runtime-cli-boundary-batch' into codex/refactor-knowledge-services-rpc-cli-boundary-batch`.
+- [x] Resolve conflicts without reverting another worker's ownership.
+  - No merge conflicts observed.
+- [x] Run the focused batch green command.
+  - Baseline before worker merge: `264 passed, 1 skipped`.
+  - After worker merges: `271 passed, 1 skipped`.
+- [x] Run touched-file ruff, mypy, and `git diff --check`.
+  - Targeted ruff over scheduler/memory/skills/search/Gateway/CLI/tests: `All checks passed!`.
+  - Targeted mypy over scheduler/memory/skills/search: `Success: no issues found in 86 source files`.
+  - `git diff --check`: no output.
+- [x] Run full child `scripts/refactor_gate.sh`.
+  - First run failed only in `tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths` because this stage record contained local home paths.
+  - `superpowers:systematic-debugging` evidence: read the skill, identified the root cause as two absolute path strings in this stage file, replaced them with relative worktree references, and verified the failing hygiene test passed.
+  - Final child gate result: ruff passed; mypy succeeded across 522 source files; whitespace check passed; pytest `2520 passed, 8 skipped, 2 warnings`; gateway smoke start/status/stop/status succeeded; `Refactor gate complete.`
 - [ ] Commit stage-record update with the required co-author trailer.
 
 ### Task 7: Integration Branch Merge and Cleanup
@@ -329,13 +370,32 @@ Workers are not alone in the codebase. Each worker must preserve other workers' 
 ## Completion Record
 
 - Worker commits:
-  - `search-runtime-cli-boundary`: branch HEAD on `codex/refactor-search-runtime-cli-boundary-batch`; final worker handoff reports the exact hash.
+  - `scheduler-cron-boundary`: `cbe625b2715e845a5e9f989cd0a77f4e26b756c4 Refactor cron request assembly boundary`.
+  - `memory-source-flush-boundary`: `06e0401b17c235685b0b8837155746b3ad5d615f Refactor memory tool source boundary`.
+  - `skills-runtime-hub-boundary`: `7dbdbb1cea0b9b0a924e5842505b6396fb5c0a32 Refactor skills hub search boundary`.
+  - `search-runtime-cli-boundary`: `262788c93cf41b8c2754a203612b90dd8f49a7cb Refactor search RPC payload boundary`.
 - Child integration commits:
+  - Base plan: `a33b2eb Record knowledge services boundary batch plan`.
+  - Worker merges: `84ffd3b`, `12b8ce7`, `3dd9ebe`, `66f7432`.
+  - Stage-record update: pending this commit.
 - Integration merge:
+  - Pending merge into `codex/refactor-architecture`.
 - Verification evidence:
+  - `scheduler-cron-boundary` RED: focused scheduler/Gateway cron suite -> `2 failed, 31 passed` before scheduler-domain request assembly helpers existed.
+  - `scheduler-cron-boundary` GREEN: same focused suite -> `33 passed`; touched-file ruff and diff-check passed.
+  - `memory-source-flush-boundary` RED: `tests/test_memory_tool_sources.py` failed before `memory_get_tool_result` and `memory_delete_tool_result` existed.
+  - `memory-source-flush-boundary` GREEN: focused memory suite -> `107 passed`; touched-file ruff and diff-check passed.
+  - `skills-runtime-hub-boundary` RED: focused skills suite failed because `hub/search.py` did not own `SkillSearchRequest` / `SkillSearchOutcome`.
+  - `skills-runtime-hub-boundary` GREEN: focused skills suite -> `105 passed, 1 skipped`; touched-file ruff and diff-check passed.
   - `search-runtime-cli-boundary` RED: `uv run --extra dev pytest tests/test_search/test_search_runtime_boundary.py -q` failed as expected because the new `search.rpc_payload` boundary did not exist and `rpc_search.py` still imported from `search.execution`.
   - `search-runtime-cli-boundary` GREEN: `uv run --extra dev pytest tests/test_search tests/test_cli/test_search_cmd.py tests/test_onboarding/test_search_specs.py tests/test_skill_multi_search_engine.py -q` -> `30 passed in 0.69s`.
   - `search-runtime-cli-boundary` ruff: touched-file command above -> `All checks passed!`.
+  - Combined focused suite after worker merges: `271 passed, 1 skipped`.
+  - Targeted mypy after worker merges: `Success: no issues found in 86 source files`.
+  - Child `scripts/refactor_gate.sh`: ruff passed; mypy succeeded across 522 source files; whitespace check passed; pytest `2520 passed, 8 skipped, 2 warnings`; gateway smoke start/status/stop/status succeeded; `Refactor gate complete.`
 - Residual risk:
-  - `search-runtime-cli-boundary`: only focused search/CLI/onboarding/multi-search coverage run in this worker; full child and integration gates remain with the main integration thread.
+  - Workers ran focused tests only; main thread child gate covered full-suite integration after merge.
+  - Search keeps compatibility re-exports from `opensquilla.search.execution` to avoid breaking existing imports; a later cleanup can remove them only with a public import audit.
+  - Scheduler request assembly moved substantially from Gateway to scheduler domain; full gate passed, but integration gate still must run after merging this child.
 - Next recommended slice:
+  - Continue with Web UI RPC/view-state or remaining CLI command-family boundaries, selected after integration gate and cleanup.
