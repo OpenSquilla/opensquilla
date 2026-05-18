@@ -144,7 +144,8 @@ class MemorySyncManager:
         the queue regardless of outcome and orphan SQLite chunks for any
         path whose retry also failed.
         """
-        if reason == "search" and not self._dirty and not force:
+        is_search_reason = reason == "search" or reason.startswith("search:")
+        if is_search_reason and not self._dirty and not force:
             return
         if reason == "session-delta" and not self._delta.should_sync() and not force:
             return

@@ -34,14 +34,16 @@ def create_session_search_tool(
     @tool(
         name="session_search",
         description=(
-            "Full-text search across past conversation transcripts. "
-            "Returns matching excerpts with session context. "
-            "Use to recall prior discussions, decisions, or code snippets."
+            "Full-text search across persisted session transcripts. "
+            "Returns matching excerpts with session context. Use for prior chat "
+            "wording, prior session history, or code snippets from transcripts. "
+            "This is separate from memory_search, which searches curated memory "
+            "source files; session_search does not search MEMORY.md or memory/**/*.md."
         ),
         params={
             "query": {
                 "type": "string",
-                "description": "Search query — natural language terms to find in transcripts.",
+                "description": "Search query - natural language terms to find in transcripts.",
             },
             "session_id": {
                 "type": "string",
@@ -53,6 +55,7 @@ def create_session_search_tool(
             },
         },
         required=["query"],
+        owner_only=True,
         registry=registry,
     )
     async def session_search(

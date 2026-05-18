@@ -20,6 +20,7 @@ _NAMES = [
     "messaging",
     "patch",
     "sessions",
+    "session_search",
     "shell",
     "web",
     "web_fetch",

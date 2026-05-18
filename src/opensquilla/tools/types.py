@@ -88,6 +88,7 @@ SUBAGENT_TOOL_DENY: frozenset[str] = frozenset(
         "subagents",
         "memory_get",
         "memory_search",
+        "session_search",
         "message",
         "publish_artifact",
     }

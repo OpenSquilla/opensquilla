@@ -220,6 +220,7 @@ def test_shared_channel_context_hides_private_memory_read_tools_even_when_allowe
     registry = ToolRegistry()
     registry.register(_spec("memory_get"), _handler)
     registry.register(_spec("memory_search"), _handler)
+    registry.register(_spec("session_search"), _handler)
     registry.register(_spec("read_file"), _handler)
     channel_ctx = resolve_runtime_tool_surface(
         ToolContext(
@@ -242,6 +243,7 @@ def test_shared_channel_context_hides_private_memory_read_tools_even_when_allowe
 
     assert "memory_get" not in names
     assert "memory_search" not in names
+    assert "session_search" not in names
     assert "read_file" in names
 
 
@@ -279,6 +281,7 @@ async def test_effective_tools_hide_private_memory_reads_for_cron_and_subagents(
     registry = ToolRegistry()
     registry.register(_spec("memory_get"), _handler)
     registry.register(_spec("memory_search"), _handler)
+    registry.register(_spec("session_search"), _handler)
     registry.register(_spec("read_file"), _handler)
 
     cron_names = {

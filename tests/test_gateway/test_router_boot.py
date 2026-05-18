@@ -24,6 +24,7 @@ from opensquilla.gateway.routing import build_cli_route_envelope, build_cron_rou
 from opensquilla.onboarding.mutations import upsert_channel
 from opensquilla.scheduler.types import CronJob, JobStatus
 from opensquilla.tools.registry import ToolRegistry
+from opensquilla.tools.types import CallerKind, ToolContext
 
 
 class _FakeDreamScheduler:
@@ -408,6 +409,74 @@ def test_build_flush_service_uses_configured_memory_timeout() -> None:
 
     assert service is not None
     assert service._default_timeout == 0.25
+
+
+@pytest.mark.asyncio
+async def test_build_services_registers_session_search_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "opensquilla.sandbox.integration.configure_runtime",
+        lambda *args, **kwargs: SimpleNamespace(
+            effective=SimpleNamespace(as_dict=lambda: {})
+        ),
+    )
+
+    async def fake_build_memory_managers(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(
+        "opensquilla.memory.manager.build_memory_managers",
+        fake_build_memory_managers,
+    )
+    registry = ToolRegistry()
+    config = GatewayConfig(
+        state_dir=str(tmp_path / "state"),
+        workspace_dir=str(tmp_path / "workspace"),
+        control_ui={"enabled": False},
+        channels={"channels": []},
+        mcp={"enabled": False},
+        memory={"flush_enabled": False},
+    )
+
+    services = await build_services(
+        config=config,
+        tool_registry=registry,
+        session_db_path=str(tmp_path / "sessions.sqlite"),
+    )
+    try:
+        session_search = registry.get("session_search")
+        assert session_search is not None
+        owner_names = {
+            tool["name"]
+            for tool in await registry.list_tools(
+                caller_kind=CallerKind.AGENT,
+                is_owner=True,
+            )
+        }
+        channel_names = {
+            tool.name
+            for tool in registry.to_tool_definitions(
+                ToolContext(is_owner=False, caller_kind=CallerKind.CHANNEL)
+            )
+        }
+        assert "session_search" in owner_names
+        assert "session_search" not in channel_names
+
+        await services.session_manager.create("agent:main:main")
+        await services.session_manager.append_message(
+            "agent:main:main",
+            "user",
+            "needle transcript detail",
+        )
+
+        output = await session_search.handler(query="needle", limit=5)
+
+        assert "needle" in output
+        assert "agent:main:main" in output
+    finally:
+        await services.close()
 
 
 def test_router_boot_validation_does_not_load_heavy_runtime(

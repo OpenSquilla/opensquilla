@@ -1122,6 +1122,7 @@ async def build_services(
 
     set_session_manager(session_manager)
     _set_sessions_gateway_config(config)
+    session_storage = get_session_storage(session_manager)
 
     # Wire agent registry into the agents_list tool surface.
     from opensquilla.tools.builtin.agents import set_agent_registry as _set_agent_registry_tool
@@ -1202,6 +1203,17 @@ async def build_services(
         from opensquilla.tools.registry import get_default_registry
 
         tool_registry = get_default_registry()
+
+    try:
+        from opensquilla.tools.builtin.session_search import create_session_search_tool
+
+        if session_storage is not None:
+            create_session_search_tool(session_storage, registry=tool_registry)
+            log.info("build_services.session_search_tool_registered")
+        else:
+            log.warning("build_services.session_search_tool_skipped", reason="storage_unavailable")
+    except Exception as e:
+        log.warning("build_services.session_search_tool_failed", error=str(e))
 
     try:
         from opensquilla.tools.builtin.media import configure_image_generation

@@ -78,10 +78,19 @@ async def test_sync_force_overrides_search_clean_fast_path(tmp_path):
 
     await manager.sync(reason="manual")
     first_count = len(store.indexed)
+    sync_calls: list[dict[str, object]] = []
+
+    async def fake_do_file_sync(**kwargs: object) -> set[str]:
+        sync_calls.append(kwargs)
+        return set()
+
+    manager._do_file_sync = fake_do_file_sync  # type: ignore[method-assign]
     await manager.sync(reason="search")
+    await manager.sync(reason="search:tool")
+    await manager.sync(reason="search:admin")
     search_count = len(store.indexed)
-    await manager.sync(reason="search", force=True)
+    await manager.sync(reason="search:tool", force=True)
 
     assert first_count == 1
     assert search_count == first_count
-    assert store.indexed[first_count:] == ["MEMORY.md"]
+    assert sync_calls == [{"force": True}]

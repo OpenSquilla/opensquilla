@@ -9,7 +9,7 @@ from fnmatch import fnmatchcase
 from opensquilla.tools.types import CallerKind, InteractionMode, ToolContext
 
 _PRIVATE_MEMORY_READ_TOOL_NAMES: frozenset[str] = frozenset(
-    {"memory_get", "memory_search"}
+    {"memory_get", "memory_search", "session_search"}
 )
 _TOOL_GROUPS: Mapping[str, frozenset[str]] = {
     "group:runtime": frozenset({"exec_command", "background_process"}),

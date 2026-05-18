@@ -623,11 +623,13 @@ def create_memory_tools(
         description=(
             "Recall step for prior work, decisions, dated history, todos, and "
             "historical memory not already present in injected context. Searches "
-            "memory source files (MEMORY.md + memory/**/*.md) and returns top snippets "
-            "with path + lines. User identity/profile fields such as name, preferred "
-            "address, pronouns, and timezone belong in injected USER.md when present. "
-            "Do not use memory_search for current user identity/profile questions when "
-            "injected USER.md contains the answer."
+            "curated memory source files only (MEMORY.md + memory/**/*.md), not "
+            "session transcripts, raw turn captures, or raw fallback files. Returns "
+            "top snippets with path + lines. Use session_search for transcript "
+            "full-text search when available. User identity/profile fields such as "
+            "name, preferred address, pronouns, and timezone belong in injected "
+            "USER.md when present. Do not use memory_search for current user "
+            "identity/profile questions when injected USER.md contains the answer."
         ),
         params={
             "query": {"type": "string", "description": "Search query"},

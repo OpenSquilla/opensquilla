@@ -335,6 +335,50 @@ async def test_first_denial_wins_denied_tools_before_private_memory() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_session_search_is_denied_by_private_memory_scope_for_subagents() -> None:
+    import structlog.testing
+
+    registry = ToolRegistry()
+
+    async def _handler() -> str:
+        return "should not reach"
+
+    registry.register(
+        ToolSpec(name="session_search", description="test", parameters={}),
+        _handler,
+    )
+    ctx = ToolContext(
+        is_owner=True,
+        caller_kind=CallerKind.SUBAGENT,
+        interaction_mode=InteractionMode.UNATTENDED,
+        agent_id="sub1",
+        session_key="subagent:agent:main:parent",
+    )
+
+    handler = build_tool_handler(registry, ctx)
+    token = current_tool_context.set(None)
+    try:
+        with structlog.testing.capture_logs() as captured:
+            result = await handler(
+                ToolCall(
+                    tool_use_id="tc-subagent-session-search",
+                    tool_name="session_search",
+                    arguments={"query": "needle"},
+                )
+            )
+    finally:
+        current_tool_context.reset(token)
+
+    assert result.is_error is True
+    assert "not available in this context" in result.content
+    assert any(
+        event.get("reason") == "private_memory_scope"
+        for event in captured
+        if event.get("event") == "dispatch.defense_in_depth_block"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Property 4: Contextvar set during handler call (HIGH 2)
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import pytest
 from opensquilla.memory.retrieval import MemoryRetriever
 from opensquilla.memory.types import MemorySearchResult, MemorySource, SearchIntent
 from opensquilla.tools.builtin.memory_tools import create_memory_tools
+from opensquilla.tools.builtin.session_search import create_session_search_tool
 from opensquilla.tools.registry import ToolRegistry
 
 
@@ -131,10 +132,24 @@ def test_memory_tool_descriptions_name_nested_memory_sources(tmp_path):
     assert memory_search is not None
     assert memory_get is not None
     assert "MEMORY.md + memory/**/*.md" in memory_search.spec.description
+    assert "not session transcripts" in memory_search.spec.description
+    assert "session_search" in memory_search.spec.description
     assert "MEMORY.md or memory/**/*.md" in memory_get.spec.description
     assert "MEMORY.md or memory/**/*.md" in memory_get.spec.parameters["path"][
         "description"
     ]
+
+
+def test_session_search_description_separates_transcripts_from_curated_memory():
+    registry = ToolRegistry()
+    create_session_search_tool(SimpleNamespace(), registry=registry)  # type: ignore[arg-type]
+
+    session_search = registry.get("session_search")
+
+    assert session_search is not None
+    assert "session transcripts" in session_search.spec.description
+    assert "memory_search" in session_search.spec.description
+    assert "does not search MEMORY.md or memory/**/*.md" in session_search.spec.description
 
 
 @pytest.mark.asyncio
