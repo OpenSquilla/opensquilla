@@ -141,7 +141,7 @@ Co-authored-by: Codex <noreply@openai.com>
 - [x] Merge child into integration with `git merge --no-ff`.
 - [x] Run `scripts/refactor_gate.sh` in integration.
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run
+- [x] Remove `../opensquilla-refactor-active`, run
       `git worktree prune`, and verify no extra refactor worktree directories
       remain beyond `../opensquilla-refactor-integration`.
 
@@ -182,6 +182,7 @@ Co-authored-by: Codex <noreply@openai.com>
   - Full child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 515 source files; whitespace passed; pytest passed with `2476 passed, 8 skipped, 2 warnings in 49.04s`; gateway smoke start/status/stop/status passed on `127.0.0.1:61239`.
   - Integration merge: `git merge --no-ff codex/refactor-session-lifecycle-service-boundary` produced merge commit `fe1e834`.
   - Integration gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with no issues in 515 source files; whitespace passed; pytest passed with `2478 passed, 6 skipped, 2 warnings in 26.51s`; gateway smoke start/status/stop/status passed on `127.0.0.1:61375`.
+  - Cleanup: `git worktree remove ../opensquilla-refactor-active && git worktree prune && git worktree list` removed the active worktree; no refactor worktree remains beyond `../opensquilla-refactor-integration`.
 - Residual risk:
   - Low to medium. The helper module is Gateway-free and covered directly, but lifecycle handlers still intentionally own flush-specific control flow and payload construction because moving that would be a separate higher-risk slice.
 - Next recommended slice:
