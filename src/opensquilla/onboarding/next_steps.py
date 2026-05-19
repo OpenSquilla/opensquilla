@@ -98,7 +98,7 @@ def format_next_steps(config: Any, *, config_path: str | Path | None = None) -> 
         key_line = "Key: not required" if status.llm_configured else "Key: not configured"
 
     lines = [
-        "Next steps:",
+        "Configuration summary:",
         f"  Config: {path}",
         f"  LLM: {provider} / {model}",
         f"  {key_line}",
@@ -110,14 +110,21 @@ def format_next_steps(config: Any, *, config_path: str | Path | None = None) -> 
                 f"default={router.default_tier}"
             )
         ),
-        "  Start gateway: opensquilla gateway run",
-        "  Or start in background: opensquilla gateway start --json",
-        "  If a gateway is already running, restart it so it loads this config.",
-        "  Restart gateway: opensquilla gateway restart --json",
-        "  Web UI: http://127.0.0.1:18791/control/",
+        "",
+        "Commands:",
+        "  Run gateway now: opensquilla gateway run",
+        "  Start gateway in background: opensquilla gateway start --json",
+        "  Restart running gateway: opensquilla gateway restart --json",
     ]
     if key_source == "missing_env" and env_key:
         lines.append(f"  Set key before starting gateway: {_set_env_hint(env_key)}")
+    lines.extend(
+        [
+            "",
+            "Reference:",
+            "  Web UI: http://127.0.0.1:18791/control/",
+        ]
+    )
     key_url = _KEY_URLS.get(provider)
     if key_url:
         lines.append(f"  Provider keys: {key_url}")

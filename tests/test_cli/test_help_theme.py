@@ -10,7 +10,7 @@ from typer import rich_utils
 from typer.testing import CliRunner
 
 from opensquilla.cli.main import app
-from opensquilla.ui import ACCENT
+from opensquilla.ui import ACCENT, questionary_style
 
 runner = CliRunner()
 
@@ -20,6 +20,16 @@ def test_rich_help_uses_opensquilla_accent() -> None:
     assert rich_utils.STYLE_COMMANDS_PANEL_BORDER == ACCENT
     assert rich_utils.STYLE_OPTION == f"bold {ACCENT}"
     assert rich_utils.STYLE_COMMANDS_TABLE_FIRST_COLUMN == f"bold {ACCENT}"
+
+
+def test_questionary_checkbox_selection_avoids_reverse_row_highlight() -> None:
+    style = questionary_style()
+    assert style is not None
+    rules = dict(style.style_rules)
+
+    for token in ("pointer", "highlighted", "selected"):
+        assert "noreverse" in rules[token]
+        assert "bg:" not in rules[token]
 
 
 def test_onboard_help_keeps_router_option_readable() -> None:

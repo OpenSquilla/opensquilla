@@ -422,35 +422,46 @@ def test_interactive_onboard_migration_defaults_to_all_sources_and_keeps_importe
             return self.value
 
     class _Choice:
-        def __init__(self, title, value, checked=False):
+        def __init__(self, title, value, checked=False, description=None):
             self.title = title
             self.value = value
             self.checked = checked
+            self.description = description
 
     class _Questionary(types.SimpleNamespace):
         Choice = _Choice
 
-        def checkbox(self, message: str, choices, **_kwargs):
+        def checkbox(self, message: str, choices, **kwargs):
             calls.append(message)
-            assert message == "Migration sources"
+            assert message == "Select sources to import"
+            assert kwargs.get("instruction") == (
+                "Space select | Enter continue | A toggle all"
+            )
             assert [choice.value for choice in choices] == ["openclaw", "hermes"]
+            assert [choice.title for choice in choices] == ["OpenClaw", "Hermes Agent"]
+            assert [choice.description for choice in choices] == [
+                str(tmp_path / ".openclaw"),
+                str(tmp_path / ".hermes"),
+            ]
             assert all(choice.checked for choice in choices)
             return _Answer([choice.value for choice in choices])
 
         def confirm(self, message: str, **kwargs):
             calls.append(message)
-            if message.startswith("Import existing "):
+            if message == "Review migration options now?":
                 assert kwargs.get("default") is True
                 return _Answer(True)
-            if message == "Import API keys and secrets from old .env files?":
+            if message == "Import saved API keys/tokens from detected legacy .env files?":
                 assert kwargs.get("default") is False
                 return _Answer(False)
             if message == "Apply this migration now?":
                 assert kwargs.get("default") is True
                 return _Answer(True)
-            if message == "Keep imported provider settings?":
+            if message == "Use imported provider credentials?":
                 assert kwargs.get("default") is True
                 return _Answer(True)
+            if message == "Edit router tier models now?":
+                return _Answer(False)
             if message in {
                 "Configure a messaging channel now?",
                 "Configure web search now?",
@@ -461,6 +472,10 @@ def test_interactive_onboard_migration_defaults_to_all_sources_and_keeps_importe
 
         def select(self, message: str, **_kwargs):
             calls.append(message)
+            if message == "Router mode":
+                return _Answer("SquillaRouter")
+            if message == "Default text model":
+                return _Answer(_kwargs.get("default"))
             raise AssertionError(f"unexpected select prompt: {message}")
 
         def text(self, message: str, **_kwargs):
@@ -480,10 +495,305 @@ def test_interactive_onboard_migration_defaults_to_all_sources_and_keeps_importe
         (("openclaw", "hermes"), True, False),
     ]
     assert "LLM provider" not in calls
+    assert "Router mode" in calls
     data = tomllib.loads(target.read_text())
     assert data["llm"]["provider"] == "openrouter"
     assert data["llm"]["api_key_env"] == "OPENROUTER_API_KEY"
+    assert data["llm"]["model"] == "deepseek/deepseek-v4-flash"
+    assert data["squilla_router"]["enabled"] is True
+    assert data["squilla_router"]["tier_profile"] == "openrouter"
     assert "api_key" not in data["llm"]
+
+
+def test_interactive_onboard_imported_provider_prefers_inline_key_over_env(
+    tmp_path, monkeypatch
+):
+    import sys
+    import tomllib
+    import types
+
+    from opensquilla.onboarding import flow
+
+    target = tmp_path / "c.toml"
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))
+    monkeypatch.setattr(flow, "_is_tty", lambda: True)
+    monkeypatch.setattr(flow, "_wait_for_setup_start", lambda: None)
+    monkeypatch.setattr(
+        flow,
+        "detect_default_sources",
+        lambda: [flow.DetectedMigrationSource("openclaw", tmp_path / ".openclaw")],
+    )
+
+    calls: list[str] = []
+
+    def fake_run_migration_batch(_detected, selected, options):
+        if options.apply:
+            target.write_text(
+                "\n".join(
+                    [
+                        "[llm]",
+                        'provider = "openrouter"',
+                        'model = "anthropic/claude-sonnet-4.5"',
+                        'api_key = "sk-imported"',
+                        'api_key_env = "OPENROUTER_API_KEY"',
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        return flow.MigrationBatchResult(
+            selected=tuple(selected),
+            apply=options.apply,
+            reports={
+                "openclaw": {
+                    "output_dir": str(tmp_path / "reports" / "openclaw"),
+                    "items": [{"kind": "config", "status": "planned"}],
+                }
+            },
+        )
+
+    monkeypatch.setattr(flow, "run_migration_batch", fake_run_migration_batch)
+
+    class _Answer:
+        def __init__(self, value):
+            self.value = value
+
+        def ask(self):
+            return self.value
+
+    class _Questionary(types.SimpleNamespace):
+        def confirm(self, message: str, **kwargs):
+            calls.append(message)
+            if message == "Review migration options now?":
+                return _Answer(True)
+            if message == "Import saved API keys/tokens from detected legacy .env files?":
+                return _Answer(True)
+            if message == "Apply this migration now?":
+                return _Answer(True)
+            if message == "Use imported provider credentials?":
+                return _Answer(True)
+            if message == "Edit router tier models now?":
+                return _Answer(False)
+            if message in {
+                "Configure a messaging channel now?",
+                "Configure web search now?",
+                "Enable image generation now?",
+            }:
+                return _Answer(False)
+            raise AssertionError(f"unexpected confirm prompt: {message}")
+
+        def select(self, message: str, **kwargs):
+            calls.append(message)
+            if message == "Router mode":
+                return _Answer("SquillaRouter")
+            if message == "Default text model":
+                return _Answer(kwargs.get("default"))
+            raise AssertionError(f"unexpected select prompt: {message}")
+
+        def text(self, message: str, **_kwargs):
+            calls.append(message)
+            raise AssertionError(f"unexpected text prompt: {message}")
+
+        def password(self, message: str, **_kwargs):
+            calls.append(message)
+            raise AssertionError(f"unexpected password prompt: {message}")
+
+    monkeypatch.setitem(sys.modules, "questionary", _Questionary())
+
+    flow.run_interactive_onboard(flow.OnboardOptions())
+
+    assert "LLM provider" not in calls
+    data = tomllib.loads(target.read_text())
+    assert data["llm"]["provider"] == "openrouter"
+    assert data["llm"]["api_key"] == "sk-imported"
+    assert data["llm"].get("api_key_env", "") == ""
+    assert data["llm"]["model"] == "deepseek/deepseek-v4-flash"
+
+
+def test_interactive_onboard_imported_provider_finalize_error_continues_setup(
+    tmp_path, monkeypatch
+):
+    import sys
+    import tomllib
+    import types
+
+    from opensquilla.onboarding import flow
+
+    target = tmp_path / "c.toml"
+    console_output = StringIO()
+    monkeypatch.setattr(
+        flow,
+        "console",
+        Console(file=console_output, force_terminal=False, highlight=False),
+    )
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
+    monkeypatch.setattr(flow, "_is_tty", lambda: True)
+    monkeypatch.setattr(flow, "_wait_for_setup_start", lambda: None)
+    monkeypatch.setattr(
+        flow,
+        "detect_default_sources",
+        lambda: [flow.DetectedMigrationSource("openclaw", tmp_path / ".openclaw")],
+    )
+    monkeypatch.setattr(
+        flow,
+        "_use_imported_provider_credentials_with_router_defaults",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad imported provider")),
+    )
+
+    calls: list[str] = []
+
+    def fake_run_migration_batch(_detected, selected, options):
+        if options.apply:
+            target.write_text(
+                "\n".join(
+                    [
+                        "[llm]",
+                        'provider = "openrouter"',
+                        'model = "anthropic/claude-sonnet-4.5"',
+                        'api_key_env = "OPENROUTER_API_KEY"',
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+        return flow.MigrationBatchResult(
+            selected=tuple(selected),
+            apply=options.apply,
+            reports={
+                "openclaw": {
+                    "output_dir": str(tmp_path / "reports" / "openclaw"),
+                    "items": [{"kind": "config", "status": "planned"}],
+                }
+            },
+        )
+
+    monkeypatch.setattr(flow, "run_migration_batch", fake_run_migration_batch)
+
+    class _Answer:
+        def __init__(self, value):
+            self.value = value
+
+        def ask(self):
+            return self.value
+
+    class _Questionary(types.SimpleNamespace):
+        def confirm(self, message: str, **kwargs):
+            calls.append(message)
+            if message == "Review migration options now?":
+                return _Answer(True)
+            if message == "Import saved API keys/tokens from detected legacy .env files?":
+                return _Answer(False)
+            if message == "Apply this migration now?":
+                return _Answer(True)
+            if message == "Use imported provider credentials?":
+                return _Answer(True)
+            if message == "Edit router tier models now?":
+                return _Answer(False)
+            if message in {
+                "Configure a messaging channel now?",
+                "Configure web search now?",
+                "Enable image generation now?",
+            }:
+                return _Answer(False)
+            raise AssertionError(f"unexpected confirm prompt: {message}")
+
+        def select(self, message: str, **kwargs):
+            calls.append(message)
+            if message == "LLM provider":
+                return _Answer("openrouter (OpenRouter)")
+            if message == "LLM API key source":
+                return _Answer("Use environment variable OPENROUTER_API_KEY")
+            if message == "Router mode":
+                return _Answer("SquillaRouter")
+            if message == "Default text model":
+                return _Answer(kwargs.get("default"))
+            raise AssertionError(f"unexpected select prompt: {message}")
+
+        def text(self, message: str, **_kwargs):
+            calls.append(message)
+            raise AssertionError(f"unexpected text prompt: {message}")
+
+        def password(self, message: str, **_kwargs):
+            calls.append(message)
+            raise AssertionError(f"unexpected password prompt: {message}")
+
+    monkeypatch.setitem(sys.modules, "questionary", _Questionary())
+
+    flow.run_interactive_onboard(flow.OnboardOptions())
+
+    assert "LLM provider" in calls
+    out = console_output.getvalue()
+    assert "Imported provider settings could not be finalized" in out
+    assert "Continue provider setup to finish onboarding" in out
+    data = tomllib.loads(target.read_text())
+    assert data["llm"]["provider"] == "openrouter"
+    assert data["llm"]["api_key_env"] == "OPENROUTER_API_KEY"
+    assert data["llm"]["model"] == "deepseek/deepseek-v4-flash"
+
+
+def test_onboard_migration_selection_summary_lists_checked_sources(tmp_path, monkeypatch):
+    from opensquilla.onboarding import flow
+
+    console_output = StringIO()
+    monkeypatch.setattr(
+        flow,
+        "console",
+        Console(file=console_output, force_terminal=False, highlight=False),
+    )
+
+    detected = [
+        flow.DetectedMigrationSource("openclaw", tmp_path / ".openclaw"),
+        flow.DetectedMigrationSource("hermes", tmp_path / ".hermes"),
+    ]
+
+    flow._print_selected_migration_sources(detected, ["openclaw", "hermes"])
+
+    out = console_output.getvalue()
+    assert "Selected migration sources" in out
+    assert "☑ OpenClaw" in out
+    assert "☑ Hermes Agent" in out
+    assert str(tmp_path / ".openclaw") in out
+    assert str(tmp_path / ".hermes") in out
+
+
+def test_onboard_migration_source_prompt_uses_clear_continue_language(tmp_path):
+    from opensquilla.onboarding import flow
+
+    captured: dict[str, object] = {}
+
+    class _Answer:
+        def ask(self):
+            return ["openclaw", "hermes"]
+
+    class _Choice:
+        def __init__(self, title, value, checked=False, description=None):
+            self.title = title
+            self.value = value
+            self.checked = checked
+            self.description = description
+
+    class _Questionary:
+        Choice = _Choice
+
+        def checkbox(self, message: str, **kwargs):
+            captured["message"] = message
+            captured["instruction"] = kwargs.get("instruction")
+            return _Answer()
+
+    selected = flow._ask_migration_sources(
+        _Questionary(),
+        [
+            flow.DetectedMigrationSource("openclaw", tmp_path / ".openclaw"),
+            flow.DetectedMigrationSource("hermes", tmp_path / ".hermes"),
+        ],
+    )
+
+    assert selected == ["openclaw", "hermes"]
+    assert captured == {
+        "message": "Select sources to import",
+        "instruction": "Space select | Enter continue | A toggle all",
+    }
 
 
 def test_onboard_migration_preview_hides_unwritten_report_path(tmp_path, monkeypatch):
@@ -561,10 +871,10 @@ def test_interactive_onboard_migration_preview_failure_continues_provider_setup(
     class _Questionary(types.SimpleNamespace):
         def confirm(self, message: str, **kwargs):
             calls.append(message)
-            if message.startswith("Import existing "):
+            if message == "Review migration options now?":
                 assert kwargs.get("default") is True
                 return _Answer(True)
-            if message == "Import API keys and secrets from old .env files?":
+            if message == "Import saved API keys/tokens from detected legacy .env files?":
                 assert kwargs.get("default") is False
                 return _Answer(False)
             if message == "Edit router tier models now?":
@@ -666,13 +976,15 @@ def test_interactive_onboard_migration_prompts_for_missing_imported_provider_key
     class _Questionary(types.SimpleNamespace):
         def confirm(self, message: str, **kwargs):
             calls.append(message)
-            if message.startswith("Import existing "):
+            if message == "Review migration options now?":
                 return _Answer(True)
-            if message == "Import API keys and secrets from old .env files?":
+            if message == "Import saved API keys/tokens from detected legacy .env files?":
                 assert kwargs.get("default") is False
                 return _Answer(False)
             if message == "Apply this migration now?":
                 return _Answer(True)
+            if message == "Edit router tier models now?":
+                return _Answer(False)
             if message in {
                 "Configure a messaging channel now?",
                 "Configure web search now?",
@@ -692,6 +1004,10 @@ def test_interactive_onboard_migration_prompts_for_missing_imported_provider_key
                 )
                 assert kwargs.get("default") == "Paste API key now"
                 return _Answer("Paste API key now")
+            if message == "Router mode":
+                return _Answer("SquillaRouter")
+            if message == "Default text model":
+                return _Answer(kwargs.get("default"))
             raise AssertionError(f"unexpected select prompt: {message}")
 
         def password(self, message: str, **_kwargs):
@@ -709,11 +1025,11 @@ def test_interactive_onboard_migration_prompts_for_missing_imported_provider_key
     flow.run_interactive_onboard(flow.OnboardOptions())
 
     assert "LLM provider" not in calls
-    assert "Router mode" not in calls
+    assert "Router mode" in calls
     data = tomllib.loads(target.read_text())
     assert data["llm"]["provider"] == "openrouter"
     assert data["llm"]["api_key"] == "sk-new"
-    assert data["llm"]["model"] == "anthropic/claude-sonnet-4.5"
+    assert data["llm"]["model"] == "deepseek/deepseek-v4-flash"
 
 
 def test_interactive_onboard_can_enable_image_generation(tmp_path, monkeypatch):

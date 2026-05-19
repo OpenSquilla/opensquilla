@@ -88,6 +88,13 @@ def _styled(q):
     style = _qs()
     if style is None:
         return q
+    try:
+        import questionary.prompts.common as questionary_common
+
+        questionary_common.INDICATOR_SELECTED = "☑"
+        questionary_common.INDICATOR_UNSELECTED = "☐"
+    except Exception:
+        pass
 
     def _wrap(name):
         fn = getattr(q, name)
@@ -988,14 +995,10 @@ def _run_onboard_migration_step(
         if not detected:
             return None
         _print_detected_migration_sources(detected)
-        source_labels = " / ".join(
-            _MIGRATION_SOURCE_LABELS.get(source.name, source.name)
-            for source in detected
-        )
         should_migrate = bool(
             _ask_or_cancel(
                 questionary.confirm(
-                    f"Import existing {source_labels} data now?",
+                    "Review migration options now?",
                     default=True,
                 ),
                 section="migration",
@@ -1009,11 +1012,12 @@ def _run_onboard_migration_step(
         if not selected:
             console.print("[yellow]No migration source selected; skipping migration.[/yellow]")
             return None
+        _print_selected_migration_sources(detected, selected)
 
         migrate_secrets = bool(
             _ask_or_cancel(
                 questionary.confirm(
-                    "Import API keys and secrets from old .env files?",
+                    "Import saved API keys/tokens from detected legacy .env files?",
                     default=False,
                 ),
                 section="migration",
@@ -1111,6 +1115,19 @@ def _print_detected_migration_sources(detected: list[DetectedMigrationSource]) -
         console.print(f"  [{ACCENT_SOFT}]✓[/] {label} [dim]{source.path}[/dim]")
 
 
+def _print_selected_migration_sources(
+    detected: list[DetectedMigrationSource],
+    selected: list[str],
+) -> None:
+    selected_names = set(selected)
+    console.print(f"[bold {ACCENT}]◆[/] [bold]Selected migration sources[/]")
+    for source in detected:
+        if source.name not in selected_names:
+            continue
+        label = _MIGRATION_SOURCE_LABELS.get(source.name, source.name)
+        console.print(f"  [{ACCENT_SOFT}]☑[/] {label} [dim]{source.path}[/dim]")
+
+
 def _ask_migration_sources(
     questionary,
     detected: list[DetectedMigrationSource],
@@ -1120,25 +1137,34 @@ def _ask_migration_sources(
     choice_cls = getattr(questionary, "Choice", None)
     if choice_cls is None:
         choices = [
-            f"{_MIGRATION_SOURCE_LABELS.get(source.name, source.name)} ({source.path})"
+            f"{_MIGRATION_SOURCE_LABELS.get(source.name, source.name)} - {source.path}"
             for source in detected
         ]
         selected = _ask_or_cancel(
-            questionary.checkbox("Migration sources", choices=choices),
+            questionary.checkbox(
+                "Select sources to import",
+                choices=choices,
+                instruction="Space select | Enter continue | A toggle all",
+            ),
             section="migration",
         )
         selected_text = {str(value).split(" ", 1)[0].lower() for value in selected}
         return [source.name for source in detected if source.name in selected_text]
     choices = [
         choice_cls(
-            title=f"{_MIGRATION_SOURCE_LABELS.get(source.name, source.name)} ({source.path})",
+            title=_MIGRATION_SOURCE_LABELS.get(source.name, source.name),
             value=source.name,
             checked=True,
+            description=str(source.path),
         )
         for source in detected
     ]
     selected = _ask_or_cancel(
-        questionary.checkbox("Migration sources", choices=choices),
+        questionary.checkbox(
+            "Select sources to import",
+            choices=choices,
+            instruction="Space select | Enter continue | A toggle all",
+        ),
         section="migration",
     )
     return [str(value) for value in selected]
@@ -1200,19 +1226,87 @@ def _keep_imported_provider(questionary, cfg: Any) -> bool:
     llm = getattr(cfg, "llm", None)
     provider = str(getattr(llm, "provider", "") or "")
     model = str(getattr(llm, "model", "") or "")
+    router_supported = _imported_provider_router_supported(cfg)
     if provider:
         console.print(
             f"[bold {ACCENT}]◆[/] [bold]Imported provider settings found[/]"
         )
         console.print(f"  Provider: [{ACCENT_SOFT}]{markup_escape(provider)}[/]")
-        if model:
+        if router_supported:
+            console.print(
+                "  Model: [dim]will use SquillaRouter defaults; "
+                "old direct model is not imported[/dim]"
+            )
+        elif model:
             console.print(f"  Model: [{ACCENT_SOFT}]{markup_escape(model)}[/]")
     return bool(
         _ask_or_cancel(
-            questionary.confirm("Keep imported provider settings?", default=True),
+            questionary.confirm("Use imported provider credentials?", default=True),
             section="provider",
         )
     )
+
+
+def _imported_provider_router_supported(cfg: Any) -> bool:
+    llm = getattr(cfg, "llm", None)
+    provider = str(getattr(llm, "provider", "") or "")
+    if not provider:
+        return False
+    try:
+        spec = get_provider_setup_spec(provider)
+    except KeyError:
+        return False
+    return bool(getattr(spec, "router_supported", False))
+
+
+def _provider_id_from_config(cfg: Any) -> str:
+    llm = getattr(cfg, "llm", None)
+    return str(getattr(llm, "provider", "") or "")
+
+
+def _imported_provider_key_payload(llm: Any) -> dict[str, str]:
+    api_key = str(getattr(llm, "api_key", "") or "")
+    api_key_env = str(getattr(llm, "api_key_env", "") or "")
+    if api_key:
+        api_key_env = ""
+    return {"api_key": api_key, "api_key_env": api_key_env}
+
+
+def _use_imported_provider_credentials_with_router_defaults(
+    questionary,
+    cfg: Any,
+    *,
+    requested_mode: str,
+):
+    llm = getattr(cfg, "llm", None)
+    provider = _provider_id_from_config(cfg)
+    key_payload = _imported_provider_key_payload(llm)
+    res = upsert_llm_provider(
+        cfg,
+        provider_id=provider,
+        model="",
+        api_key=key_payload["api_key"],
+        api_key_env=key_payload["api_key_env"],
+        base_url=str(getattr(llm, "base_url", "") or ""),
+        proxy=str(getattr(llm, "proxy", "") or ""),
+        provider_routing=dict(getattr(llm, "provider_routing", {}) or {}),
+    )
+    cfg_after_provider = res.config
+    if requested_mode:
+        router_payload = _ask_router_fields(
+            questionary,
+            cfg_after_provider,
+            provider_id=provider,
+            requested_mode=requested_mode,
+        )
+        router_res = upsert_router(
+            cfg_after_provider,
+            mode=router_payload["mode"],
+            default_tier=router_payload.get("defaultTier"),
+            tiers=router_payload.get("tiers"),
+        )
+        cfg_after_provider = router_res.config
+    return cfg_after_provider
 
 
 def _complete_imported_provider_credentials(questionary, cfg: Any):
@@ -1246,7 +1340,7 @@ def _complete_imported_provider_credentials(questionary, cfg: Any):
     res = upsert_llm_provider(
         cfg,
         provider_id=provider,
-        model=model,
+        model="" if _imported_provider_router_supported(cfg) else model,
         api_key=credentials["api_key"],
         api_key_env=credentials["api_key_env"],
         base_url=base_url,
@@ -1329,9 +1423,26 @@ def run_interactive_onboard(options: OnboardOptions) -> PersistResult:
         and _keep_imported_provider(questionary, cfg)
     )
     if keep_imported:
-        cfg_after_provider = cfg
-        persist = _migration_result_path(cfg, migration_result, config_path=config_path)
-    else:
+        try:
+            if _imported_provider_router_supported(cfg):
+                cfg_after_provider = _use_imported_provider_credentials_with_router_defaults(
+                    questionary,
+                    cfg,
+                    requested_mode=options.router_mode,
+                )
+                persist = persist_config(cfg_after_provider, restart_required=False)
+            else:
+                cfg_after_provider = cfg
+                persist = _migration_result_path(cfg, migration_result, config_path=config_path)
+        except Exception as exc:
+            keep_imported = False
+            console.print(
+                warning_panel(
+                    f"Imported provider settings could not be finalized: {exc}. "
+                    "Continue provider setup to finish onboarding."
+                )
+            )
+    if not keep_imported:
         completed_imported = (
             _complete_imported_provider_credentials(questionary, cfg)
             if migration_result is not None and not status.llm_configured
@@ -1339,6 +1450,20 @@ def run_interactive_onboard(options: OnboardOptions) -> PersistResult:
         )
         if completed_imported is not None:
             cfg_after_provider = completed_imported
+            if _imported_provider_router_supported(cfg_after_provider) and options.router_mode:
+                router_payload = _ask_router_fields(
+                    questionary,
+                    cfg_after_provider,
+                    provider_id=_provider_id_from_config(cfg_after_provider),
+                    requested_mode=options.router_mode,
+                )
+                router_res = upsert_router(
+                    cfg_after_provider,
+                    mode=router_payload["mode"],
+                    default_tier=router_payload.get("defaultTier"),
+                    tiers=router_payload.get("tiers"),
+                )
+                cfg_after_provider = router_res.config
         else:
             if migration_result is not None and not status.llm_configured:
                 console.print(
