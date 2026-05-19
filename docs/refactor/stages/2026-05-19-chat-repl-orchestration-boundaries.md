@@ -239,10 +239,15 @@ surfaces.
       Result: ruff all checks passed; mypy success for 574 source files;
       pytest `2804 passed, 8 skipped, 2 warnings`; gateway smoke passed on
       port `59799`.
-- [ ] Commit child verification record.
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run integration `scripts/refactor_gate.sh`.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Commit child verification record.
+      Commit: `b5a6b81` (`Record chat REPL child verification`).
+- [x] Merge child into integration with `git merge --no-ff`.
+      Merge: `fc8de7a` (`Merge chat REPL orchestration boundaries`).
+- [x] Run integration `scripts/refactor_gate.sh`.
+      Result: ruff all checks passed; mypy success for 574 source files;
+      pytest `2806 passed, 6 skipped, 2 warnings`; gateway smoke passed on
+      port `59987`.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove temporary worker worktrees, remove `../opensquilla-refactor-active`,
       run `git worktree prune`, and verify no extra refactor worktree
       directories remain beyond `../opensquilla-refactor-integration`.
@@ -282,7 +287,9 @@ surfaces.
 - Main facade commit:
 - `fe15411` (`Refactor chat command REPL facade boundaries`).
 - Child verification commit:
+- `b5a6b81` (`Record chat REPL child verification`).
 - Integration merge:
+- `fc8de7a` (`Merge chat REPL orchestration boundaries`).
 - Integration record:
 - Verification evidence:
 - Focused tests:
@@ -299,7 +306,18 @@ surfaces.
   `scripts/refactor_gate.sh` -> ruff all checks passed; mypy success for 574
   source files; pytest `2804 passed, 8 skipped, 2 warnings`; gateway smoke
   start/status/stop/status succeeded on port `59799`.
+- Integration gate:
+  `scripts/refactor_gate.sh` -> ruff all checks passed; mypy success for 574
+  source files; pytest `2806 passed, 6 skipped, 2 warnings`; gateway smoke
+  start/status/stop/status succeeded on port `59987`.
 - Cleanup evidence:
 - Residual risk:
-- Integration gate is not yet recorded.
+- No known behavior regressions after child and integration gates. Remaining
+  risk is limited to unexercised live provider/gateway conversations, which are
+  outside this offline refactor gate.
 - Next recommended slice:
+- Start the next coarse parallel batch from integration HEAD after cleanup:
+  Session Persistence/Transcript Repository, MCP Tool Lifecycle/Registry,
+  WebSocket Connection Core Boundary, and Web UI Browser Runtime Contract
+  Harness. Keep Session/Channels delivery and Gateway chat RPC out of the same
+  worker to avoid overlapping ownership.
