@@ -161,11 +161,11 @@ def test_release_sop_documents_github_only_validation_boundary() -> None:
     required_phrases = [
         "GitHub-only release checks",
         "Preview releases publish only versioned assets",
-        "Stable releases additionally publish version-independent aliases",
+        "Non-preview releases additionally publish version-independent aliases",
         "OpenSquilla-windows-x64-portable.zip",
         "opensquilla-latest-py3-none-any.whl",
         "SHA256SUMS",
-        "stable release URLs resolve",
+        "latest release URLs resolve",
         "post-publish latest URL checks",
         "curl --fail --head --location",
         "wheelhouse zips, macOS portable zips, and Linux portable zips are intentionally",

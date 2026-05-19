@@ -3,23 +3,25 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+CURRENT_VERSION = "0.2.0"
+CURRENT_TAG = f"v{CURRENT_VERSION}"
 PREVIEW_VERSION = "0.2.0rc1"
 PREVIEW_TAG = f"v{PREVIEW_VERSION}"
 
 
-def test_pyproject_version_matches_preview_release() -> None:
+def test_pyproject_version_matches_current_release() -> None:
     config = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     version = config["project"]["version"]
-    assert version == PREVIEW_VERSION, (
-        f"pyproject.toml version must match the preview release; got '{version}'"
+    assert version == CURRENT_VERSION, (
+        f"pyproject.toml version must match the current release; got '{version}'"
     )
 
 
-def test_lockfile_version_matches_preview_release() -> None:
+def test_lockfile_version_matches_current_release() -> None:
     lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
     package = next(item for item in lock["package"] if item["name"] == "opensquilla")
 
-    assert package["version"] == PREVIEW_VERSION
+    assert package["version"] == CURRENT_VERSION
 
 
 def _dep_names(specs: list[str]) -> set[str]:
@@ -79,41 +81,46 @@ def test_core_dependencies_support_default_pptx_skill() -> None:
     assert any(dep.startswith("python-pptx") for dep in dependencies)
 
 
-def test_releases_md_exists_and_references_preview_tag() -> None:
+def test_releases_md_exists_and_references_current_and_preview_tags() -> None:
     releases = Path("RELEASES.md")
     assert releases.is_file(), "RELEASES.md must exist at the repository root"
     text = releases.read_text(encoding="utf-8")
+    assert CURRENT_TAG in text, f"RELEASES.md must reference the tag '{CURRENT_TAG}'"
     assert PREVIEW_TAG in text, f"RELEASES.md must reference the tag '{PREVIEW_TAG}'"
 
 
-def test_changelog_has_preview_section_and_unreleased() -> None:
+def test_changelog_has_current_release_section_and_unreleased() -> None:
     changelog = Path("CHANGELOG.md")
     assert changelog.is_file(), "CHANGELOG.md must exist at the repository root"
     text = changelog.read_text(encoding="utf-8")
     assert (
-        f"[{PREVIEW_VERSION}]" in text
-    ), f"CHANGELOG.md must contain a [{PREVIEW_VERSION}] section"
+        f"[{CURRENT_VERSION}]" in text
+    ), f"CHANGELOG.md must contain a [{CURRENT_VERSION}] section"
     assert "[Unreleased]" in text, "CHANGELOG.md must retain an [Unreleased] section"
 
 
-def test_readme_preview_install_uses_tag_pinned_assets() -> None:
+def test_readme_release_install_uses_latest_assets_and_pinned_alternative() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
 
     assert (
-        f"releases/download/{PREVIEW_TAG}/OpenSquilla-{PREVIEW_VERSION}-windows-x64-py312-recommended-portable.zip"
+        "releases/latest/download/OpenSquilla-windows-x64-portable.zip"
         in readme
     )
     assert (
-        f"releases/download/{PREVIEW_TAG}/opensquilla-{PREVIEW_VERSION}-py3-none-any.whl"
+        "releases/latest/download/opensquilla-latest-py3-none-any.whl"
         in readme
     )
-    assert "Preview install commands use version-pinned download URLs" in readme
+    assert (
+        f"releases/download/{CURRENT_TAG}/opensquilla-{CURRENT_VERSION}-py3-none-any.whl"
+        in readme
+    )
+    assert "Release install commands use published GitHub release assets" in readme
 
 
-def test_release_installers_default_to_preview_tag() -> None:
+def test_release_installers_default_to_current_tag() -> None:
     for path in [Path("install.sh"), Path("install.ps1")]:
         text = path.read_text(encoding="utf-8")
-        assert PREVIEW_TAG in text
+        assert CURRENT_TAG in text
         assert "opensquilla-$releaseVersion-py3-none-any.whl" in text or (
             "opensquilla-${release_version}-py3-none-any.whl" in text
         )

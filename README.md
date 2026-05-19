@@ -33,7 +33,7 @@ OpenRouter, OpenAI, Anthropic, Ollama, DeepSeek, Gemini, Qwen/DashScope,
 and 20+ other LLM providers with no change to your code or config
 schema.
 
-OpenSquilla is in active preview (0.2.0 Preview 1).
+OpenSquilla 0.2.0 is the current release.
 
 ---
 
@@ -47,8 +47,9 @@ Windows portable and Quick terminal install give you a prebuilt
 and Develop from source — build **from a Git checkout** (`git clone` +
 Git LFS).
 
-Preview install commands use version-pinned download URLs. The
-`/releases/latest/download/` aliases are reserved for stable releases.
+Release install commands use published GitHub release assets. The
+`/releases/latest/download/` aliases point to the current release wheel
+and Windows portable zip.
 
 | Path | Audience | When to use |
 | --- | --- | --- |
@@ -88,8 +89,8 @@ Install links: [Git](https://git-scm.com/downloads) ·
 The fastest path on Windows — the zip ships a bundled CPython runtime,
 so no separate Python install is required.
 
-1. Download the 0.2.0 Preview 1 portable zip:
-   <https://github.com/opensquilla/opensquilla/releases/download/v0.2.0rc1/OpenSquilla-0.2.0rc1-windows-x64-py312-recommended-portable.zip>
+1. Download the 0.2.0 portable zip:
+   <https://github.com/opensquilla/opensquilla/releases/latest/download/OpenSquilla-windows-x64-portable.zip>
 2. Extract it to a writable folder such as Downloads or Documents,
    then right-click `Start OpenSquilla.cmd` and choose **Run as
    administrator**.
@@ -154,7 +155,7 @@ $env:Path = "$env:USERPROFILE\.local\bin;" + $env:Path
 **2. Install OpenSquilla** — the same command on every platform.
 
 ```sh
-uv tool install --python 3.12 "opensquilla[recommended] @ https://github.com/opensquilla/opensquilla/releases/download/v0.2.0rc1/opensquilla-0.2.0rc1-py3-none-any.whl"
+uv tool install --python 3.12 "opensquilla[recommended] @ https://github.com/opensquilla/opensquilla/releases/latest/download/opensquilla-latest-py3-none-any.whl"
 ```
 
 This installs the OpenSquilla wheel from the release URL, then lets
@@ -174,8 +175,8 @@ opensquilla gateway run
 > If `opensquilla` is not found right after a fresh `uv` install, open
 > a new terminal, or re-run the PATH line from step 1.
 
-Stable releases can use the version-independent wheel alias
-`https://github.com/opensquilla/opensquilla/releases/latest/download/opensquilla-latest-py3-none-any.whl`.
+For a fully pinned install, use the versioned wheel URL:
+`https://github.com/opensquilla/opensquilla/releases/download/v0.2.0/opensquilla-0.2.0-py3-none-any.whl`.
 
 ### Install from source
 
@@ -283,10 +284,12 @@ local checkout, restart the gateway so it loads the updated package.
 
 ### Develop from source
 
-Use this path only to modify, test, or debug the current checkout.
-Unlike [Install from source](#install-from-source), this path requires
-`uv`: `uv sync` creates a checkout-local `.venv` and `uv run` executes
-against the live source tree.
+Use this path when you are working on OpenSquilla's source code:
+making changes, running tests, or debugging behavior against this
+checkout. It is not the normal install path. Unlike
+[Install from source](#install-from-source), this path requires `uv`:
+`uv sync` creates a repository-local `.venv`, and `uv run` executes
+commands against the files in this checkout.
 
 ```sh
 uv sync --extra recommended --extra dev
@@ -455,9 +458,9 @@ settings live in `opensquilla.toml.example`.
 
 ---
 
-## What's New in 0.2.0 Preview 1
+## What's New in 0.2.0
 
-This preview expands OpenSquilla across migration, CLI chat, channels,
+This release expands OpenSquilla across migration, CLI chat, channels,
 scheduling, and long-running tool work:
 
 - **Migration path from existing agent homes** — `opensquilla migrate` previews
@@ -481,7 +484,7 @@ scheduling, and long-running tool work:
   make large tool-heavy sessions more predictable.
 - **Web UI and release polish** — recency ordering, table layout, mobile
   controls, duplicate notifications, setup forms, release URLs, and install
-  paths are tightened for the preview.
+  paths are tightened for 0.2.0.
 
 Full notes: [`CHANGELOG.md`](CHANGELOG.md) ·
 [release notes](https://opensquilla.ai/news/).

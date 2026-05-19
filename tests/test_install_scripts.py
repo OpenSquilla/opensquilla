@@ -38,7 +38,7 @@ def test_release_installers_install_version_pinned_wheel_with_uv() -> None:
     sh = RELEASE_SH.read_text(encoding="utf-8")
 
     for script in (ps1, sh):
-        assert "v0.2.0rc1" in script
+        assert "v0.2.0" in script
         assert "opensquilla-$releaseVersion-py3-none-any.whl" in script or (
             "opensquilla-${release_version}-py3-none-any.whl" in script
         )

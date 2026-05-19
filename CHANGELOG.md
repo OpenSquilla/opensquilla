@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-## [0.2.0rc1] - 2026-05-18
+## [0.2.0] - 2026-05-20
 
 ### Added
 
@@ -41,16 +41,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Memory surfaces now separate curated memory from raw transcript search, recall
   prior-session evidence, keep manual Dream runs on configured memory
   workspaces, and let compaction continue when memory flush degrades.
-- Release/install support now includes tag-pinned preview URLs, reproducible
-  wheel/portable release guidance, source install scripts, Windows portable
-  hardening, ONNX/router recovery messaging, and Docker/compose alignment on
-  the gateway port.
+- Release/install support now includes versioned release URLs,
+  latest-download aliases, reproducible wheel/portable release guidance,
+  source install scripts, Windows portable hardening, ONNX/router recovery
+  messaging, and Docker/compose alignment on the gateway port.
 
 ### Changed
 
-- Release installation docs now use version-pinned `0.2.0rc1` asset URLs for
-  preview installs and reserve `/releases/latest/download/` aliases for stable
-  releases.
+- Release installation docs now use 0.2.0 release asset URLs and
+  `/releases/latest/download/` aliases for the current wheel and Windows
+  portable zip.
 - Cron tool calls now require structured schedule input (`{kind, ...}`) instead
   of backend natural-language schedule parsing. CLI cron flags still accept
   standard user-facing forms such as `--cron`, `--every`, `--at`, and
@@ -69,8 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   runtime-backed state for recency ordering, per-turn token metrics, provider
   badges, setup form behavior, and session cancellation/readback.
 - The default gateway/release documentation now centers on port `18791`, and
-  preview release URLs are tag-pinned until a stable release can use latest
-  aliases.
+  release download paths use the current 0.2.0 assets.
 
 ### Fixed
 
