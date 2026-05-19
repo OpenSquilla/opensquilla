@@ -9,6 +9,7 @@ memory implementations.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from opensquilla.contracts import (
     ChannelIngressPort,
@@ -26,6 +27,15 @@ from opensquilla.contracts import (
     ToolSpec,
 )
 
+ContractBackplanePortName = Literal[
+    "tool_registry",
+    "tool_policy",
+    "session_store",
+    "provider_factory",
+    "channel_ingress",
+    "memory",
+]
+
 
 @dataclass(frozen=True)
 class ContractBackplane:
@@ -42,6 +52,32 @@ class ContractBackplane:
     provider_factory: ProviderFactoryPort | None = None
     channel_ingress: ChannelIngressPort | None = None
     memory: MemoryPort | None = None
+
+    def missing_ports(
+        self,
+        *required: ContractBackplanePortName,
+    ) -> tuple[ContractBackplanePortName, ...]:
+        """Return required contract ports that are absent from this backplane."""
+
+        return tuple(name for name in required if getattr(self, name) is None)
+
+    def require_ports(
+        self,
+        *required: ContractBackplanePortName,
+    ) -> ContractBackplane:
+        """Validate runtime assembly requirements before using optional ports.
+
+        The helper keeps normal backplane methods safe for optional/advisory use
+        while giving future runtime assembly code an explicit guardrail when a
+        port is mandatory for the chosen composition.
+        """
+
+        missing = self.missing_ports(*required)
+        if missing:
+            raise ValueError(
+                "ContractBackplane missing required ports: " + ", ".join(missing)
+            )
+        return self
 
     def list_tool_specs(self, context: ToolContext | None = None) -> list[ToolSpec]:
         """Return contract tool specs, filtered by the optional policy port."""
@@ -105,4 +141,4 @@ class ContractBackplane:
         await self.channel_ingress.handle_incoming(channel_name, message)
 
 
-__all__ = ["ContractBackplane"]
+__all__ = ["ContractBackplane", "ContractBackplanePortName"]

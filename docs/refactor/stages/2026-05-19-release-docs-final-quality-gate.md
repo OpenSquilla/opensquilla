@@ -121,6 +121,7 @@ Passes completed:
 - Code-reviewer recommendation: APPROVE. Evidence: fallback review reported no discrete introduced regressions and observed project validation including compileall, ruff, mypy, targeted checks, and full pytest in the project virtualenv.
 - Architect status before evidence update: BLOCK, only because this G006 document still had pending review/gate/checkpoint rows; implementation-specific findings were non-blocking. The non-blocking follow-up is to add assembly-time validation or narrower backplanes before using `ContractBackplane` as a required runtime bundle.
 - Final synthesis after second architecture pass: COMMENT/WATCH. The remaining non-blocking-but-gate-relevant concern is that `ContractBackplane` is optional and should expose assembly-time validation before future runtime adoption. G006 will resolve this before final checkpoint so the architecture status can become CLEAR.
+- WATCH-resolution patch: added explicit `ContractBackplane.missing_ports(...)` and `ContractBackplane.require_ports(...)` helpers so future runtime assembly can validate mandatory ports before using the optional backplane.
 
 ## Final verification plan
 
@@ -130,6 +131,8 @@ Recorded final verification commands:
 - `uv run --extra dev pytest tests/test_public_release_hygiene.py tests/test_release_consistency.py tests/test_readme_links.py -q`: `15 passed in 0.68s`.
 - `scripts/refactor_gate.sh`: `2838 passed, 6 skipped, 2 warnings`, gateway smoke passed on port `49678`.
 - `uv build --wheel`: built `dist/opensquilla-0.1.0rc1-py3-none-any.whl`.
+- Review cleanup TDD: `uv run --extra dev pytest tests/test_application/test_contract_backplane.py -q` failed first with `AttributeError: 'ContractBackplane' object has no attribute 'missing_ports'`; after implementation, focused contract/import tests passed `9 passed in 1.74s`.
+- Review cleanup child gate: `scripts/refactor_gate.sh` in `../opensquilla-refactor-active` passed with `2837 passed, 8 skipped, 2 warnings` and gateway smoke on port `50252`.
 - `omx ultragoal status --json` from the main checkout: G001-G005 complete, G006 in progress before final checkpoint.
 - Fresh `get_goal` before final `update_goal`: pending.
 - `omx ultragoal checkpoint --goal-id G006-release-docs-final-quality-gate --status complete ... --quality-gate-json ...`: pending until `update_goal({"status":"complete"})` succeeds.
@@ -146,7 +149,7 @@ Recorded final verification commands:
 | Add/maintain tests | G002-G005 added focused regression tests; G005 backplane tests passed; final full gate `2838 passed, 6 skipped`. | verified |
 | Fix issues found during refactor | G003 hygiene regression was caught and fixed; G005 ruff issues were fixed before commit. | verified |
 | Anti-slop final pass | G006 ai-slop section above; fallback-like search over G005/G006 scope returned no findings; final gate passed. | verified |
-| Final code review | `codex review --base main` found no discrete introduced regressions; architecture lane moved from process BLOCK to WATCH. The WATCH concern requires explicit `ContractBackplane` assembly validation before final CLEAR. | in progress |
+| Final code review | `codex review --base main` found no discrete introduced regressions; architecture lane moved from process BLOCK to WATCH; the WATCH concern was addressed by adding explicit `ContractBackplane` assembly validation helpers and tests. Final CLEAR rerun pending after merge. | in progress |
 | Final verification and checkpoint | final gate and wheel build passed; fresh `get_goal`, `update_goal`, and G006 checkpoint remain as the final lifecycle steps after final architecture CLEAR. | in progress |
 
 ## Rollback
@@ -158,9 +161,9 @@ Recorded final verification commands:
 ## Completion record
 
 - G006 docs commit:
-- Final code-review verdict: code-reviewer fallback APPROVE; architect first pass BLOCK only on pending evidence rows; second pass WATCH on optional `ContractBackplane` runtime adoption validation. Follow-up fix pending before final CLEAR.
+- Final code-review verdict: code-reviewer fallback APPROVE; architect first pass BLOCK only on pending evidence rows; second pass WATCH on optional `ContractBackplane` runtime adoption validation; TDD review-cleanup patch added validation helpers, final CLEAR rerun pending after merge.
 - Final verification evidence: release/link/consistency tests `15 passed`; full refactor gate `2838 passed, 6 skipped, 2 warnings` with gateway smoke on port `49678`; `uv build --wheel` built `dist/opensquilla-0.1.0rc1-py3-none-any.whl`.
 - Quality gate JSON: pending after second architecture pass and final docs commit.
 - Ultragoal checkpoint: pending after aggregate Codex goal is marked complete.
 - Aggregate Codex goal: active until final `update_goal`.
-- Residual risk: `ContractBackplane` is intentionally optional and unused as a required runtime bundle in this slice; before future runtime adoption, add assembly-time validation or narrower backplanes so missing critical ports cannot be masked.
+- Residual risk: `ContractBackplane` is intentionally optional and unused as a required runtime bundle in this slice; future runtime adoption should call `require_ports(...)` at assembly boundaries or define narrower required-port backplanes.
