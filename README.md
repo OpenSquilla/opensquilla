@@ -1,5 +1,3 @@
-> ⚠️ **NOTE:** Installer links and download URLs in this README point to the upcoming **v0.2.0rc1 preview** release and are not live until that tag is published.
-
 # OpenSquilla — Token-Efficient AI Agent
 
 <p align="center">
@@ -49,9 +47,8 @@ Windows portable and Quick terminal install give you a prebuilt
 and Develop from source — build **from a Git checkout** (`git clone` +
 Git LFS).
 
-Preview install commands use version-pinned download URLs; stable
-releases can use the `/releases/latest/download/` aliases once `0.2.0`
-is published.
+Preview install commands use version-pinned download URLs. The
+`/releases/latest/download/` aliases are reserved for stable releases.
 
 | Path | Audience | When to use |
 | --- | --- | --- |
@@ -177,8 +174,7 @@ opensquilla gateway run
 > If `opensquilla` is not found right after a fresh `uv` install, open
 > a new terminal, or re-run the PATH line from step 1.
 
-Once `0.2.0` is published as a stable release, the wheel URL can use
-the version-independent alias
+Stable releases can use the version-independent wheel alias
 `https://github.com/opensquilla/opensquilla/releases/latest/download/opensquilla-latest-py3-none-any.whl`.
 
 ### Install from source
