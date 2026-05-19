@@ -179,3 +179,20 @@ def test_contract_backplane_is_safe_when_optional_ports_are_absent() -> None:
 
     assert backplane.list_tool_specs(ToolContext()) == []
     assert backplane.build_provider("missing", {}) is None
+
+
+def test_contract_backplane_reports_missing_required_ports_for_runtime_assembly() -> None:
+    registry = _FakeToolRegistry([ToolSpec(name="read_file", description="read")])
+    backplane = ContractBackplane(tool_registry=registry)
+
+    assert backplane.missing_ports("tool_registry", "provider_factory", "memory") == (
+        "provider_factory",
+        "memory",
+    )
+    assert backplane.require_ports("tool_registry") is backplane
+
+    with pytest.raises(
+        ValueError,
+        match="ContractBackplane missing required ports: provider_factory, memory",
+    ):
+        backplane.require_ports("provider_factory", "memory")
