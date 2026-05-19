@@ -158,7 +158,6 @@ jobs:
           )
           wheels = sorted(
               path for path in Path("dist").glob("opensquilla-*.whl")
-              if path.name != "opensquilla-latest-py3-none-any.whl"
           )
           assert len(zips) == 1, f"expected one versioned portable zip, got {len(zips)}"
           assert len(wheels) == 1, f"expected one versioned wheel, got {len(wheels)}"
@@ -217,17 +216,14 @@ jobs:
           )
           wheels = sorted(
               path for path in dist.glob("opensquilla-*.whl")
-              if path.name != "opensquilla-latest-py3-none-any.whl"
           )
           assert len(zips) == 1, f"expected one versioned portable zip, got {len(zips)}"
           assert len(wheels) == 1, f"expected one versioned wheel, got {len(wheels)}"
           assets = [zips[0], wheels[0]]
           if not is_prerelease:
               stable_zip = dist / "OpenSquilla-windows-x64-portable.zip"
-              stable_wheel = dist / "opensquilla-latest-py3-none-any.whl"
               shutil.copy2(zips[0], stable_zip)
-              shutil.copy2(wheels[0], stable_wheel)
-              assets = [zips[0], stable_zip, wheels[0], stable_wheel]
+              assets = [zips[0], stable_zip, wheels[0]]
           lines = [
               f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
               for path in assets
@@ -277,10 +273,8 @@ jobs:
           )
           versioned_wheels = sorted(
               path for path in dist.glob("opensquilla-*.whl")
-              if path.name != "opensquilla-latest-py3-none-any.whl"
           )
           stable_zip = dist / "OpenSquilla-windows-x64-portable.zip"
-          stable_wheel = dist / "opensquilla-latest-py3-none-any.whl"
           sha256s = dist / "SHA256SUMS"
           assert len(versioned_zips) == 1, f"expected one versioned portable zip, got {len(versioned_zips)}"
           assert len(versioned_wheels) == 1, f"expected one versioned wheel, got {len(versioned_wheels)}"
@@ -288,8 +282,7 @@ jobs:
           assets = [versioned_zips[0], versioned_wheels[0]]
           if not is_prerelease:
               assert stable_zip.is_file(), "missing stable portable zip"
-              assert stable_wheel.is_file(), "missing stable wheel"
-              assets = [versioned_zips[0], stable_zip, versioned_wheels[0], stable_wheel]
+              assets = [versioned_zips[0], stable_zip, versioned_wheels[0]]
           expected = [
               f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
               for path in assets
@@ -389,7 +382,6 @@ jobs:
           expected = {"SHA256SUMS"}
           if not is_prerelease:
               expected.add("OpenSquilla-windows-x64-portable.zip")
-              expected.add("opensquilla-latest-py3-none-any.whl")
           raw = subprocess.check_output(
               ["gh", "release", "view", tag, "--json", "assets"],
               text=True,
@@ -406,7 +398,6 @@ jobs:
               name for name in names
               if name.startswith("opensquilla-")
               and name.endswith("-py3-none-any.whl")
-              and name != "opensquilla-latest-py3-none-any.whl"
           ]
           allowed = expected | set(versioned_zip) | set(versioned_wheel)
           unexpected = sorted(names - allowed)

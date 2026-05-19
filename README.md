@@ -48,8 +48,9 @@ and Develop from source — build **from a Git checkout** (`git clone` +
 Git LFS).
 
 Release install commands use published GitHub release assets. The
-`/releases/latest/download/` aliases point to the current release wheel
-and Windows portable zip.
+Windows portable zip also has a `/releases/latest/download/` alias for
+the current release. Python wheel installs use versioned wheel filenames
+because installers validate the version embedded in the wheel filename.
 
 | Path | Audience | When to use |
 | --- | --- | --- |
@@ -155,7 +156,7 @@ $env:Path = "$env:USERPROFILE\.local\bin;" + $env:Path
 **2. Install OpenSquilla** — the same command on every platform.
 
 ```sh
-uv tool install --python 3.12 "opensquilla[recommended] @ https://github.com/opensquilla/opensquilla/releases/latest/download/opensquilla-latest-py3-none-any.whl"
+uv tool install --python 3.12 "opensquilla[recommended] @ https://github.com/opensquilla/opensquilla/releases/download/v0.2.0/opensquilla-0.2.0-py3-none-any.whl"
 ```
 
 This installs the OpenSquilla wheel from the release URL, then lets

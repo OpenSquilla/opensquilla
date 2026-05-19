@@ -105,8 +105,20 @@ if ($Version -notin @('latest', 'stable') -and -not (Test-ReleaseVersion $Versio
 
 switch -Regex ($Version) {
     '^(latest|stable)$' {
-        $wheelUrl = "https://github.com/$repoSlug/releases/latest/download/opensquilla-latest-py3-none-any.whl"
-        $displayVersion = $Version
+        try {
+            $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$repoSlug/releases/latest" -Headers @{ 'User-Agent' = 'OpenSquilla installer' }
+        } catch {
+            Write-Error "install.ps1: failed to resolve latest release for $repoSlug. $($_.Exception.Message)"
+            exit 1
+        }
+        $releaseTag = [string]$latest.tag_name
+        if (-not (Test-ReleaseVersion $releaseTag)) {
+            Write-Error "install.ps1: latest release tag '$releaseTag' is not a supported release version."
+            exit 1
+        }
+        $releaseVersion = if ($releaseTag.StartsWith('v')) { $releaseTag.Substring(1) } else { $releaseTag }
+        $wheelUrl = "https://github.com/$repoSlug/releases/download/$releaseTag/opensquilla-$releaseVersion-py3-none-any.whl"
+        $displayVersion = $releaseTag
         break
     }
     '^v' {

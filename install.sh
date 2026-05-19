@@ -140,8 +140,30 @@ fi
 
 case "${release_selector}" in
     latest|stable)
-        wheel_url="https://github.com/${repo_slug}/releases/latest/download/opensquilla-latest-py3-none-any.whl"
-        display_version="${release_selector}"
+        latest_tag=""
+        if command -v curl >/dev/null 2>&1; then
+            latest_tag="$(
+                curl -fsSL "https://api.github.com/repos/${repo_slug}/releases/latest" \
+                    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                    | head -n 1
+            )"
+        elif command -v wget >/dev/null 2>&1; then
+            latest_tag="$(
+                wget -qO- "https://api.github.com/repos/${repo_slug}/releases/latest" \
+                    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                    | head -n 1
+            )"
+        else
+            echo "install.sh: curl or wget is required to resolve the latest release." >&2
+            exit 1
+        fi
+        if ! is_release_version "${latest_tag}"; then
+            echo "install.sh: failed to resolve latest release tag for ${repo_slug}." >&2
+            exit 1
+        fi
+        release_version="${latest_tag#v}"
+        wheel_url="https://github.com/${repo_slug}/releases/download/${latest_tag}/opensquilla-${release_version}-py3-none-any.whl"
+        display_version="${latest_tag}"
         ;;
     v*)
         release_version="${release_selector#v}"

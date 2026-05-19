@@ -107,13 +107,11 @@ def test_readme_release_install_uses_latest_assets_and_pinned_alternative() -> N
         in readme
     )
     assert (
-        "releases/latest/download/opensquilla-latest-py3-none-any.whl"
-        in readme
-    )
-    assert (
         f"releases/download/{CURRENT_TAG}/opensquilla-{CURRENT_VERSION}-py3-none-any.whl"
         in readme
     )
+    assert "opensquilla-latest-py3-none-any.whl" not in readme
+    assert "Python wheel installs use versioned wheel filenames" in readme
     assert "Release install commands use published GitHub release assets" in readme
 
 
@@ -124,7 +122,7 @@ def test_release_installers_default_to_current_tag() -> None:
         assert "opensquilla-$releaseVersion-py3-none-any.whl" in text or (
             "opensquilla-${release_version}-py3-none-any.whl" in text
         )
-        assert "releases/latest/download/opensquilla-latest-py3-none-any.whl" in text
+        assert "opensquilla-latest-py3-none-any.whl" not in text
 
 
 def test_release_workflow_marks_preview_tags_as_prereleases() -> None:
@@ -136,4 +134,4 @@ def test_release_workflow_marks_preview_tags_as_prereleases() -> None:
     assert "is_prerelease = bool(re.search" in workflow
     assert "if not is_prerelease:" in workflow
     assert "expected.add(\"OpenSquilla-windows-x64-portable.zip\")" in workflow
-    assert "expected.add(\"opensquilla-latest-py3-none-any.whl\")" in workflow
+    assert "opensquilla-latest-py3-none-any.whl" not in workflow

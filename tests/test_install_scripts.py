@@ -42,7 +42,8 @@ def test_release_installers_install_version_pinned_wheel_with_uv() -> None:
         assert "opensquilla-$releaseVersion-py3-none-any.whl" in script or (
             "opensquilla-${release_version}-py3-none-any.whl" in script
         )
-        assert "opensquilla-latest-py3-none-any.whl" in script
+        assert "opensquilla-latest-py3-none-any.whl" not in script
+        assert "releases/latest/download" not in script
         assert "--python" in script
         assert "--force" in script
         assert "--reinstall-package" in script
