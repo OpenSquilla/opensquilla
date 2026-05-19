@@ -126,3 +126,7 @@ def test_release_workflow_marks_preview_tags_as_prereleases() -> None:
     assert "IS_PRERELEASE" in workflow
     assert "--prerelease" in workflow
     assert "OpenSquilla {match.group(1)} Preview {match.group(2)}" in workflow
+    assert "is_prerelease = bool(re.search" in workflow
+    assert "if not is_prerelease:" in workflow
+    assert "expected.add(\"OpenSquilla-windows-x64-portable.zip\")" in workflow
+    assert "expected.add(\"opensquilla-latest-py3-none-any.whl\")" in workflow

@@ -197,15 +197,20 @@ jobs:
                   )
           PY
 
-      - name: Create stable release assets
+      - name: Create release assets
         shell: bash
         run: |
           python - <<'PY'
           import hashlib
+          import re
           import shutil
+          import tomllib
           from pathlib import Path
 
           dist = Path("dist")
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = project["project"]["version"]
+          is_prerelease = bool(re.search(r"(?:a|b|rc)[0-9]+$", version))
           zips = sorted(
               path for path in dist.glob("OpenSquilla-*.zip")
               if path.name != "OpenSquilla-windows-x64-portable.zip"
@@ -216,11 +221,13 @@ jobs:
           )
           assert len(zips) == 1, f"expected one versioned portable zip, got {len(zips)}"
           assert len(wheels) == 1, f"expected one versioned wheel, got {len(wheels)}"
-          stable_zip = dist / "OpenSquilla-windows-x64-portable.zip"
-          stable_wheel = dist / "opensquilla-latest-py3-none-any.whl"
-          shutil.copy2(zips[0], stable_zip)
-          shutil.copy2(wheels[0], stable_wheel)
-          assets = [zips[0], stable_zip, wheels[0], stable_wheel]
+          assets = [zips[0], wheels[0]]
+          if not is_prerelease:
+              stable_zip = dist / "OpenSquilla-windows-x64-portable.zip"
+              stable_wheel = dist / "opensquilla-latest-py3-none-any.whl"
+              shutil.copy2(zips[0], stable_zip)
+              shutil.copy2(wheels[0], stable_wheel)
+              assets = [zips[0], stable_zip, wheels[0], stable_wheel]
           lines = [
               f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
               for path in assets
@@ -257,9 +264,14 @@ jobs:
         run: |
           python - <<'PY'
           import hashlib
+          import re
+          import tomllib
           from pathlib import Path
 
           dist = Path("dist")
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = project["project"]["version"]
+          is_prerelease = bool(re.search(r"(?:a|b|rc)[0-9]+$", version))
           versioned_zips = sorted(
               path for path in dist.glob("OpenSquilla-*.zip")
               if path.name != "OpenSquilla-windows-x64-portable.zip"
@@ -273,10 +285,12 @@ jobs:
           sha256s = dist / "SHA256SUMS"
           assert len(versioned_zips) == 1, f"expected one versioned portable zip, got {len(versioned_zips)}"
           assert len(versioned_wheels) == 1, f"expected one versioned wheel, got {len(versioned_wheels)}"
-          assert stable_zip.is_file(), "missing stable portable zip"
-          assert stable_wheel.is_file(), "missing stable wheel"
           assert sha256s.is_file(), "missing SHA256SUMS"
-          assets = [versioned_zips[0], stable_zip, versioned_wheels[0], stable_wheel]
+          assets = [versioned_zips[0], versioned_wheels[0]]
+          if not is_prerelease:
+              assert stable_zip.is_file(), "missing stable portable zip"
+              assert stable_wheel.is_file(), "missing stable wheel"
+              assets = [versioned_zips[0], stable_zip, versioned_wheels[0], stable_wheel]
           expected = [
               f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
               for path in assets
@@ -367,15 +381,16 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           import subprocess
           import sys
 
-          expected = {
-              "OpenSquilla-windows-x64-portable.zip",
-              "opensquilla-latest-py3-none-any.whl",
-              "SHA256SUMS",
-          }
           tag = os.environ["TAG"]
+          is_prerelease = bool(re.search(r"(?:a|b|rc)[0-9]+$", tag))
+          expected = {"SHA256SUMS"}
+          if not is_prerelease:
+              expected.add("OpenSquilla-windows-x64-portable.zip")
+              expected.add("opensquilla-latest-py3-none-any.whl")
           raw = subprocess.check_output(
               ["gh", "release", "view", tag, "--json", "assets"],
               text=True,

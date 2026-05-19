@@ -820,6 +820,8 @@ def test_release_workflow_publishes_windows_portable_zip_and_wheel() -> None:
     assert "SHA256SUMS" in workflow
     assert "manifest.version" in workflow
     assert "GH_REPO: ${{ github.repository }}" in workflow
+    assert "is_prerelease = bool(re.search" in workflow
+    assert "if not is_prerelease:" in workflow
     assert "OpenSquilla-windows-x64-portable.zip" in workflow
     assert "opensquilla-latest-py3-none-any.whl" in workflow
     assert "dist/*.zip dist/*.whl dist/SHA256SUMS" in workflow
