@@ -199,13 +199,35 @@ same boot prelude block and create avoidable conflicts.
 - [ ] Run `scripts/refactor_preflight.sh --allow-dirty`.
 - [ ] Commit this stage plan on the active child branch.
 - [ ] Create external worker worktree from the active child branch.
-- [ ] Worker writes failing boundary tests and records RED output.
-- [ ] Worker implements `gateway/boot_prelude_wiring.py` and replaces the
+- [x] Worker writes failing boundary tests and records RED output.
+- [x] Worker implements `gateway/boot_prelude_wiring.py` and replaces the
       inline prelude setup with a short delegator call.
-- [ ] Main thread reviews diff for behavior compatibility and boundary scope.
-- [ ] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
-- [ ] Commit child verification/stage record update with:
+- [x] Main thread reviews diff for behavior compatibility and boundary scope.
+  - Result: reviewed worker diff after `3de6670`; changed files were limited to
+    this stage record, `gateway/boot.py`, new
+    `gateway/boot_prelude_wiring.py`, and new
+    `test_boot_prelude_wiring_boundary.py`.
+  - Boundary check: config load/port/logging/env/auth/Control UI/banner/PID
+    lock setup moved to `build_gateway_boot_prelude`; `boot.py` still owns
+    `build_services`, boot time, `gateway.starting`, diagnostics, TurnRunner,
+    runtime/cron/channel/app-server wiring, channel startup, router preload,
+    readiness, and return.
+  - PID lock check: `GatewayServer` now retains `_pid_lock` so the acquired lock
+    remains reachable from the returned handle.
+- [x] Run focused green command and touched-file checks.
+  - Main-thread focused GREEN after merging worker branch:
+    `uv run --extra dev pytest tests/test_gateway/test_boot_prelude_wiring_boundary.py tests/test_gateway/test_router_boot.py::test_start_gateway_server_shares_diagnostics_state_between_app_and_turn_runner tests/test_gateway/test_router_boot.py::test_start_gateway_server_schedules_router_preload_after_channels tests/test_gateway/test_pidfile_lock.py -q`
+    passed with `9 passed in 3.23s`.
+  - Main-thread touched-file checks:
+    `uv run --extra dev ruff check src/opensquilla/gateway/boot.py src/opensquilla/gateway/boot_prelude_wiring.py tests/test_gateway/test_boot_prelude_wiring_boundary.py`
+    passed; `uv run --extra dev mypy src/opensquilla/gateway --show-error-codes`
+    passed with no issues in 94 source files; `git diff --check` passed.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
+  - Main-thread child gate after worker merge passed:
+    `2663 passed, 8 skipped, 2 warnings in 54.00s`; gateway smoke
+    start/status/stop/status returned `{"ok": true, ...}` and final line was
+    `Refactor gate complete.`
+- [x] Commit child verification/stage record update with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
@@ -254,9 +276,11 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Worker commit:
+- Worker commit: `3de66703a9878010232439dcb0bfdf1f6f04f7ee`.
 - Active child support commits:
-- Child verification commit:
+  - Stage plan: `5692c8d`
+  - Worker merge: `8800915`
+- Child verification commit: pending this record update.
 - Integration merge:
 - Integration record:
 - Verification evidence:
@@ -266,6 +290,9 @@ Co-authored-by: Codex <noreply@openai.com>
   - Touched mypy: `Success: no issues found in 94 source files`.
   - `git diff --check`: exit 0.
   - Full child gate: `Refactor gate complete.`
+  - Main-thread focused GREEN after worker merge: `9 passed in 3.23s`.
+  - Main-thread child gate after worker merge: `2663 passed, 8 skipped,
+    2 warnings`; gateway smoke completed start/status/stop/status.
 - Cleanup evidence:
 - Residual risk:
   - Integration merge, integration gate, and worktree cleanup remain for the
