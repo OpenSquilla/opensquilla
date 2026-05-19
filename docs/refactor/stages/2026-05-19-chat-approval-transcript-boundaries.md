@@ -248,11 +248,19 @@ imports from `opensquilla.cli.chat_cmd`, and existing slash command behavior.
   - Whitespace: clean.
   - Pytest: `2790 passed, 8 skipped, 2 warnings`.
   - Gateway smoke: passed on `127.0.0.1:57955`.
-- [ ] Commit child verification record.
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run integration `scripts/refactor_gate.sh`.
-- [ ] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove temporary worker worktrees, remove `../opensquilla-refactor-active`,
+- [x] Commit child verification record.
+  - Commit: `382b357` (`Record chat approval transcript child
+    verification`).
+- [x] Merge child into integration with `git merge --no-ff`.
+  - Merge: `e1a5a56` (`Merge chat approval transcript boundaries`).
+- [x] Run integration `scripts/refactor_gate.sh`.
+  - Ruff: all checks passed.
+  - Mypy: success on 572 source files.
+  - Whitespace: clean.
+  - Pytest: `2792 passed, 6 skipped, 2 warnings`.
+  - Gateway smoke: passed on `127.0.0.1:58086`.
+- [x] Record child hash, integration hash, verification, and next slice.
+- [x] Remove temporary worker worktrees, remove `../opensquilla-refactor-active`,
       run `git worktree prune`, and verify no extra refactor worktree
       directories remain beyond `../opensquilla-refactor-integration`.
 
@@ -290,8 +298,12 @@ imports from `opensquilla.cli.chat_cmd`, and existing slash command behavior.
 - Main facade commit:
   - `d347e53` (`Refactor chat command facade boundaries`).
 - Child verification commit:
+  - `382b357` (`Record chat approval transcript child verification`).
 - Integration merge:
+  - `e1a5a56095b8c978ed11c7f74f240d610c0a642d` (`Merge chat approval
+    transcript boundaries`).
 - Integration record:
+  - This record update after the integration gate and worktree cleanup.
 - Verification evidence:
   - Approval worker RED: missing `opensquilla.cli.chat_approval_prompts`
     module.
@@ -311,10 +323,24 @@ imports from `opensquilla.cli.chat_cmd`, and existing slash command behavior.
   - Child full `scripts/refactor_gate.sh`: ruff passed; mypy success on 572
     source files; whitespace clean; pytest `2790 passed, 8 skipped, 2
     warnings`; gateway smoke passed on `127.0.0.1:57955`.
+  - Integration full `scripts/refactor_gate.sh`: ruff passed; mypy success on
+    572 source files; whitespace clean; pytest `2792 passed, 6 skipped, 2
+    warnings`; gateway smoke passed on `127.0.0.1:58086`.
 - Cleanup evidence:
+  - Removed `../opensquilla-refactor-active`.
+  - Removed `../opensquilla-refactor-agent-chat-approval`.
+  - Removed `../opensquilla-refactor-agent-chat-transcript`.
+  - Deleted merged branches:
+    `codex/refactor-chat-approval-transcript-boundaries`,
+    `codex/refactor-chat-approval-prompts-worker`, and
+    `codex/refactor-chat-standalone-transcript-worker`.
+  - Ran `git worktree prune`.
+  - `git worktree list --porcelain` shows no `opensquilla-refactor-*`
+    worktrees beyond `../opensquilla-refactor-integration`.
 - Residual risk:
-  - Pending integration gate; child verification is green but this stage is not
-    complete until integration merge/gate and worktree cleanup are recorded.
+  - Low for this slice; approval prompt handling and standalone transcript
+    rewrite guards are covered by dedicated boundary tests, compatibility
+    facade tests, focused chat tests, and the full integration gate.
 - Next recommended slice:
   - Continue CLI boundary thinning by extracting another cohesive `chat_cmd.py`
     route/runtime boundary, or switch to a Gateway/Session batch if CLI chat
