@@ -223,10 +223,10 @@ workers' changes and must not revert unrelated edits.
 - [x] Run focused green command and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh` in the active child worktree.
 - [x] Commit child verification/stage record update.
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove temporary child/worker worktrees; run `git worktree prune`; verify
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
+- [x] Remove temporary child/worker worktrees; run `git worktree prune`; verify
       no extra refactor worktree directories remain beyond integration.
 
 ## Child gate
@@ -260,9 +260,12 @@ workers' changes and must not revert unrelated edits.
   - `8579ebb` (`Merge CLI file attachment helpers worker`).
   - `d964a23` (`Merge CLI path attachment helpers worker`).
 - Main facade commit: `3595bdc` (`Refactor CLI attachments facade`).
-- Child verification commit: this record update, committed after the child gate.
-- Integration merge:
-- Integration record:
+- Child verification commit: `c5edd4c` (`Record CLI attachments input child
+  verification`).
+- Integration merge: `84a9584f2db8481d0ab3d510b77f1266edd28ed1` (`Merge CLI
+  attachments input boundaries`).
+- Integration record: this cleanup record update after the integration gate and
+  worktree cleanup.
 - Verification evidence:
   - Combined focused command: `uv run --extra dev pytest tests/test_cli/test_attachment_files_boundary.py tests/test_cli/test_attachment_paths_boundary.py tests/test_cli/test_attachments_facade_boundary.py tests/test_cli/test_chat_file_command.py tests/test_cli/test_chat_path_command.py tests/test_cli/test_chat_input_builders_boundary.py tests/test_cli/test_agent_cmd.py tests/test_agent_cmd_no_key.py -q`
     -> `96 passed in 0.76s`.
@@ -272,6 +275,26 @@ workers' changes and must not revert unrelated edits.
     issues in 568 source files; whitespace clean; pytest `2752 passed, 8
     skipped, 2 warnings in 55.27s`; gateway smoke start/status/stop/status
     passed.
+  - Integration full `scripts/refactor_gate.sh`: ruff passed; mypy passed with
+    no issues in 568 source files; whitespace clean; pytest `2754 passed, 6
+    skipped, 2 warnings in 28.20s`; gateway smoke start/status/stop/status
+    passed on `127.0.0.1:55815`; result `Refactor gate complete`.
 - Cleanup evidence:
-- Residual risk:
-- Next recommended slice:
+  - `git worktree remove ../opensquilla-refactor-active`
+  - `git worktree remove ../opensquilla-refactor-agent-cli-attachment-files`
+  - `git worktree remove ../opensquilla-refactor-agent-cli-attachment-paths`
+  - Deleted merged branches:
+    `codex/refactor-cli-attachments-input-boundaries`,
+    `codex/refactor-cli-attachment-files-worker`, and
+    `codex/refactor-cli-attachment-paths-worker`.
+  - `git worktree prune` completed; `git worktree list --porcelain` shows no
+    `opensquilla-refactor-*` worktrees beyond
+    `../opensquilla-refactor-integration`.
+- Residual risk: low; this is a compatibility-facade split for CLI attachment
+  input helpers. Boundary tests cover file/image/path behavior and the legacy
+  `opensquilla.cli.attachments` import surface, while chat builder and
+  `agent_cmd` focused tests cover the main callers.
+- Next recommended slice: continue CLI boundary thinning with a coarse
+  command-input or command-runtime batch, but prefer the next module-level
+  slice only after rechecking current integration state and active incomplete
+  stage records so the refactor line does not accumulate stale partial stages.
