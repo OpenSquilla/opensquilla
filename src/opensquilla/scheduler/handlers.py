@@ -12,7 +12,7 @@ from typing import Any
 
 import structlog
 
-from opensquilla.engine.stream_wrappers import wrap_stream
+from opensquilla.runtime.stream_wrappers import wrap_stream
 from opensquilla.scheduler.delivery import DeliveryChain, build_reply_rendezvous_envelope
 from opensquilla.scheduler.heartbeat_loop import DEFAULT_HEARTBEAT_PROMPT
 from opensquilla.scheduler.payloads import payload_agent_id, payload_text

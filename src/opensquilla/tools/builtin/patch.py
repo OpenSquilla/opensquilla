@@ -10,6 +10,7 @@ from pathlib import Path
 
 from opensquilla.identity.workspace import BOOTSTRAP_FILENAMES
 from opensquilla.sandbox.integration import sandboxed
+from opensquilla.tools.builtin import filesystem
 from opensquilla.tools.registry import tool
 from opensquilla.tools.types import ToolError, current_tool_context
 
@@ -141,10 +142,8 @@ def _parse_hunk_header(header: str) -> Hunk:
 
 
 def _default_patch_root() -> Path:
-    ctx = current_tool_context.get()
-    if ctx and ctx.workspace_dir:
-        return Path(ctx.workspace_dir).expanduser().resolve()
-    return Path.cwd().resolve()
+    root = filesystem._resolve_workdir(None)
+    return root if root is not None else Path.cwd().resolve()
 
 
 def _validate_path(path: str, root: Path | None = None) -> Path:
@@ -349,7 +348,7 @@ def _validate_patch_approval(
     approval_id: str,
     plan: _PatchApprovalPlan,
 ) -> dict[str, object] | None:
-    from opensquilla.gateway.approval_queue import get_approval_queue
+    from opensquilla.application.approval_queue import get_approval_queue
 
     queue = get_approval_queue()
     try:
@@ -386,7 +385,7 @@ def _validate_patch_approval(
 
 
 def _request_patch_approval(plan: _PatchApprovalPlan) -> dict[str, object] | None:
-    from opensquilla.gateway.approval_queue import get_approval_queue
+    from opensquilla.application.approval_queue import get_approval_queue
 
     queue = get_approval_queue()
     settings = queue.get_settings()

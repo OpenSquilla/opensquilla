@@ -15,8 +15,9 @@ from pathlib import Path
 
 from opensquilla.sandbox.integration import gate_action, get_runtime, run_under_backend
 from opensquilla.sandbox.types import DenialResult, SandboxRequest
+from opensquilla.tools.builtin import filesystem
 from opensquilla.tools.registry import tool
-from opensquilla.tools.types import ToolError, current_tool_context
+from opensquilla.tools.types import ToolError
 
 # Destructive Python patterns that must go through the same approval flow as
 # shell warnlist hits. Catches the "agent pivots from `rm` to `os.remove()`"
@@ -112,15 +113,18 @@ def _check_code_sensitive_access(code: str) -> tuple[str, str] | None:
         if marker is not None and (has_read_or_shell or path_like_literal):
             return "sensitive_path", marker
 
-    from opensquilla.tools.builtin.web import _sensitive_body_marker, _sensitive_url_marker
+    from opensquilla.safety.sensitive_payloads import (
+        sensitive_body_marker,
+        sensitive_url_marker,
+    )
 
     has_network = any(token in lowered for token in _CODE_NETWORK_TOKENS)
     if has_network:
         for literal in _iter_code_string_literals(code):
-            marker = _sensitive_url_marker(literal)
+            marker = sensitive_url_marker(literal)
             if marker is not None:
                 return "sensitive_payload", marker
-        marker = _sensitive_body_marker(code)
+        marker = sensitive_body_marker(code)
         if marker is not None:
             return "sensitive_payload", marker
 
@@ -249,9 +253,9 @@ async def execute_code(
     if sensitive_access is not None and _context_elevated_mode() != "full":
         reason, marker = sensitive_access
         if reason == "sensitive_payload":
-            from opensquilla.tools.builtin.web import _sensitive_body_block
+            from opensquilla.safety.sensitive_payloads import sensitive_body_block
 
-            return _sensitive_body_block("execute_code", marker)
+            return sensitive_body_block("execute_code", marker)
 
         from opensquilla.sandbox.sensitive_paths import build_block_envelope
 
@@ -290,13 +294,10 @@ async def execute_code(
 
     timeout = max(1.0, min(float(timeout), _MAX_TIMEOUT))
 
-    ctx = current_tool_context.get()
     runtime = get_runtime()
     sandbox_enabled = bool(runtime is not None and runtime.effective.sandbox_enabled)
     python_bin = _resolve_python_bin(sandbox_enabled=sandbox_enabled)
-    workspace = (
-        Path(ctx.workspace_dir).expanduser().resolve() if ctx and ctx.workspace_dir else None
-    )
+    workspace = filesystem._resolve_workdir(None)
     cleanup_dir: str | None = None
     if workspace is not None:
         workspace.mkdir(parents=True, exist_ok=True)

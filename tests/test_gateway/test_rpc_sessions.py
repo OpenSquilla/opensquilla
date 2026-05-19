@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -14,6 +16,14 @@ import pytest
 
 from opensquilla.agents.registry import AgentRegistry
 from opensquilla.engine.types import DoneEvent
+from opensquilla.gateway import (
+    rpc_session_lifecycle,
+    rpc_session_read_queries,
+    rpc_session_send,
+)
+from opensquilla.gateway import (
+    rpc_sessions as _rpc_sessions,  # noqa: F401 - import registers session RPC handlers
+)
 from opensquilla.gateway.agent_tasks import get_agent_task_registry
 from opensquilla.gateway.attachment_ingest import (
     MAX_STAGED_PDF_BYTES,
@@ -22,11 +32,13 @@ from opensquilla.gateway.attachment_ingest import (
 from opensquilla.gateway.auth import Principal
 from opensquilla.gateway.config import AgentEntryConfig, GatewayConfig
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
-from opensquilla.gateway.rpc_sessions import _normalize_terminal_event_payload
 from opensquilla.gateway.session_streams import get_session_streams
+from opensquilla.gateway.task_runtime import TaskQueueFullError
 from opensquilla.gateway.uploads import set_upload_store
 from opensquilla.gateway.websocket import SubscriptionManager, get_registry
+from opensquilla.session import management_service as session_management_service
 from opensquilla.session.compaction import CompactionConfig
+from opensquilla.session.rpc_payload import session_agent_not_found_details
 
 _DEFAULT_PRINCIPAL = Principal(
     role="operator", scopes=frozenset(["operator.admin"]), is_owner=True, authenticated=True
@@ -185,6 +197,15 @@ class FakeSessionManager:
         return session, True
 
 
+class _TranscriptSessionManager(FakeSessionManager):
+    def __init__(self, sessions: list[FakeSession], transcript: list[Any]) -> None:
+        super().__init__(sessions)
+        self.transcript = transcript
+
+    async def get_transcript(self, key: str) -> list[Any]:
+        return list(self.transcript)
+
+
 def make_ctx(session_manager=None, **kwargs) -> RpcContext:
     role = kwargs.pop("role", "operator")
     scopes = kwargs.pop("scopes", None)
@@ -285,6 +306,30 @@ class _RecordingTurnRunner:
         yield DoneEvent()
 
 
+class _QueueFullRuntime:
+    def __init__(self, *, session_key: str, max_pending: int) -> None:
+        self.session_key = session_key
+        self.max_pending = max_pending
+
+    async def enqueue(self, *args, **kwargs):
+        raise TaskQueueFullError(session_key=self.session_key, max_pending=self.max_pending)
+
+
+class _RollbackSessionManager(FakeSessionManager):
+    def __init__(self, sessions: list[FakeSession], *, rollback_ok: bool) -> None:
+        super().__init__(sessions)
+        self.rollback_ok = rollback_ok
+        self.remove_message_calls: list[tuple[str, str]] = []
+
+    async def append_message(self, key: str, role: str = "user", content: str = ""):
+        self.created_messages.append((key, role, content))
+        return SimpleNamespace(content=content, message_id="msg-1")
+
+    async def remove_message(self, key: str, message_id: str) -> bool:
+        self.remove_message_calls.append((key, message_id))
+        return self.rollback_ok
+
+
 class _FakeUploadStore:
     def __init__(self, entries: dict[str, tuple[bytes, dict[str, Any]]]) -> None:
         self.entries = entries
@@ -332,6 +377,48 @@ class TestSessionsCreate:
         assert res.ok is True
         assert res.payload["key"].startswith("agent:myagent:")
         assert "sessionId" in res.payload
+
+    def test_session_management_create_delegates_payload_to_session_boundary(self):
+        source = Path(session_management_service.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "create_session"
+        )
+        handler_constants = {
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "session_create_response") in imports
+        assert ("opensquilla.session.rpc_payload", "session_create_stub_response") in imports
+        assert ("opensquilla.session.errors", "SessionAgentNotFoundError") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_create_response"
+            for node in ast.walk(handler)
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_create_stub_response"
+            for node in ast.walk(handler)
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "SessionAgentNotFoundError"
+            for node in ast.walk(handler)
+        )
+        direct_detail_key_sets = {
+            tuple(key.value for key in node.keys if isinstance(key, ast.Constant))
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Dict)
+        }
+        assert "sessionId" not in handler_constants
+        assert "seededMessage" not in handler_constants
+        assert ("agentId",) not in direct_detail_key_sets
 
     @pytest.mark.asyncio
     async def test_create_defaults(self, dispatcher, ctx_no_manager):
@@ -434,7 +521,7 @@ class TestSessionsCreate:
 
         assert res.ok is False
         assert res.error.code == "agent.not_found"
-        assert res.error.details == {"agentId": "ghost"}
+        assert res.error.details == session_agent_not_found_details("ghost")
 
     @pytest.mark.asyncio
     async def test_create_with_create_if_missing_does_not_create_agent(self, dispatcher):
@@ -462,7 +549,7 @@ class TestSessionsCreate:
 
         assert res.ok is False
         assert res.error.code == "agent.not_found"
-        assert res.error.details == {"agentId": "dragons"}
+        assert res.error.details == session_agent_not_found_details("dragons")
         assert cfg.agents == []
         assert session_manager._storage._sessions == {}
 
@@ -597,6 +684,49 @@ class TestSessionsList:
         ]
         assert manager._storage.list_agent_tasks_calls == []
 
+    def test_gateway_sessions_list_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_read_queries.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        top_level_functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_list"
+        )
+        constants = {
+            node.value
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "session_list_response") in imports
+        assert ("opensquilla.session.rpc_payload", "session_list_row") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_list_response"
+            for node in ast.walk(handler)
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_list_row"
+            for node in ast.walk(handler)
+        )
+        assert "sessions" not in constants
+        assert "count" not in constants
+        assert "_task_summary" not in top_level_functions
+        assert "_task_state_summary" not in top_level_functions
+        assert "_derive_source_metadata" not in top_level_functions
+
 
 class TestSessionsSend:
     @pytest.mark.asyncio
@@ -612,19 +742,232 @@ class TestSessionsSend:
             (session.session_key, "continue")
         ]
 
-    def test_legacy_session_error_payload_is_terminal_message_normalized(self):
-        payload = _normalize_terminal_event_payload(
-            "session.event.error",
-            {
-                "message": "Session event stream idle before terminal event",
-                "code": "stream_idle_timeout",
-            },
+    def test_gateway_sessions_send_delegates_response_payloads_to_session_boundary(self):
+        source = Path(rpc_session_send.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        top_level_functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_send"
+        )
+        dict_key_sets = {
+            tuple(
+                key.value
+                for key in node.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            )
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Dict)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "normalize_terminal_event_payload") in imports
+        assert ("opensquilla.session.rpc_payload", "session_send_accepted_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_send_accepted_response"
+            for node in ast.walk(handler)
+        )
+        assert ("status", "key") not in dict_key_sets
+        assert ("status", "key", "task_id") not in dict_key_sets
+        assert ("session_key", "max_pending", "rollback_message_id") not in dict_key_sets
+        assert (
+            "session_key",
+            "max_pending",
+            "orphan_message_id",
+            "remediation",
+        ) not in dict_key_sets
+        assert "_normalize_terminal_event_payload" not in top_level_functions
+        assert ("opensquilla.session.terminal_reply", "build_terminal_reply") not in imports
+
+    def test_gateway_sessions_send_delegates_input_normalization_to_gateway_boundary(self):
+        source = Path(rpc_session_send.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        boundary_path = Path(rpc_session_send.__file__).with_name(
+            "rpc_session_send_inputs.py"
         )
 
-        assert payload["message"] == "The task timed out before it could finish."
-        assert payload["terminal_message"] == "The task timed out before it could finish."
-        assert payload["terminal_reason"] == "timeout"
-        assert payload["error_message"] == "Session event stream idle before terminal event"
+        assert boundary_path.exists()
+
+        boundary_tree = ast.parse(boundary_path.read_text(encoding="utf-8"))
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        top_level_functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        boundary_defs = {
+            node.name
+            for node in ast.walk(boundary_tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_send"
+        )
+        handler_calls = {
+            node.func.id
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+
+        assert {
+            (
+                "opensquilla.gateway.rpc_session_send_inputs",
+                "normalize_memory_capture_controls",
+            ),
+            ("opensquilla.gateway.rpc_session_send_inputs", "trusted_elevated_hint"),
+        } <= imports
+        assert "trusted_elevated_hint" in handler_calls
+        assert "normalize_memory_capture_controls" in handler_calls
+        assert "_trusted_elevated_hint" not in handler_calls
+        assert "_normalize_memory_capture_controls" not in handler_calls
+        assert "_coerce_optional_bool" not in top_level_functions
+        assert "_first_dict_value" not in top_level_functions
+        assert "_trusted_elevated_hint" not in top_level_functions
+        assert "_normalize_memory_capture_controls" not in top_level_functions
+        assert {
+            "trusted_elevated_hint",
+            "normalize_memory_capture_controls",
+        } <= boundary_defs
+
+    def test_gateway_sessions_send_delegates_runtime_enqueue_to_gateway_boundary(self):
+        source = Path(rpc_session_send.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        boundary_path = Path(rpc_session_send.__file__).with_name(
+            "rpc_session_turn_runtime.py"
+        )
+
+        assert boundary_path.exists()
+
+        boundary_tree = ast.parse(boundary_path.read_text(encoding="utf-8"))
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        boundary_imports = {
+            (node.module, alias.name)
+            for node in ast.walk(boundary_tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_send"
+        )
+        handler_calls = {
+            node.func.id
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        handler_names = {node.id for node in ast.walk(handler) if isinstance(node, ast.Name)}
+        boundary_defs = {
+            node.name
+            for node in ast.walk(boundary_tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        assert (
+            "opensquilla.gateway.rpc_session_turn_runtime",
+            "enqueue_session_turn_via_runtime",
+        ) in imports
+        assert "enqueue_session_turn_via_runtime" in handler_calls
+        assert ("opensquilla.engine.start_turn", "start_turn_via_runtime") not in imports
+        assert "start_turn_via_runtime" not in handler_calls
+        assert "TaskQueueFullError" not in handler_names
+        assert "enqueue_session_turn_via_runtime" in boundary_defs
+        assert (
+            "opensquilla.engine.start_turn",
+            "start_turn_via_runtime",
+        ) in boundary_imports
+        assert (
+            "opensquilla.session.rpc_payload",
+            "session_send_queue_full_details",
+        ) in boundary_imports
+        assert (
+            "opensquilla.session.rpc_payload",
+            "session_send_queue_full_dirty_details",
+        ) in boundary_imports
+
+    @pytest.mark.asyncio
+    async def test_send_queue_full_rolls_back_and_returns_retryable_details(
+        self,
+        dispatcher,
+        session,
+    ):
+        manager = _RollbackSessionManager([session], rollback_ok=True)
+        ctx = make_ctx(
+            session_manager=manager,
+            task_runtime=_QueueFullRuntime(session_key=session.session_key, max_pending=2),
+        )
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.send",
+            {"key": session.session_key, "message": "queued"},
+            ctx,
+        )
+
+        assert res.ok is False
+        assert res.error.code == "QUEUE_FULL"
+        assert res.error.retryable is True
+        assert res.error.details == {
+            "session_key": session.session_key,
+            "max_pending": 2,
+            "rollback_message_id": "msg-1",
+        }
+        assert manager.remove_message_calls == [(session.session_key, "msg-1")]
+
+    @pytest.mark.asyncio
+    async def test_send_queue_full_dirty_returns_orphan_details(
+        self,
+        dispatcher,
+        session,
+    ):
+        manager = _RollbackSessionManager([session], rollback_ok=False)
+        ctx = make_ctx(
+            session_manager=manager,
+            task_runtime=_QueueFullRuntime(session_key=session.session_key, max_pending=2),
+        )
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.send",
+            {"key": session.session_key, "message": "queued"},
+            ctx,
+        )
+
+        assert res.ok is False
+        assert res.error.code == "QUEUE_FULL_DIRTY"
+        assert res.error.retryable is False
+        assert res.error.details == {
+            "session_key": session.session_key,
+            "max_pending": 2,
+            "orphan_message_id": "msg-1",
+            "remediation": "client must dedup by message_id before retry",
+        }
+        assert manager.remove_message_calls == [(session.session_key, "msg-1")]
 
     @pytest.mark.asyncio
     async def test_send_reset_same_key_intent_applies_before_append(
@@ -898,6 +1241,31 @@ class TestSessionsAbort:
         res = await dispatcher.dispatch("r1", "sessions.abort", {"key": "any"}, ctx_no_manager)
         assert res.ok is True  # no-op
 
+    def test_gateway_abort_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_abort"
+        )
+
+        assert ("opensquilla.session.rpc_payload", "session_abort_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_abort_response"
+            for node in ast.walk(handler)
+        )
+        assert not any(
+            isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+            for node in ast.walk(handler)
+        )
+
     @pytest.mark.asyncio
     async def test_abort_not_found(self, dispatcher, ctx_with_sessions):
         res = await dispatcher.dispatch(
@@ -919,6 +1287,31 @@ class TestSessionsPatch:
         assert res.ok is True
         assert res.payload["key"] == session.session_key
         assert "displayName" in res.payload["updated"]
+
+    def test_session_management_patch_delegates_payload_to_session_boundary(self):
+        source = Path(session_management_service.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "patch_session"
+        )
+        handler_constants = {
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "session_patch_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_patch_response"
+            for node in ast.walk(handler)
+        )
+        assert "updated" not in handler_constants
 
     @pytest.mark.asyncio
     async def test_patch_not_found(self, dispatcher, ctx_with_sessions):
@@ -954,6 +1347,93 @@ class TestSessionsReset:
 
         assert res.ok is True
         assert ctx.session_manager.applied_intents == [(session.session_key, "reset_same_key")]
+
+    @pytest.mark.asyncio
+    async def test_reset_without_flush_service_waits_for_session_lock_before_memory_preservation(
+        self, dispatcher, session, monkeypatch
+    ):
+        runner = _RecordingTurnRunner()
+        manager = FakeSessionManager([session])
+        ctx = make_ctx(
+            session_manager=manager,
+            turn_runner=runner,
+            scopes=["operator.read", "operator.write"],
+        )
+        lock = runner._get_session_lock(session.session_key)
+        preservation_started = asyncio.Event()
+
+        async def preserve(*args, **kwargs):
+            preservation_started.set()
+            return SimpleNamespace(
+                previous_session_id=session.session_id,
+                receipt=None,
+                failure=None,
+            )
+
+        monkeypatch.setattr(rpc_session_lifecycle, "preserve_lifecycle_memory", preserve)
+
+        await lock.acquire()
+        try:
+            task = asyncio.create_task(
+                dispatcher.dispatch("r1", "sessions.reset", {"key": session.session_key}, ctx)
+            )
+            await asyncio.sleep(0)
+
+            assert preservation_started.is_set() is False
+            assert manager.applied_intents == []
+        finally:
+            lock.release()
+
+        res = await asyncio.wait_for(task, timeout=1.0)
+
+        assert res.ok is True
+        assert preservation_started.is_set() is True
+        assert manager.applied_intents == [(session.session_key, "reset_same_key")]
+
+    @pytest.mark.asyncio
+    async def test_reset_force_without_flush_service_serializes_transcript_check_and_rotation(
+        self, dispatcher, session
+    ):
+        class RecordingTranscriptSessionManager(_TranscriptSessionManager):
+            def __init__(self, sessions: list[FakeSession], transcript: list[Any]) -> None:
+                super().__init__(sessions, transcript)
+                self.lifecycle_events: list[str] = []
+
+            async def get_transcript(self, key: str) -> list[Any]:
+                self.lifecycle_events.append("transcript")
+                return await super().get_transcript(key)
+
+            async def apply_intent(self, session_key: str, intent: str, **kwargs):
+                self.lifecycle_events.append("apply_intent")
+                return await super().apply_intent(session_key, intent, **kwargs)
+
+        runner = _RecordingTurnRunner()
+        manager = RecordingTranscriptSessionManager([session], [SimpleNamespace(content="hi")])
+        ctx = make_ctx(session_manager=manager, turn_runner=runner)
+        lock = runner._get_session_lock(session.session_key)
+
+        await lock.acquire()
+        try:
+            task = asyncio.create_task(
+                dispatcher.dispatch(
+                    "r1",
+                    "sessions.reset",
+                    {"key": session.session_key, "force": True},
+                    ctx,
+                )
+            )
+            await asyncio.sleep(0)
+
+            assert manager.lifecycle_events == []
+            assert manager.applied_intents == []
+        finally:
+            lock.release()
+
+        res = await asyncio.wait_for(task, timeout=1.0)
+
+        assert res.ok is True
+        assert manager.lifecycle_events == ["transcript", "apply_intent"]
+        assert manager.applied_intents == [(session.session_key, "reset_same_key")]
 
     @pytest.mark.asyncio
     async def test_reset_lets_recently_completed_runtime_task_settle(self, dispatcher, session):
@@ -992,6 +1472,52 @@ class TestSessionsReset:
         assert runtime.cancel_calls == 1
         assert runtime.cancelled is False
 
+    def test_gateway_reset_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_reset"
+        )
+        dict_key_sets = {
+            tuple(
+                key.value
+                for key in node.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            )
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Dict)
+        }
+
+        assert ("opensquilla.session.lifecycle_memory", "preserve_lifecycle_memory") in imports
+        assert ("opensquilla.session.rpc_payload", "session_reset_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "preserve_lifecycle_memory"
+            for node in ast.walk(handler)
+        )
+        assert not any(
+            isinstance(node, ast.FunctionDef) and node.name == "_reset_response"
+            for node in tree.body
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_reset_response"
+            for node in ast.walk(handler)
+        )
+        assert not any(
+            isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+            for node in ast.walk(handler)
+        )
+        assert ("key", "session_id") not in dict_key_sets
+        assert ("key", "session_id", "reason", "message_count") not in dict_key_sets
+        assert ("flush_receipt", "key", "session_id") not in dict_key_sets
+
     @pytest.mark.asyncio
     async def test_reset_not_found(self, dispatcher, ctx_with_sessions):
         res = await dispatcher.dispatch(
@@ -999,6 +1525,68 @@ class TestSessionsReset:
         )
         assert res.ok is False
         assert res.error.code == "NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_reset_flush_unavailable_returns_session_boundary_details(
+        self, dispatcher, session
+    ):
+        manager = _TranscriptSessionManager([session], [SimpleNamespace(content="hi")])
+        ctx = make_ctx(session_manager=manager, scopes=["operator.write"])
+
+        res = await dispatcher.dispatch("r1", "sessions.reset", {"key": session.session_key}, ctx)
+
+        assert res.ok is False
+        assert res.error.code == "flush_unavailable"
+        assert res.error.details == {
+            "key": session.session_key,
+            "session_id": session.session_id,
+            "reason": "flush_service_disabled",
+            "message_count": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_reset_force_requires_admin_scope_with_session_boundary_details(
+        self, dispatcher, session
+    ):
+        manager = _TranscriptSessionManager([session], [SimpleNamespace(content="hi")])
+        ctx = make_ctx(session_manager=manager, scopes=["operator.write"])
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.reset",
+            {"key": session.session_key, "force": True},
+            ctx,
+        )
+
+        assert res.ok is False
+        assert res.error.code == "permission_denied"
+        assert res.error.details == {
+            "key": session.session_key,
+            "session_id": session.session_id,
+        }
+
+    @pytest.mark.asyncio
+    async def test_reset_flush_disk_error_returns_session_boundary_details(
+        self, dispatcher, session
+    ):
+        manager = _TranscriptSessionManager([session], [SimpleNamespace(content="hi")])
+        flush_service = SimpleNamespace(execute=AsyncMock(side_effect=RuntimeError("disk no")))
+        ctx = make_ctx(
+            session_manager=manager,
+            flush_service=flush_service,
+            scopes=["operator.write"],
+        )
+
+        res = await dispatcher.dispatch("r1", "sessions.reset", {"key": session.session_key}, ctx)
+
+        assert res.ok is False
+        assert res.error.code == "flush_disk_error"
+        assert res.error.details["key"] == session.session_key
+        assert res.error.details["session_id"] == session.session_id
+        receipt = res.error.details["flush_receipt"]
+        assert receipt["mode"] == "error"
+        assert receipt["message_count"] == 1
+        assert receipt["error"] == "disk no"
 
 
 class TestSessionsDelete:
@@ -1018,6 +1606,29 @@ class TestSessionsDelete:
         assert res.ok is True
         assert res.payload["deleted"] == []
         assert len(res.payload["errors"]) == 1
+
+    def test_gateway_delete_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_delete"
+        )
+        return_value = next(
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Return)
+        )
+
+        assert ("opensquilla.session.rpc_payload", "session_delete_response") in imports
+        assert isinstance(return_value, ast.Call)
+        assert isinstance(return_value.func, ast.Name)
+        assert return_value.func.id == "session_delete_response"
 
 
 class TestSessionsCompact:
@@ -1039,6 +1650,49 @@ class TestSessionsCompact:
 
         assert res.ok is True
 
+    def test_gateway_compact_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_compact"
+        )
+        handler_constants = {
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
+        }
+        dict_key_sets = {
+            tuple(
+                key.value
+                for key in node.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            )
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Dict)
+        }
+
+        assert ("opensquilla.session.lifecycle_memory", "preserve_lifecycle_memory") in imports
+        assert ("opensquilla.session.rpc_payload", "session_compact_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "preserve_lifecycle_memory"
+            for node in ast.walk(handler)
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_compact_response"
+            for node in ast.walk(handler)
+        )
+        assert "before_count" not in handler_constants
+        assert "after_count" not in handler_constants
+        assert ("key", "session_id") not in dict_key_sets
+        assert ("key", "session_id", "reason", "message_count") not in dict_key_sets
+        assert ("flush_receipt", "key", "session_id") not in dict_key_sets
+
     @pytest.mark.asyncio
     async def test_compact_not_found(self, dispatcher, ctx_with_sessions):
         res = await dispatcher.dispatch(
@@ -1046,6 +1700,45 @@ class TestSessionsCompact:
         )
         assert res.ok is False
         assert res.error.code == "NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_compact_flush_unavailable_returns_session_boundary_details(
+        self, dispatcher, session
+    ):
+        manager = _TranscriptSessionManager([session], [SimpleNamespace(content="hi")])
+        ctx = make_ctx(session_manager=manager, scopes=["operator.write"])
+
+        res = await dispatcher.dispatch("r1", "sessions.compact", {"key": session.session_key}, ctx)
+
+        assert res.ok is False
+        assert res.error.code == "flush_unavailable"
+        assert res.error.details == {
+            "key": session.session_key,
+            "session_id": session.session_id,
+            "reason": "flush_service_disabled",
+            "message_count": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_compact_force_requires_admin_scope_with_session_boundary_details(
+        self, dispatcher, session
+    ):
+        manager = _TranscriptSessionManager([session], [SimpleNamespace(content="hi")])
+        ctx = make_ctx(session_manager=manager, scopes=["operator.write"])
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.compact",
+            {"key": session.session_key, "force": True},
+            ctx,
+        )
+
+        assert res.ok is False
+        assert res.error.code == "permission_denied"
+        assert res.error.details == {
+            "key": session.session_key,
+            "session_id": session.session_id,
+        }
 
 
 class TestSessionsContextCompact:
@@ -1159,6 +1852,86 @@ class TestSessionsContextCompact:
         assert res.ok is True
         assert res.payload["summary_source"] == "unknown"
         assert manager.compact_calls == [(session.session_key, 1234)]
+
+    def test_gateway_context_compact_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_context_compact"
+        )
+        handler_constants = {
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
+        }
+
+        assert (
+            "opensquilla.session.rpc_payload",
+            "session_context_compact_response",
+        ) in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_context_compact_response"
+            for node in ast.walk(handler)
+        )
+        assert "compacted" not in handler_constants
+        assert "summary_len" not in handler_constants
+        assert "context_window_tokens" not in handler_constants
+
+    def test_gateway_context_compact_delegates_inputs_to_gateway_boundary(self):
+        source = Path(rpc_session_lifecycle.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        boundary_path = Path(rpc_session_lifecycle.__file__).with_name("rpc_compaction_inputs.py")
+
+        assert boundary_path.exists()
+
+        boundary_tree = ast.parse(boundary_path.read_text(encoding="utf-8"))
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        boundary_defs = {
+            node.name
+            for node in ast.walk(boundary_tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_context_compact"
+        )
+
+        assert {
+            ("opensquilla.gateway.rpc_compaction_inputs", "build_gateway_compaction_config"),
+            ("opensquilla.gateway.rpc_compaction_inputs", "context_window_tokens"),
+        } <= imports
+        assert {
+            "build_gateway_compaction_config",
+            "context_window_tokens",
+            "effective_compaction_model",
+            "resolve_compaction_provider",
+        } <= boundary_defs
+        assert any(
+            isinstance(node, ast.Name) and node.id == "context_window_tokens"
+            for node in ast.walk(handler)
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "build_gateway_compaction_config"
+            for node in ast.walk(handler)
+        )
+        assert not any(
+            isinstance(node, ast.Name) and node.id == "build_compaction_config_from_provider"
+            for node in ast.walk(handler)
+        )
 
     @pytest.mark.asyncio
     async def test_context_compact_not_found(self, dispatcher, ctx_with_sessions):
@@ -1310,6 +2083,33 @@ class TestSessionsMessagesSubscribe:
         assert res.payload["last_task"]["task_id"] == "task-abandoned"
         assert res.payload["run_status"] == "interrupted"
 
+    def test_gateway_messages_subscribe_delegates_response_to_session_boundary(self):
+        source = Path(rpc_session_read_queries.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_messages_subscribe"
+        )
+        handler_constants = {
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "messages_subscribe_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "messages_subscribe_response"
+            for node in ast.walk(handler)
+        )
+        assert "replay_complete" not in handler_constants
+        assert "replayed_count" not in handler_constants
+
     @pytest.mark.asyncio
     async def test_messages_subscribe_missing_key(self, dispatcher, ctx_with_sessions):
         res = await dispatcher.dispatch(
@@ -1349,6 +2149,38 @@ class TestSessionsPreview:
         assert res.ok is True
         assert len(res.payload["previews"]) == 1
 
+    def test_gateway_sessions_preview_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_read_queries.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        preview_handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_sessions_preview"
+        )
+        preview_constants = {
+            node.value for node in ast.walk(preview_handler) if isinstance(node, ast.Constant)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "session_preview_row") in imports
+        assert ("opensquilla.session.rpc_payload", "session_preview_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_preview_row"
+            for node in ast.walk(preview_handler)
+        )
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_preview_response"
+            for node in ast.walk(preview_handler)
+        )
+        assert "lastMessage" not in preview_constants
+        assert "previews" not in preview_constants
+
     @pytest.mark.asyncio
     async def test_preview_no_manager(self, dispatcher, ctx_no_manager):
         res = await dispatcher.dispatch("r1", "sessions.preview", None, ctx_no_manager)
@@ -1367,6 +2199,32 @@ class TestSessionsResolve:
         )
         assert res.ok is True
         assert res.payload["session_key"] == session.session_key
+
+    def test_gateway_resolve_delegates_payload_to_session_boundary(self):
+        source = Path(rpc_session_read_queries.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        handler = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "handle_sessions_resolve"
+        )
+        handler_constants = {
+            node.value for node in ast.walk(handler) if isinstance(node, ast.Constant)
+        }
+
+        assert ("opensquilla.session.rpc_payload", "session_resolve_response") in imports
+        assert any(
+            isinstance(node, ast.Name) and node.id == "session_resolve_response"
+            for node in ast.walk(handler)
+        )
+        assert "session_key" not in handler_constants
+        assert "updated_at" not in handler_constants
 
     @pytest.mark.asyncio
     async def test_resolve_by_session_id(self, dispatcher):

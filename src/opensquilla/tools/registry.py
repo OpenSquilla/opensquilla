@@ -3,22 +3,16 @@
 from __future__ import annotations
 
 import functools
-import os
-from dataclasses import replace
-from enum import StrEnum
+from collections.abc import Mapping
 from typing import Any
 
 import structlog
 
 from opensquilla.provider.types import ToolDefinition, ToolInputSchema
-from opensquilla.tools.policy import (
-    ToolSurfaceCapabilities,
-    resolve_runtime_tool_surface,
-)
+from opensquilla.tools import surface as surface_policy
+from opensquilla.tools import visibility as visibility_policy
+from opensquilla.tools.policy_runtime import ToolSurfaceCapabilities
 from opensquilla.tools.types import (
-    CRON_AGENT_ALLOW,
-    CRON_AGENT_DENY,
-    SUBAGENT_TOOL_DENY,
     CallerKind,
     InteractionMode,
     RegisteredTool,
@@ -29,57 +23,10 @@ from opensquilla.tools.types import (
 
 log = structlog.get_logger(__name__)
 
-
-class ToolProfile(StrEnum):
-    OWNER_FULL = "owner_full"
-    CHANNEL_DEFAULT = "channel_default"
-
-
-_CHANNEL_DEFAULT_ALLOW: frozenset[str] = frozenset(
-    {
-        "git_diff",
-        "git_log",
-        "git_status",
-        "glob_search",
-        "grep_search",
-        "image",
-        "image_generate",
-        "list_dir",
-        "memory_get",
-        "memory_search",
-        "pdf",
-        "publish_artifact",
-        "read_file",
-        "session_status",
-        "sessions_history",
-        "sessions_list",
-        "tts",
-        "web_fetch",
-        "web_search",
-    }
-)
-
-
-def filter_by_profile(
-    tools: list[ToolDefinition],
-    profile: ToolProfile | str,
-) -> list[ToolDefinition]:
-    resolved = ToolProfile(profile)
-    if resolved is ToolProfile.OWNER_FULL:
-        return list(tools)
-    return [tool for tool in tools if tool.name in _CHANNEL_DEFAULT_ALLOW]
-
-
-def resolve_profile(ctx: ToolContext | None) -> ToolProfile:
-    override = os.environ.get("OPENSQUILLA_TOOL_PROFILE", "").strip()
-    if override:
-        try:
-            return ToolProfile(override)
-        except ValueError:
-            log.warning("tool_profile.invalid_env_override", value=override)
-    if ctx and ctx.caller_kind is CallerKind.CHANNEL and not ctx.is_owner:
-        return ToolProfile.CHANNEL_DEFAULT
-    return ToolProfile.OWNER_FULL
+ToolProfile = visibility_policy.ToolProfile
+filter_by_profile = visibility_policy.filter_by_profile
+resolve_profile = visibility_policy.resolve_profile
+ToolSurfaceRequest = surface_policy.ToolSurfaceRequest
 
 
 class ToolRegistry:
@@ -87,21 +34,38 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, RegisteredTool] = {}
+        self._owners: dict[str, str] = {}
 
-    def register(self, spec: ToolSpec, handler: ToolHandler) -> None:
+    def register(self, spec: ToolSpec, handler: ToolHandler, *, owner: str | None = None) -> None:
         if spec.name in self._tools:
             log.warning("registry.tool_overwrite", name=spec.name, source="tools")
         self._tools[spec.name] = RegisteredTool(spec=spec, handler=handler)
+        if owner is None:
+            self._owners.pop(spec.name, None)
+        else:
+            self._owners[spec.name] = owner
 
     def get(self, name: str) -> RegisteredTool | None:
         return self._tools.get(name)
+
+    def owner_for(self, name: str) -> str | None:
+        return self._owners.get(name)
 
     def list_names(self) -> list[str]:
         return list(self._tools.keys())
 
     def unregister(self, name: str) -> bool:
         """Remove a tool by name. Returns True if it existed."""
-        return self._tools.pop(name, None) is not None
+        removed = self._tools.pop(name, None) is not None
+        self._owners.pop(name, None)
+        return removed
+
+    def unregister_owner(self, owner: str) -> list[str]:
+        """Remove tools registered for a lifecycle owner and return their names."""
+        names = sorted(name for name, tool_owner in self._owners.items() if tool_owner == owner)
+        for name in names:
+            self.unregister(name)
+        return names
 
     def all_tools(self) -> list[RegisteredTool]:
         return list(self._tools.values())
@@ -112,54 +76,16 @@ class ToolRegistry:
         *,
         sort: bool = False,
     ) -> list[RegisteredTool]:
-        visible = [rt for rt in self._tools.values() if self._is_visible(rt, ctx)]
-        if not sort:
-            return visible
-        return sorted(visible, key=lambda tool: tool.spec.name)
+        return visibility_policy.visible_registered_tools(self._tools.values(), ctx, sort=sort)
 
     def _is_visible(self, rt: RegisteredTool, ctx: ToolContext | None = None) -> bool:
-        explicitly_allowed = (
-            ctx is not None and ctx.allowed_tools is not None and rt.spec.name in ctx.allowed_tools
-        )
-        surfaced = (
-            ctx is not None
-            and ctx.surfaced_tools is not None
-            and rt.spec.name in ctx.surfaced_tools
-        )
-        if not rt.spec.exposed_by_default and not explicitly_allowed and not surfaced:
-            return False
-        if ctx is not None:
-            if rt.spec.owner_only and not ctx.is_owner:
-                log.debug("tool_filtered", tool=rt.spec.name, reason="owner_only")
-                return False
-            if ctx.allowed_tools is not None and rt.spec.name not in ctx.allowed_tools:
-                log.debug("tool_filtered", tool=rt.spec.name, reason="not_allowed")
-                return False
-            if rt.spec.name in ctx.denied_tools:
-                log.debug("tool_filtered", tool=rt.spec.name, reason="denied")
-                return False
-        return True
+        return visibility_policy.is_tool_visible(rt, ctx)
 
     def _default_context(self) -> ToolContext:
-        return ToolContext(is_owner=True, caller_kind=CallerKind.AGENT)
+        return surface_policy.default_tool_context()
 
     def _context_for_profile(self, profile: str | None) -> ToolContext:
-        if profile == "subagent":
-            return ToolContext(
-                is_owner=True,
-                caller_kind=CallerKind.SUBAGENT,
-                interaction_mode=InteractionMode.UNATTENDED,
-                denied_tools=set(SUBAGENT_TOOL_DENY),
-            )
-        if profile == "cron":
-            return ToolContext(
-                is_owner=False,
-                caller_kind=CallerKind.CRON,
-                interaction_mode=InteractionMode.UNATTENDED,
-                allowed_tools=set(CRON_AGENT_ALLOW),
-                denied_tools=set(CRON_AGENT_DENY),
-            )
-        return self._default_context()
+        return surface_policy.tool_context_for_profile(profile)
 
     def _effective_context(
         self,
@@ -170,60 +96,14 @@ class ToolRegistry:
         tool_surface_capabilities: ToolSurfaceCapabilities | None = None,
         is_owner: bool = True,
     ) -> ToolContext:
-        try:
-            explicit_kind = CallerKind(caller_kind) if caller_kind else None
-        except ValueError:
-            explicit_kind = None
-        explicit_interaction = _parse_interaction_mode(interaction_mode)
-
-        if explicit_kind is CallerKind.SUBAGENT or (
-            session_key and session_key.startswith("subagent:")
-        ):
-            mode = explicit_interaction or InteractionMode.UNATTENDED
-            ctx = ToolContext(
-                is_owner=is_owner,
-                caller_kind=CallerKind.SUBAGENT,
-                interaction_mode=mode,
-                agent_id=agent_id or "main",
-                denied_tools=set(SUBAGENT_TOOL_DENY),
-            )
-            return resolve_runtime_tool_surface(
-                ctx,
-                capabilities=tool_surface_capabilities,
-            )
-        if explicit_kind is CallerKind.CRON or (session_key and session_key.startswith("cron:")):
-            mode = explicit_interaction or InteractionMode.UNATTENDED
-            ctx = ToolContext(
-                is_owner=False,
-                caller_kind=CallerKind.CRON,
-                interaction_mode=mode,
-                agent_id=agent_id or "main",
-                allowed_tools=set(CRON_AGENT_ALLOW),
-                denied_tools=set(CRON_AGENT_DENY),
-            )
-            return resolve_runtime_tool_surface(
-                ctx,
-                capabilities=tool_surface_capabilities,
-            )
-        mode = explicit_interaction or InteractionMode.INTERACTIVE
-        ctx = ToolContext(
+        return surface_policy.effective_tool_context(
+            session_key=session_key,
+            agent_id=agent_id,
+            caller_kind=caller_kind,
+            interaction_mode=interaction_mode,
+            tool_surface_capabilities=tool_surface_capabilities,
             is_owner=is_owner,
-            caller_kind=CallerKind.AGENT,
-            interaction_mode=mode,
-            agent_id=agent_id or "main",
         )
-        return resolve_runtime_tool_surface(
-            ctx,
-            capabilities=tool_surface_capabilities,
-        )
-
-    @staticmethod
-    def _schema_for(rt: RegisteredTool) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": rt.spec.parameters,
-            "required": rt.spec.required,
-        }
 
     def to_tool_definitions(self, ctx: ToolContext | None = None) -> list[ToolDefinition]:
         """Export tools as MCP-compatible ToolDefinition list.
@@ -239,11 +119,7 @@ class ToolRegistry:
             ToolDefinition(
                 name=rt.spec.name,
                 description=rt.spec.description,
-                input_schema=ToolInputSchema(
-                    type="object",
-                    properties=rt.spec.parameters,
-                    required=rt.spec.required,
-                ),
+                input_schema=ToolInputSchema(**surface_policy.tool_schema(rt)),
                 execution_timeout_seconds=rt.spec.execution_timeout_seconds,
                 execution_timeout_argument=rt.spec.execution_timeout_argument,
                 execution_timeout_padding=rt.spec.execution_timeout_padding,
@@ -262,12 +138,9 @@ class ToolRegistry:
         tool_surface_capabilities: ToolSurfaceCapabilities | None = None,
         is_owner: bool = True,
     ) -> list[dict[str, Any]]:
-        has_runtime_context = any(
-            value is not None
-            for value in (session_key, agent_id, caller_kind, interaction_mode)
-        )
-        if has_runtime_context:
-            ctx = self._effective_context(
+        ctx = surface_policy.tool_context_for_surface_request(
+            ToolSurfaceRequest(
+                profile=profile,
                 session_key=session_key,
                 agent_id=agent_id,
                 caller_kind=caller_kind,
@@ -275,18 +148,9 @@ class ToolRegistry:
                 tool_surface_capabilities=tool_surface_capabilities,
                 is_owner=is_owner,
             )
-        else:
-            ctx = self._context_for_profile(profile)
-            if not is_owner:
-                ctx = replace(ctx, is_owner=False)
+        )
         return [
-            {
-                "name": rt.spec.name,
-                "description": rt.spec.description,
-                "schema": self._schema_for(rt),
-                "source": "plugin" if "." in rt.spec.name else "builtin",
-                "enabled": True,
-            }
+            surface_policy.catalog_tool_row(rt)
             for rt in self._iter_visible_tools(ctx, sort=True)
         ]
 
@@ -308,11 +172,7 @@ class ToolRegistry:
             is_owner=is_owner,
         )
         return [
-            {
-                "name": rt.spec.name,
-                "description": rt.spec.description,
-                "schema": self._schema_for(rt),
-            }
+            surface_policy.effective_tool_row(rt)
             for rt in self._iter_visible_tools(ctx, sort=True)
         ]
 
@@ -321,17 +181,95 @@ class ToolRegistry:
 _default_registry = ToolRegistry()
 
 
-def _parse_interaction_mode(value: InteractionMode | str | None) -> InteractionMode | None:
-    if value is None:
-        return None
-    try:
-        return value if isinstance(value, InteractionMode) else InteractionMode(str(value))
-    except ValueError:
-        return None
-
-
 def get_default_registry() -> ToolRegistry:
     return _default_registry
+
+
+def _tool_rpc_params(params: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    from opensquilla.tools.rpc_payload import tool_rpc_params
+
+    return tool_rpc_params(params)
+
+
+def _tool_surface_capabilities_for_runtime(
+    *,
+    tool_surface_capabilities: ToolSurfaceCapabilities | None = None,
+    session_manager: object | None = None,
+    task_runtime: object | None = None,
+    scheduler: object | None = None,
+    gateway_config: object | None = None,
+    channel_manager: object | None = None,
+    originating_envelope: object | None = None,
+) -> ToolSurfaceCapabilities:
+    from opensquilla.tools.rpc_payload import tool_surface_capabilities_for_runtime
+
+    return tool_surface_capabilities_for_runtime(
+        tool_surface_capabilities=tool_surface_capabilities,
+        session_manager=session_manager,
+        task_runtime=task_runtime,
+        scheduler=scheduler,
+        gateway_config=gateway_config,
+        channel_manager=channel_manager,
+        originating_envelope=originating_envelope,
+    )
+
+
+async def tools_catalog_payload(
+    params: Mapping[str, Any] | None,
+    *,
+    tool_registry: ToolRegistry | None = None,
+    is_owner: bool = True,
+    tool_surface_capabilities: ToolSurfaceCapabilities | None = None,
+    session_manager: object | None = None,
+    task_runtime: object | None = None,
+    scheduler: object | None = None,
+    gateway_config: object | None = None,
+    channel_manager: object | None = None,
+    originating_envelope: object | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    from opensquilla.tools.rpc_payload import tools_catalog_payload as build_payload
+
+    return await build_payload(
+        params,
+        tool_registry=tool_registry,
+        is_owner=is_owner,
+        tool_surface_capabilities=tool_surface_capabilities,
+        session_manager=session_manager,
+        task_runtime=task_runtime,
+        scheduler=scheduler,
+        gateway_config=gateway_config,
+        channel_manager=channel_manager,
+        originating_envelope=originating_envelope,
+    )
+
+
+async def tools_effective_payload(
+    params: Mapping[str, Any] | None,
+    *,
+    tool_registry: ToolRegistry | None = None,
+    is_owner: bool = True,
+    tool_surface_capabilities: ToolSurfaceCapabilities | None = None,
+    session_manager: object | None = None,
+    task_runtime: object | None = None,
+    scheduler: object | None = None,
+    gateway_config: object | None = None,
+    channel_manager: object | None = None,
+    originating_envelope: object | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    from opensquilla.tools.rpc_payload import tools_effective_payload as build_payload
+
+    return await build_payload(
+        params,
+        tool_registry=tool_registry,
+        is_owner=is_owner,
+        tool_surface_capabilities=tool_surface_capabilities,
+        session_manager=session_manager,
+        task_runtime=task_runtime,
+        scheduler=scheduler,
+        gateway_config=gateway_config,
+        channel_manager=channel_manager,
+        originating_envelope=originating_envelope,
+    )
 
 
 def tool(

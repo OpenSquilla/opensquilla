@@ -23,7 +23,68 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from opensquilla.agents.config import AgentDefaults as AgentDefaults
+from opensquilla.agents.config import AgentEntryConfig as AgentEntryConfig
+from opensquilla.agents.config import AgentSubagentDefaults as AgentSubagentDefaults
+from opensquilla.agents.config import SubagentsGatewayConfig as SubagentsGatewayConfig
+from opensquilla.channels.entries import (
+    ChannelConfigEntry as ChannelConfigEntry,
+)
+from opensquilla.channels.entries import (
+    ConfiguredChannelEntry as ConfiguredChannelEntry,
+)
+from opensquilla.channels.entries import (
+    DingTalkChannelEntry as DingTalkChannelEntry,
+)
+from opensquilla.channels.entries import (
+    DiscordChannelEntry as DiscordChannelEntry,
+)
+from opensquilla.channels.entries import (
+    FeishuChannelEntry as FeishuChannelEntry,
+)
+from opensquilla.channels.entries import (
+    MatrixChannelEntry as MatrixChannelEntry,
+)
+from opensquilla.channels.entries import (
+    MSTeamsChannelEntry as MSTeamsChannelEntry,
+)
+from opensquilla.channels.entries import (
+    QQChannelEntry as QQChannelEntry,
+)
+from opensquilla.channels.entries import (
+    SlackChannelEntry as SlackChannelEntry,
+)
+from opensquilla.channels.entries import (
+    TelegramChannelEntry as TelegramChannelEntry,
+)
+from opensquilla.channels.entries import (
+    WeComChannelEntry as WeComChannelEntry,
+)
 from opensquilla.paths import default_opensquilla_home
+from opensquilla.provider.image_generation_config import (
+    ImageGenerationConfig as ImageGenerationConfig,
+)
+from opensquilla.provider.image_generation_config import (
+    ImageGenerationOpenAIProviderConfig as ImageGenerationOpenAIProviderConfig,
+)
+from opensquilla.provider.image_generation_config import (
+    ImageGenerationOpenRouterProviderConfig as ImageGenerationOpenRouterProviderConfig,
+)
+from opensquilla.provider.image_generation_config import (
+    ImageGenerationProvidersConfig as ImageGenerationProvidersConfig,
+)
+from opensquilla.provider.router_profiles import (
+    ROUTER_TIER_PROFILE_IDS as ROUTER_TIER_PROFILE_IDS,
+)
+from opensquilla.provider.router_profiles import (
+    default_router_tiers as _provider_default_router_tiers,
+)
+from opensquilla.provider.router_profiles import (
+    merge_router_tier_dicts as _provider_merge_router_tier_dicts,
+)
+from opensquilla.provider.router_profiles import (
+    router_tier_profile_defaults as _provider_router_tier_profile_defaults,
+)
 from opensquilla.sandbox.config import SandboxSettings
 
 
@@ -614,364 +675,21 @@ class MemoryConfig(BaseSettings):
 
 
 def _default_tiers() -> dict:
-    """Default model routing config."""
-    return {
-        "t0": {
-            "provider": "openrouter",
-            "model": "deepseek/deepseek-v4-flash",
-            "description": (
-                "S tier: fast DeepSeek V4 Flash route for trivial chat, short rewrites, "
-                "extraction, and low-risk simple Q&A"
-            ),
-            "supports_image": False,
-            "thinking_level": "high",
-        },
-        "t1": {
-            "provider": "openrouter",
-            "model": "deepseek/deepseek-v4-flash",
-            "description": (
-                "M tier: default balanced text model for normal agent work, coding assistance, "
-                "debugging, and moderate analysis"
-            ),
-            "supports_image": False,
-            "thinking_level": "high",
-        },
-        "t2": {
-            "provider": "openrouter",
-            "model": "z-ai/glm-5.1",
-            "description": (
-                "L tier: stronger text model for multi-step coding, structured reasoning, "
-                "larger context synthesis, and harder analysis"
-            ),
-            "supports_image": False,
-            "thinking_level": "high",
-        },
-        "t3": {
-            "provider": "openrouter",
-            "model": "anthropic/claude-opus-4.7",
-            "description": (
-                "XL tier: highest-quality text reasoning model for difficult planning, "
-                "deep review, complex debugging, and high-stakes synthesis"
-            ),
-            "supports_image": False,
-            "thinking_level": "high",
-        },
-        "image_model": {
-            "provider": "openrouter",
-            "model": "moonshotai/kimi-k2.6",
-            "description": (
-                "Image model: vision-capable route for user-supplied image attachments, "
-                "screenshots, diagrams, and visual question answering"
-            ),
-            "supports_image": True,
-            "image_only": True,
-            "thinking_level": "medium",
-        },
-    }
+    """Compatibility wrapper for provider-owned default router tiers."""
 
-
-ROUTER_TIER_PROFILE_IDS = frozenset(
-    {
-        "openrouter",
-        "dashscope",
-        "deepseek",
-        "gemini",
-        "volcengine",
-        "openai",
-        "zhipu",
-        "moonshot",
-    }
-)
+    return _provider_default_router_tiers()
 
 
 def _merge_tier_dicts(defaults: dict, overrides: object) -> dict:
-    merged = {name: dict(value) for name, value in defaults.items()}
-    if not overrides:
-        return merged
-    if not isinstance(overrides, dict):
-        return merged
-    for tier_name, override in overrides.items():
-        if isinstance(override, dict) and isinstance(merged.get(tier_name), dict):
-            tier = dict(merged[tier_name])
-            tier.update(override)
-            merged[tier_name] = tier
-        else:
-            merged[tier_name] = override
-    return merged
+    """Compatibility wrapper for provider-owned tier override merging."""
+
+    return _provider_merge_router_tier_dicts(defaults, overrides)
 
 
 def _router_tier_profile_defaults(profile: str | None) -> dict:
-    normalized = (profile or "openrouter").strip().lower()
-    if normalized not in ROUTER_TIER_PROFILE_IDS:
-        allowed = ", ".join(sorted(ROUTER_TIER_PROFILE_IDS))
-        raise ValueError(
-            f"unknown squilla_router.tier_profile {profile!r}; expected one of {allowed}"
-        )
-    if normalized == "openrouter":
-        return _default_tiers()
-    profiles = {
-        "openai": {
-            "t0": {
-                "provider": "openai",
-                "model": "gpt-5.4-nano",
-                "description": (
-                    "OpenAI fast tier: GPT-5.4 Nano for fast, high-throughput simple work."
-                ),
-                "supports_image": False,
-                "thinking_level": "none",
-            },
-            "t1": {
-                "provider": "openai",
-                "model": "gpt-5.4-mini",
-                "description": "OpenAI balanced tier: GPT-5.4 Mini for normal agent work.",
-                "supports_image": False,
-                "thinking_level": "low",
-            },
-            "t2": {
-                "provider": "openai",
-                "model": "gpt-5.5",
-                "description": "OpenAI strong tier: GPT-5.5 for complex text tasks.",
-                "supports_image": False,
-                "thinking_level": "medium",
-            },
-            "t3": {
-                "provider": "openai",
-                "model": "gpt-5.5",
-                "description": (
-                    "OpenAI highest tier: GPT-5.5 with high reasoning; GPT-5.5 Pro is "
-                    "excluded because it is not streaming-compatible."
-                ),
-                "supports_image": False,
-                "thinking_level": "high",
-            },
-        },
-        "dashscope": {
-            "t0": {
-                "provider": "dashscope",
-                "model": "qwen3.6-flash",
-                "description": (
-                    "DashScope fast tier: Qwen3.6 Flash for simple text tasks; "
-                    "pending live smoke."
-                ),
-                "supports_image": False,
-            },
-            "t1": {
-                "provider": "dashscope",
-                "model": "qwen3.6-plus",
-                "description": (
-                    "DashScope balanced tier: Qwen3.6 Plus for normal agent and "
-                    "coding work; pending live smoke."
-                ),
-                "supports_image": False,
-            },
-            "t2": {
-                "provider": "dashscope",
-                "model": "qwen3-max",
-                "description": "DashScope strong tier: Qwen3 Max for complex text tasks.",
-                "supports_image": False,
-            },
-            "t3": {
-                "provider": "dashscope",
-                "model": "qwen3-max",
-                "description": (
-                    "DashScope highest tier: Qwen3 Max; higher-thinking behavior "
-                    "requires future payload support."
-                ),
-                "supports_image": False,
-            },
-        },
-        "deepseek": {
-            "t0": {
-                "provider": "deepseek",
-                "model": "deepseek-v4-flash",
-                "description": (
-                    "DeepSeek fast tier: V4 Flash with no router-requested thinking; "
-                    "request ID pending live smoke."
-                ),
-                "supports_image": False,
-                "thinking_level": "off",
-            },
-            "t1": {
-                "provider": "deepseek",
-                "model": "deepseek-v4-flash",
-                "description": (
-                    "DeepSeek balanced tier: V4 Flash with thinking enabled; request "
-                    "ID pending live smoke."
-                ),
-                "supports_image": False,
-                "thinking_level": "low",
-            },
-            "t2": {
-                "provider": "deepseek",
-                "model": "deepseek-v4-pro",
-                "description": (
-                    "DeepSeek strong tier: V4 Pro with thinking enabled; request ID "
-                    "pending live smoke."
-                ),
-                "supports_image": False,
-                "thinking_level": "medium",
-            },
-            "t3": {
-                "provider": "deepseek",
-                "model": "deepseek-v4-pro",
-                "description": (
-                    "DeepSeek highest tier: same V4 Pro wire behavior until "
-                    "effort-level support is added."
-                ),
-                "supports_image": False,
-                "thinking_level": "high",
-            },
-        },
-        "gemini": {
-            "t0": {
-                "provider": "gemini",
-                "model": "gemini-2.5-flash-lite",
-                "description": "Gemini fast tier: 2.5 Flash-Lite for low-latency tasks.",
-                "supports_image": False,
-            },
-            "t1": {
-                "provider": "gemini",
-                "model": "gemini-2.5-flash",
-                "description": "Gemini balanced tier: 2.5 Flash for normal agent work.",
-                "supports_image": False,
-                "thinking_level": "low",
-            },
-            "t2": {
-                "provider": "gemini",
-                "model": "gemini-2.5-pro",
-                "description": "Gemini strong tier: 2.5 Pro for complex coding and reasoning.",
-                "supports_image": False,
-                "thinking_level": "medium",
-            },
-            "t3": {
-                "provider": "gemini",
-                "model": "gemini-2.5-pro",
-                "description": (
-                    "Gemini highest tier: 2.5 Pro with high thinking; 3.1 preview "
-                    "remains opt-in."
-                ),
-                "supports_image": False,
-                "thinking_level": "high",
-            },
-        },
-        "zhipu": {
-            "t0": {
-                "provider": "zhipu",
-                "model": "glm-4.7-flashx",
-                "description": (
-                    "Zhipu fast tier: GLM-4.7 FlashX for simple text tasks; live smoke "
-                    "may require fallback."
-                ),
-                "supports_image": False,
-            },
-            "t1": {
-                "provider": "zhipu",
-                "model": "glm-5",
-                "description": "Zhipu balanced tier: GLM-5 for normal agent work.",
-                "supports_image": False,
-                "thinking_level": "low",
-            },
-            "t2": {
-                "provider": "zhipu",
-                "model": "glm-5.1",
-                "description": "Zhipu strong tier: GLM-5.1 for complex text tasks.",
-                "supports_image": False,
-                "thinking_level": "medium",
-            },
-            "t3": {
-                "provider": "zhipu",
-                "model": "glm-5.1",
-                "description": "Zhipu highest tier: GLM-5.1 with high reasoning effort.",
-                "supports_image": False,
-                "thinking_level": "high",
-            },
-        },
-        "moonshot": {
-            "t0": {
-                "provider": "moonshot",
-                "model": "kimi-k2.5",
-                "description": (
-                    "Moonshot fast tier: Kimi K2.5 for cost-efficient agent work "
-                    "with 256K context."
-                ),
-                "supports_image": True,
-                "thinking_level": "low",
-            },
-            "t1": {
-                "provider": "moonshot",
-                "model": "kimi-k2.5",
-                "description": (
-                    "Moonshot balanced tier: Kimi K2.5 for normal multimodal "
-                    "agent work."
-                ),
-                "supports_image": True,
-                "thinking_level": "medium",
-            },
-            "t2": {
-                "provider": "moonshot",
-                "model": "kimi-k2.6",
-                "description": (
-                    "Moonshot strong tier: Kimi K2.6 for complex coding, reasoning, "
-                    "and multimodal tasks."
-                ),
-                "supports_image": True,
-                "thinking_level": "medium",
-            },
-            "t3": {
-                "provider": "moonshot",
-                "model": "kimi-k2.6",
-                "description": (
-                    "Moonshot highest tier: Kimi K2.6 for the hardest long-horizon "
-                    "agent work."
-                ),
-                "supports_image": True,
-                "thinking_level": "high",
-            },
-        },
-        "volcengine": {
-            "t0": {
-                "provider": "volcengine",
-                "model": "doubao-seed-2-0-mini-260215",
-                "description": (
-                    "Volcengine fast tier: Doubao Seed 2.0 Mini for low-latency, "
-                    "low-cost simple text tasks."
-                ),
-                "supports_image": False,
-                "thinking_level": "off",
-            },
-            "t1": {
-                "provider": "volcengine",
-                "model": "doubao-seed-2-0-lite-260215",
-                "description": (
-                    "Volcengine balanced tier: Doubao Seed 2.0 Lite for daily agent "
-                    "work with lower cost than Pro."
-                ),
-                "supports_image": False,
-                "thinking_level": "low",
-            },
-            "t2": {
-                "provider": "volcengine",
-                "model": "doubao-seed-2-0-pro-260215",
-                "description": (
-                    "Volcengine strong tier: Doubao Seed 2.0 Pro for complex "
-                    "reasoning and multimodal-capable text work."
-                ),
-                "supports_image": False,
-                "thinking_level": "medium",
-            },
-            "t3": {
-                "provider": "volcengine",
-                "model": "doubao-seed-2-0-code-preview-260215",
-                "description": (
-                    "Volcengine highest tier: Doubao Seed 2.0 Code Preview for the "
-                    "hardest coding and code-review routes."
-                ),
-                "supports_image": False,
-                "thinking_level": "high",
-            },
-        },
-    }
-    return {name: dict(value) for name, value in profiles[normalized].items()}
+    """Compatibility wrapper for provider-owned router tier profiles."""
+
+    return _provider_router_tier_profile_defaults(profile)
 
 
 class SquillaRouterConfig(BaseSettings):
@@ -1116,186 +834,6 @@ class HeartbeatConfig(BaseSettings):
         return value.strip()
 
 
-class ImageGenerationOpenAIProviderConfig(BaseModel):
-    base_url: str = "https://api.openai.com/v1"
-    api_key: str = ""
-    api_key_env: str = "OPENAI_API_KEY"
-
-
-class ImageGenerationOpenRouterProviderConfig(BaseModel):
-    base_url: str = "https://openrouter.ai/api/v1"
-    api_key: str = ""
-    api_key_env: str = "OPENROUTER_API_KEY"
-
-
-class ImageGenerationProvidersConfig(BaseModel):
-    openai: ImageGenerationOpenAIProviderConfig = Field(
-        default_factory=ImageGenerationOpenAIProviderConfig
-    )
-    openrouter: ImageGenerationOpenRouterProviderConfig = Field(
-        default_factory=ImageGenerationOpenRouterProviderConfig
-    )
-
-
-class ImageGenerationConfig(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="OPENSQUILLA_IMAGE_GENERATION_",
-        env_nested_delimiter="__",
-    )
-
-    enabled: bool = False
-    primary: str = "openai/gpt-image-1"
-    fallbacks: list[str] = Field(default_factory=list)
-    size: str = "1024x1024"
-    timeout_seconds: float = 180.0
-    output_format: Literal["png", "jpeg", "webp"] = "png"
-    providers: ImageGenerationProvidersConfig = Field(
-        default_factory=ImageGenerationProvidersConfig
-    )
-
-
-# ---------------------------------------------------------------------------
-# Channel config (BaseModel — no env-var binding, validated at TOML load)
-# Names use *Entry suffix to avoid shadowing adapter-level *ChannelConfig.
-# ---------------------------------------------------------------------------
-
-
-class ConfiguredChannelEntry(BaseModel):
-    """Common fields shared by gateway-managed channel entries."""
-
-    name: str
-    type: str
-    enabled: bool = True
-    agent_id: str = "main"
-    debounce_window_s: float = 0.0
-    status_reactions_enabled: bool = False
-
-    @field_validator("debounce_window_s")
-    @classmethod
-    def _validate_debounce_window(cls, value: float) -> float:
-        if value != 0.0 and not 0.1 <= value <= 30.0:
-            raise ValueError("debounce_window_s must be 0 or in [0.1, 30.0]")
-        return value
-
-
-class SlackChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a Slack channel."""
-
-    type: Literal["slack"] = "slack"
-    token: str
-    slack_channel_id: str = ""
-    signing_secret: str | None = None
-    reply_in_thread: bool = False
-
-
-class FeishuChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a Feishu (Lark) channel."""
-
-    type: Literal["feishu"] = "feishu"
-    status_reactions_enabled: bool = True
-    app_id: str
-    app_secret: str
-    encrypt_key: str = ""
-    verification_token: str = ""
-    default_chat_id: str = ""
-    webhook_path: str = "/feishu/events"
-    api_base: str = "https://open.feishu.cn/open-apis"
-    connection_mode: Literal["webhook", "websocket"] = "websocket"
-    domain: Literal["feishu", "lark"] = "feishu"
-
-
-class DiscordChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a Discord channel."""
-
-    type: Literal["discord"] = "discord"
-    token: str
-    application_id: str = ""
-    default_channel_id: str = ""
-    gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
-    intents: int = 33281
-
-
-class DingTalkChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a DingTalk (钉钉) channel."""
-
-    type: Literal["dingtalk"] = "dingtalk"
-    client_id: str
-    client_secret: str
-
-
-class WeComChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a WeCom (企业微信) corp-app channel."""
-
-    type: Literal["wecom"] = "wecom"
-    corp_id: str
-    corp_secret: str
-    agent_id_int: int
-    token: str
-    encoding_aes_key: str
-    webhook_path: str = "/wecom/events"
-    api_base: str = "https://qyapi.weixin.qq.com"
-
-
-class QQChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a QQ Bot channel."""
-
-    type: Literal["qq"] = "qq"
-    app_id: str
-    app_secret: str
-
-
-class MSTeamsChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for an MS Teams channel."""
-
-    type: Literal["msteams"] = "msteams"
-    app_id: str
-    app_password: str
-    webhook_path: str = "/msteams/messages"
-
-
-class MatrixChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a Matrix channel."""
-
-    type: Literal["matrix"] = "matrix"
-    homeserver_url: str
-    user_id: str
-    password: str = ""
-    access_token: str = ""
-    device_id: str = ""
-    encryption: Literal["off", "required", "best_effort"] = "off"
-
-
-class TelegramChannelEntry(ConfiguredChannelEntry):
-    """Gateway config entry for a Telegram Bot API channel."""
-
-    type: Literal["telegram"] = "telegram"
-    token: str
-    default_chat_id: str = ""
-    api_base: str = "https://api.telegram.org"
-    transport_name: Literal["polling", "webhook"] = "polling"
-    webhook_path: str = "/telegram/events"
-    webhook_url: str = ""
-    webhook_secret_token: str = ""
-    drop_pending_updates: bool = False
-    poll_timeout_s: int = 30
-    poll_limit: int = 100
-    poll_idle_sleep_s: float = 0.1
-
-    @model_validator(mode="after")
-    def _validate_webhook_auth(self) -> TelegramChannelEntry:
-        if self.transport_name == "webhook":
-            if not self.webhook_url:
-                raise ValueError("webhook_url is required for telegram webhook mode")
-            if not self.webhook_secret_token:
-                raise ValueError(
-                    "webhook_secret_token is required for telegram webhook mode"
-                )
-        return self
-
-
-ChannelConfigEntry = ConfiguredChannelEntry
-
-
 class ChannelsConfig(BaseModel):
     """Container for all channel entries."""
 
@@ -1314,81 +852,6 @@ class ChannelsConfig(BaseModel):
         from opensquilla.channels.registry import parse_channel_entry
 
         return [parse_channel_entry(item) for item in value]
-
-
-class AgentSubagentDefaults(BaseModel):
-    """Per-agent subagent governance defaults.
-
-    All fields are optional. ``None`` means "unset"; downstream code falls
-    back to ``GatewayConfig.agents_defaults.subagents`` and then to "preserve
-    current behavior". Only ``cascade_on_parent_kill`` has a non-None default
-    because killing children is the safer behavior when in doubt.
-    """
-
-    model: str | None = None
-    """Default LLM model for subagents spawned under this agent. ``None`` →
-    fall back to caller's model (current behavior)."""
-
-    max_children_per_session: int | None = None
-    """Max active children one parent session can hold. ``None`` → no
-    enforcement (current behavior)."""
-
-    allow_agents: list[str] | None = None
-    """Cross-agent spawn allowlist. ``None`` = unset (current behavior); ``[]``
-    = self only; ``["*"]`` = any. Other values are exact agent_id matches."""
-
-    cascade_on_parent_kill: bool = True
-    """When ``True``, killing a parent session also cancels its descendants."""
-
-
-class AgentEntryConfig(BaseModel):
-    """Gateway config entry for a durable, user-managed agent."""
-
-    id: str
-    name: str | None = None
-    description: str | None = None
-    model: str | None = None
-    workspace: str | None = None
-    agent_dir: str | None = None
-    tools: dict[str, Any] | list[str] | str | None = None
-    enabled: bool = True
-    system_prompt: str | None = None
-    subagents: AgentSubagentDefaults | None = None
-
-    @field_validator("id")
-    @classmethod
-    def _normalize_id(cls, value: str) -> str:
-        raw = str(value or "").strip()
-        if not raw:
-            raise ValueError("agent id must be non-empty")
-        from opensquilla.session.keys import normalize_agent_id
-
-        return normalize_agent_id(raw)
-
-
-class AgentDefaults(BaseModel):
-    """Global fallback defaults applied when an agent does not override."""
-
-    subagents: AgentSubagentDefaults | None = None
-
-
-class SubagentsGatewayConfig(BaseModel):
-    """Gateway-level subagent governance knobs."""
-
-    enforce_disabled_agents: bool = False
-    """When True, ``sessions_spawn`` rejects requests targeting an agent whose
-    ``enabled=False``. Default off so existing deployments are unaffected."""
-
-    subagent_reserved_slots: int = Field(default=2, ge=0)
-    """Number of slots in ``task_runtime.max_concurrency`` reserved for
-    non-subagent tasks so a fan-out parent never starves itself."""
-
-    archive_after_minutes: int = Field(default=60, ge=0)
-    """Minutes after a subagent session goes terminal before its transcript
-    is archived. ``0`` disables auto-archive."""
-
-    prompt_compact: bool = False
-    """When enabled, subagent bootstrap prompts keep only AGENTS.md and TOOLS.md."""
 
 
 class GatewayConfig(BaseSettings):

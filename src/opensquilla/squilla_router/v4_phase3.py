@@ -13,16 +13,14 @@ from typing import Any
 import structlog
 import yaml
 
-from opensquilla.squilla_router.controller import TIER_ORDER, select_localized_prompt_hint
+from opensquilla.squilla_router._v4_phase3_adapter import (
+    find_valid_tier,
+    normalize_adapter_result,
+    normalize_unavailable_adapter_result,
+    select_prompt_hint,
+)
 
 log = structlog.get_logger(__name__)
-
-_ROUTE_CLASS_TO_TIER: dict[str, str] = {
-    "R0": "t0",
-    "R1": "t1",
-    "R2": "t2",
-    "R3": "t3",
-}
 
 
 def default_bundle_dir() -> Path:
@@ -42,16 +40,7 @@ def runtime_src_import_path(bundle_dir: Path) -> Iterator[None]:
 
 
 def _find_valid_tier(start_tier: str, valid_tiers: list[str]) -> str:
-    if not valid_tiers:
-        return "t1"
-    start_idx = TIER_ORDER.index(start_tier) if start_tier in TIER_ORDER else 1
-    for idx in range(start_idx, len(TIER_ORDER)):
-        if TIER_ORDER[idx] in valid_tiers:
-            return TIER_ORDER[idx]
-    for tier in TIER_ORDER:
-        if tier in valid_tiers:
-            return tier
-    return valid_tiers[0]
+    return find_valid_tier(start_tier, valid_tiers)
 
 
 class V4Phase3Strategy:
@@ -165,18 +154,11 @@ class V4Phase3Strategy:
         self,
         valid_tiers: list[str],
     ) -> tuple[str, float, str, dict]:
-        tier = _find_valid_tier("t1", valid_tiers)
-        route_class = next(
-            (key for key, value in _ROUTE_CLASS_TO_TIER.items() if value == tier),
-            "R1",
+        return normalize_unavailable_adapter_result(
+            valid_tiers=valid_tiers,
+            model_version=self._model_version,
+            source="v4_unavailable",
         )
-        return tier, 0.0, "v4_unavailable", {
-            "route_class": route_class,
-            "top1_label": route_class,
-            "thinking_mode": "T1",
-            "prompt_policy": "P1",
-            "model_version": self._model_version,
-        }
 
     def _build_request(
         self,
@@ -241,48 +223,14 @@ class V4Phase3Strategy:
         valid_tiers: list[str],
         message: str,
     ) -> tuple[str, float, str, dict]:
-        decision = result.decision
-        route_class = str(getattr(decision, "route_class", "R1"))
-        tier = _ROUTE_CLASS_TO_TIER.get(route_class, "t1")
-        if tier not in valid_tiers:
-            tier = _find_valid_tier(tier, valid_tiers)
-
-        probabilities = dict(getattr(result, "probabilities", {}) or {})
-        confidence = float(probabilities.get(route_class, 0.0))
-        thinking_mode = getattr(decision, "thinking_mode", None)
-        prompt_policy = getattr(decision, "prompt_policy", None)
-        if thinking_mode is None:
-            log.warning("v4_phase3.missing_thinking_mode", route_class=route_class)
-            thinking_mode = "T0"
-        if prompt_policy is None:
-            log.warning("v4_phase3.missing_prompt_policy", route_class=route_class)
-            prompt_policy = "P0"
-
-        difficulty = float(getattr(decision, "difficulty_score", 0.0))
-        intermediates = dict(getattr(result, "intermediates", {}) or {})
-        extra: dict[str, Any] = {
-            "route_class": route_class,
-            "top1_label": route_class,
-            "probabilities": probabilities,
-            "difficulty": difficulty,
-            "difficulty_score": difficulty,
-            "margin": float(getattr(decision, "margin", 0.0)),
-            "thinking_mode": str(thinking_mode),
-            "prompt_policy": str(prompt_policy),
-            "flags": dict(getattr(decision, "flags", {}) or {}),
-            "aux_decision_probs": getattr(result, "aux_decision_probs", None),
-            "aux_downgrade_applied": bool(getattr(decision, "aux_downgrade_applied", False)),
-            "sticky_applied": bool(getattr(decision, "sticky_applied", False)),
-            "selected_model": getattr(decision, "selected_model", None),
-            "model_version": self._model_version,
-        }
-        prompt_hint = self._prompt_hint(str(prompt_policy), message) or intermediates.get(
-            "prompt_hint"
+        return normalize_adapter_result(
+            result,
+            valid_tiers=valid_tiers,
+            message=message,
+            model_version=self._model_version,
+            runtime_config=self._config,
+            source=self.source,
         )
-        if prompt_hint:
-            extra["prompt_hint"] = str(prompt_hint)
-        return tier, confidence, self.source, extra
 
     def _prompt_hint(self, prompt_policy: str, message: str | None = None) -> str | None:
-        policy_cfg = self._config.get("prompt_policies", {}).get(prompt_policy, {})
-        return select_localized_prompt_hint(policy_cfg, message)
+        return select_prompt_hint(self._config, prompt_policy, message)

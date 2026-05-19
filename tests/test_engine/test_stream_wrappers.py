@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from opensquilla.engine.stream_wrappers import heartbeat_stream, idle_timeout_stream
 from opensquilla.engine.types import RunHeartbeatEvent, TextDeltaEvent
+from opensquilla.runtime.stream_wrappers import heartbeat_stream, idle_timeout_stream
 
 
 @pytest.mark.asyncio

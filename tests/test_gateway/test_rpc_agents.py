@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from opensquilla.agents.registry import AgentRegistry
+from opensquilla.agents.rpc_payload import agent_id_error_details, agents_list_response
+from opensquilla.gateway import rpc_agents
 from opensquilla.gateway.config import GatewayConfig
 from opensquilla.gateway.rpc import RpcContext, get_dispatcher
 
@@ -25,8 +30,10 @@ async def test_agents_rpc_list_uses_config_backed_registry() -> None:
     result = await get_dispatcher().dispatch("r1", "agents.list", {}, _ctx(cfg, registry))
 
     assert result.error is None, result.error
-    assert [agent["id"] for agent in result.payload["agents"]] == ["main", "ops"]
-    assert result.payload["agents"][1]["model"] == "openai/test"
+    agents = result.payload["agents"]
+    assert [agent["id"] for agent in agents] == ["main", "ops"]
+    assert result.payload == agents_list_response(agents)
+    assert agents[1]["model"] == "openai/test"
 
 
 @pytest.mark.asyncio
@@ -39,7 +46,7 @@ async def test_agents_rpc_list_without_registry_returns_empty() -> None:
     )
 
     assert result.error is None, result.error
-    assert result.payload == {"agents": []}
+    assert result.payload == agents_list_response([])
 
 
 @pytest.mark.asyncio
@@ -119,7 +126,7 @@ async def test_agents_rpc_create_duplicate_returns_agent_exists_code() -> None:
 
     assert result.error is not None
     assert result.error.code == "agent.exists"
-    assert result.error.details == {"agentId": "ops"}
+    assert result.error.details == agent_id_error_details("ops")
 
 
 @pytest.mark.asyncio
@@ -168,7 +175,7 @@ async def test_agents_rpc_update_missing_returns_agent_not_found() -> None:
 
     assert result.error is not None
     assert result.error.code == "agent.not_found"
-    assert result.error.details == {"agentId": "ghost"}
+    assert result.error.details == agent_id_error_details("ghost")
 
 
 @pytest.mark.asyncio
@@ -185,6 +192,7 @@ async def test_agents_rpc_delete_missing_returns_agent_not_found() -> None:
 
     assert result.error is not None
     assert result.error.code == "agent.not_found"
+    assert result.error.details == agent_id_error_details("ghost")
 
 
 @pytest.mark.asyncio
@@ -236,3 +244,75 @@ async def test_agents_rpc_update_agent_dir_camelcase_persists() -> None:
 
     assert result.error is None, result.error
     assert cfg.agents[0].agent_dir == ".opensquilla/ops-dir"
+
+
+@pytest.mark.asyncio
+async def test_agents_files_rpc_falls_back_to_workspace_when_registry_unavailable(tmp_path) -> None:
+    cfg = GatewayConfig(workspace_dir=str(tmp_path / "workspace"))
+    ctx = RpcContext(conn_id="test", config=cfg)
+
+    set_result = await get_dispatcher().dispatch(
+        "r1",
+        "agents.files.set",
+        {"agentId": "main", "name": "MEMORY.md", "content": "notes"},
+        ctx,
+    )
+    assert set_result.error is None, set_result.error
+    assert set_result.payload == {"name": "MEMORY.md", "path": "MEMORY.md", "size": 5}
+
+    get_result = await get_dispatcher().dispatch(
+        "r2",
+        "agents.files.get",
+        {"agentId": "main", "name": "MEMORY.md"},
+        ctx,
+    )
+    assert get_result.error is None, get_result.error
+    assert get_result.payload == {"name": "MEMORY.md", "content": "notes"}
+
+    list_result = await get_dispatcher().dispatch(
+        "r3",
+        "agents.files.list",
+        {"agentId": "main"},
+        ctx,
+    )
+    assert list_result.error is None, list_result.error
+    memory_entry = next(row for row in list_result.payload["files"] if row["name"] == "MEMORY.md")
+    assert memory_entry["status"] == "present"
+    assert memory_entry["size"] == 5
+
+
+def test_gateway_rpc_agents_delegates_payloads_to_agents_boundary() -> None:
+    source = Path(rpc_agents.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    imports = {
+        (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+        for alias in node.names
+    }
+
+    assert ("opensquilla.agents.rpc_payload", "agent_id_error_details") in imports
+    assert ("opensquilla.agents.rpc_payload", "agents_list_response") in imports
+    assert ("opensquilla.agents.files_rpc", "agent_files_list_rpc_payload") in imports
+    assert ("opensquilla.agents.files_rpc", "agent_files_get_rpc_payload") in imports
+    assert ("opensquilla.agents.files_rpc", "agent_files_set_rpc_payload") in imports
+    assert any(
+        isinstance(node, ast.Name) and node.id == "agent_id_error_details"
+        for node in ast.walk(tree)
+    )
+    assert any(
+        isinstance(node, ast.Name) and node.id == "agents_list_response"
+        for node in ast.walk(tree)
+    )
+    direct_key_sets = {
+        tuple(key.value for key in node.keys if isinstance(key, ast.Constant))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+    }
+    assert ("agentId",) not in direct_key_sets
+    assert ("agents",) not in direct_key_sets
+    assert "workspace_file_root_for_config" not in source
+    assert "list_workspace_agent_files" not in source
+    assert "read_workspace_agent_file" not in source
+    assert "write_workspace_agent_file" not in source

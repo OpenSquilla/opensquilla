@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import structlog
 
-from opensquilla.gateway.approval_queue import get_approval_queue
+from opensquilla.application.approval_queue import get_approval_queue
 from opensquilla.sandbox.backend.bubblewrap import BubblewrapBackend, build_bwrap_argv
 from opensquilla.sandbox.backend.noop import NoopBackend
 from opensquilla.sandbox.governance import action_fingerprint
@@ -28,6 +28,7 @@ from opensquilla.sandbox.integration import (
 )
 from opensquilla.sandbox.policy import build_policy, select_level
 from opensquilla.sandbox.types import DenialReason, DenialResult, SandboxPolicy, SandboxRequest
+from opensquilla.tools.builtin import filesystem
 from opensquilla.tools.builtin.shell_policy import check_safe_bin
 from opensquilla.tools.registry import tool
 from opensquilla.tools.types import (
@@ -173,21 +174,21 @@ def _sensitive_shell_block(
             ensure_ascii=False,
         )
 
-    from opensquilla.tools.builtin.web import (
-        _sensitive_body_block,
-        _sensitive_body_marker,
-        _sensitive_url_marker,
+    from opensquilla.safety.sensitive_payloads import (
+        sensitive_body_block,
+        sensitive_body_marker,
+        sensitive_url_marker,
     )
 
     for token in checked_text.split():
         stripped = token.strip("'\"")
         if stripped.startswith(("http://", "https://")):
-            marker = _sensitive_url_marker(stripped)
+            marker = sensitive_url_marker(stripped)
             if marker is not None:
-                return _sensitive_body_block(tool_name, marker)
-    marker = _sensitive_body_marker(checked_text)
+                return sensitive_body_block(tool_name, marker)
+    marker = sensitive_body_marker(checked_text)
     if marker is not None:
-        return _sensitive_body_block(tool_name, marker)
+        return sensitive_body_block(tool_name, marker)
     return None
 
 
@@ -220,15 +221,8 @@ def _resolve_background_timeout(timeout: float | int | None) -> float:
 
 
 def _effective_workdir(workdir: str | None) -> str | None:
-    ctx = current_tool_context.get()
-    if workdir:
-        raw = Path(workdir).expanduser()
-        if not raw.is_absolute() and ctx and ctx.workspace_dir:
-            return str((Path(ctx.workspace_dir).expanduser().resolve() / raw).resolve())
-        return str(raw.resolve())
-    if ctx and ctx.workspace_dir:
-        return str(Path(ctx.workspace_dir).expanduser().resolve())
-    return None
+    resolved = filesystem._resolve_workdir(workdir)
+    return str(resolved) if resolved is not None else None
 
 
 def _bg_status(session: _BgSession) -> str:
@@ -1022,7 +1016,7 @@ async def _check_exec_approval(
     # destructive intent recently (e.g. rm /x, and now os.remove("/x")),
     # skip the queue entirely. Keeps paraphrased retries from re-prompting.
     if approval_id is None and not sandbox_off_requires_approval:
-        from opensquilla.sandbox.intent_cache import get_intent_cache
+        from opensquilla.application.intent_cache import get_intent_cache
 
         if get_intent_cache().check(command):
             log.info(

@@ -8,39 +8,47 @@ from pathlib import Path
 PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "opensquilla"
 
 APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
-    ("agents", "gateway"),
     ("agents", "identity"),
-    ("agents", "onboarding"),
     ("agents", "session"),
-    ("channels", "engine"),
-    ("channels", "gateway"),
+    ("application", "contracts"),
+    ("channels", "contracts"),
     ("channels", "session"),
     ("cli", "agents"),
+    ("cli", "application"),
     ("cli", "dist"),
     ("cli", "engine"),
     ("cli", "gateway"),
     ("cli", "memory"),
     ("cli", "observability"),
     ("cli", "onboarding"),
+    ("cli", "runtime"),
     ("cli", "sandbox"),
     ("cli", "session"),
     ("cli", "skills"),
     ("cli", "tools"),
     ("engine", "agents"),
     ("engine", "channels"),
-    ("engine", "gateway"),
     ("engine", "identity"),
     ("engine", "memory"),
     ("engine", "observability"),
     ("engine", "provider"),
+    ("engine", "runtime"),
     ("engine", "safety"),
     ("engine", "session"),
     ("engine", "skills"),
     ("engine", "squilla_router"),
     ("engine", "tools"),
+    ("extension_services", "memory"),
+    ("extension_services", "scheduler"),
+    ("extension_services", "search"),
+    ("extension_services", "skills"),
+    ("extension_services", "tools"),
+    ("gateway", "application"),
     ("gateway", "agents"),
     ("gateway", "channels"),
+    ("gateway", "contracts"),
     ("gateway", "engine"),
+    ("gateway", "extension_services"),
     ("gateway", "identity"),
     ("gateway", "mcp"),
     ("gateway", "memory"),
@@ -48,6 +56,7 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     ("gateway", "onboarding"),
     ("gateway", "persistence"),
     ("gateway", "provider"),
+    ("gateway", "runtime"),
     ("gateway", "sandbox"),
     ("gateway", "scheduler"),
     ("gateway", "search"),
@@ -60,7 +69,6 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     ("memory", "agents"),
     ("memory", "compat"),
     ("memory", "engine"),
-    ("memory", "gateway"),
     ("memory", "identity"),
     ("memory", "provider"),
     ("memory", "tools"),
@@ -68,28 +76,24 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     ("onboarding", "gateway"),
     ("onboarding", "provider"),
     ("onboarding", "search"),
-    ("provider", "engine"),
-    ("sandbox", "gateway"),
+    ("sandbox", "application"),
     ("sandbox", "safety"),
     ("sandbox", "tools"),
+    ("search", "safety"),
     ("scheduler", "agents"),
     ("scheduler", "channels"),
     ("scheduler", "compat"),
-    ("scheduler", "engine"),
-    ("scheduler", "gateway"),
+    ("scheduler", "runtime"),
     ("scheduler", "session"),
     ("scheduler", "tools"),
     ("session", "compat"),
-    ("session", "engine"),
-    ("session", "gateway"),
     ("session", "provider"),
-    ("session", "tools"),
     ("skills", "memory"),
     ("skills", "safety"),
     ("tools", "agents"),
+    ("tools", "application"),
     ("tools", "channels"),
     ("tools", "engine"),
-    ("tools", "gateway"),
     ("tools", "identity"),
     ("tools", "memory"),
     ("tools", "provider"),
@@ -117,6 +121,12 @@ APPROVED_CYCLIC_PACKAGES: frozenset[str] = frozenset({
     "skills",
     "tools",
 })
+
+ARCHITECTURE_LAYER_IMPORTS: dict[str, frozenset[str]] = {
+    "contracts": frozenset(),
+    "application": frozenset({"contracts"}),
+    "adapters": frozenset({"application", "contracts"}),
+}
 
 
 def _top_level_packages() -> set[str]:
@@ -249,3 +259,19 @@ def test_new_packages_do_not_join_existing_circular_dependency_baseline() -> Non
     assert not unexpected, "Packages unexpectedly joined import cycles: " + ", ".join(
         sorted(unexpected)
     )
+
+
+def test_new_architecture_layers_keep_inward_dependencies() -> None:
+    """Future refactor packages must preserve the ports-and-adapters direction."""
+    actual_edges = _package_import_edges()
+    packages = _top_level_packages()
+    violations: list[str] = []
+
+    for source, allowed_targets in ARCHITECTURE_LAYER_IMPORTS.items():
+        if source not in packages:
+            continue
+        for _, target in sorted(edge for edge in actual_edges if edge[0] == source):
+            if target not in allowed_targets:
+                violations.append(f"{source}->{target}")
+
+    assert not violations, "Architecture layer imports point outward: " + ", ".join(violations)

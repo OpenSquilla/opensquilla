@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from .types import ChatConfig, Message, ModelInfo, QuotaStatus, StreamEvent, ToolDefinition
 
 if TYPE_CHECKING:
-    from .selector import ProviderConfig, SelectorConfig
+    from .config import ProviderConfig, SelectorConfig
 
 
 @dataclass(frozen=True)

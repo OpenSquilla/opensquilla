@@ -51,6 +51,16 @@ def _ctx(**kwargs: Any) -> RpcContext:
     return RpcContext(**defaults)
 
 
+class FakeProviderSelector:
+    current_config = SimpleNamespace(provider="openrouter")
+
+    async def list_models(self) -> list[dict[str, object]]:
+        return [
+            {"provider": "openrouter", "model_id": "openrouter/a"},
+            {"provider": "ollama", "model_id": "local/b"},
+        ]
+
+
 @pytest.fixture(autouse=True)
 def _reset_search_config():
     configure_search("duckduckgo", max_results=5)
@@ -275,6 +285,33 @@ async def test_providers_status_redacts_keys_and_rejects_unknown_provider():
     assert ok.payload["providers"][0]["apiKeyConfigured"] is True
     assert unknown.error is not None
     assert unknown.error.code == "INVALID_REQUEST"
+
+
+@pytest.mark.asyncio
+async def test_providers_status_probe_models_returns_wire_shape():
+    cfg = GatewayConfig(
+        llm={
+            "provider": "openrouter",
+            "model": "openrouter/model",
+            "api_key": "secret-key",
+        }
+    )
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "providers.status",
+        {"provider": "openrouter", "probeModels": True},
+        _ctx(config=cfg, provider_selector=FakeProviderSelector()),
+    )
+
+    assert res.error is None, res.error
+    row = res.payload["providers"][0]
+    assert row["active"] is True
+    assert row["modelProbe"] == {
+        "attempted": True,
+        "status": "ok",
+        "count": 1,
+        "error": None,
+    }
 
 
 class FakeSearchProvider:

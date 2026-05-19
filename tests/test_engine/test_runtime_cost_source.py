@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from opensquilla.engine.runtime import TurnRunner
+from opensquilla.engine.types import WarningEvent
 from opensquilla.provider import DoneEvent as ProviderDone
 from opensquilla.provider import Message, ModelInfo
 from opensquilla.provider import TextDeltaEvent as ProviderText
@@ -82,6 +83,32 @@ async def test_runtime_session_id_log_lookup_uses_private_storage_fallback() -> 
         await runner._resolve_session_id_for_log("agent:main:private-storage")
         == "session-123"
     )
+
+
+def test_runtime_uses_injected_config_persist_for_compression_disable() -> None:
+    saved: list[object] = []
+    config = SimpleNamespace(
+        agent_token_saving=SimpleNamespace(
+            tool_result_compression_enabled=True,
+            tool_result_compression_mode="summarize",
+            tool_result_compression_summary_model="summary-model",
+        )
+    )
+    runner = TurnRunner(
+        provider_selector=None,
+        config=config,
+        config_persist=saved.append,
+    )
+
+    event = runner._handle_runtime_warning(
+        WarningEvent(code="tool_result_summary_failed", message="summary failed")
+    )
+
+    assert event.code == "tool_result_summary_disabled"
+    assert event.message == "summary failed Tool Compress has been turned OFF."
+    assert config.agent_token_saving.tool_result_compression_enabled is False
+    assert config.agent_token_saving.tool_result_compression_mode == "off"
+    assert saved == [config]
 
 
 @pytest.mark.asyncio

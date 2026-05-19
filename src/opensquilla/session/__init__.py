@@ -40,7 +40,12 @@ from opensquilla.session.models import (
     SessionSummary,
     TranscriptEntry,
 )
+from opensquilla.session.spawn_groups import SpawnGroupTracker, spawn_group_tracker
 from opensquilla.session.storage import SessionStorage
+from opensquilla.session.usage_rpc import (
+    usage_cost_rpc_payload,
+    usage_status_rpc_payload,
+)
 
 __all__ = [
     # Models
@@ -59,6 +64,8 @@ __all__ = [
     "SessionStorage",
     # Manager
     "SessionManager",
+    "SpawnGroupTracker",
+    "spawn_group_tracker",
     # Keys
     "DmScope",
     "PeerKind",
@@ -83,4 +90,6 @@ __all__ = [
     "call_compact_with_optional_config",
     "compact_accepts_config",
     "compact_context",
+    "usage_cost_rpc_payload",
+    "usage_status_rpc_payload",
 ]

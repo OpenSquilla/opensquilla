@@ -2,24 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any
 
 from opensquilla.gateway.rpc import RpcContext, RpcUnavailableError, get_dispatcher
-from opensquilla.scheduler.payloads import (
-    AGENT_TURN_KIND,
-    SYSTEM_EVENT_KIND,
-    make_agent_turn_payload,
-    make_system_event_payload,
-    payload_agent_id,
-    payload_kind,
-    payload_text,
-)
-from opensquilla.scheduler.types import (
-    DeliveryConfig,
-    DeliveryMode,
-    ReplyTargetSnapshot,
-    SessionTarget,
+from opensquilla.scheduler.rpc_payload import (
+    build_cron_add_job_kwargs,
+    build_cron_update_patch,
+    cron_job_to_wire,
+    cron_run_to_wire,
+    cron_subscription_error_response,
+    cron_subscription_response,
+    manual_run_to_wire,
+    reply_target_snapshot_from_envelope,
+    require_cron_add_params,
 )
 
 _d = get_dispatcher()
@@ -32,288 +27,13 @@ def _require_scheduler(ctx: RpcContext) -> Any:
     return scheduler
 
 
-def _job_to_wire(j: Any) -> dict[str, Any]:
-    """Map internal CronJob (dataclass or dict) to the wire format the Cron UI expects."""
-    d = asdict(j) if hasattr(j, "__dataclass_fields__") else dict(j)
-    status = d.get("status", "pending")
-    # Normalise status enum to string
-    status_str = status.value if hasattr(status, "value") else str(status)
-    payload = d.get("payload") or {}
-    session_target = str(d.get("session_target", "isolated"))
-    wake_mode = d.get("wake_mode", "now")
-    wake_mode_str = wake_mode.value if hasattr(wake_mode, "value") else str(wake_mode)
-    delivery = None if session_target == "main" else d.get("delivery")
-    text = payload_text(payload, session_target)
-    kind = payload_kind(payload, session_target)
-    return {
-        "id": d.get("id"),
-        "name": d.get("name", ""),
-        "expression": d.get("schedule_raw") or d.get("cron_expr", ""),
-        "prompt": text,
-        "message": text,
-        "text": text,
-        "payloadKind": kind,
-        "agentId": payload_agent_id(payload, "main"),
-        "enabled": (
-            bool(d.get("enabled", True)) and status_str not in ("paused", "disabled", "deleted")
-        ),
-        "next_run": _iso(d.get("next_run_at")),
-        "last_run": _iso(d.get("last_run_at")),
-        "lastResult": d.get("last_error"),
-        "run_count": d.get("run_count", 0),
-        "error_count": d.get("error_count", 0),
-        "created_at": _iso(d.get("created_at")),
-        "schedule_kind": str(d.get("schedule_kind", "cron")),
-        "schedule_raw": d.get("schedule_raw", ""),
-        "session_target": session_target,
-        "sessionTarget": session_target,
-        "targetSessionKey": d.get("session_key", ""),
-        "originSessionKey": d.get("origin_session_key", ""),
-        "timeout_seconds": d.get("timeout_seconds", 600),
-        "wakeMode": wake_mode_str,
-        "consecutive_errors": d.get("consecutive_errors", 0),
-        "delivery": _delivery_to_wire(delivery),
-        "toolPolicy": _tool_policy_to_wire(d.get("tool_policy")),
-    }
-
-
-def _delivery_to_wire(delivery: Any) -> dict[str, Any]:
-    if delivery is None:
-        return {"mode": "none"}
-    if isinstance(delivery, dict):
-        return {
-            "mode": delivery.get("mode", "none"),
-            "channelName": delivery.get("channel_name", ""),
-            "channelId": delivery.get("channel_id", ""),
-            "accountId": delivery.get("account_id", ""),
-            "threadId": delivery.get("thread_id", ""),
-        }
-    return {
-        "mode": (
-            getattr(delivery.mode, "value", str(delivery.mode))
-            if hasattr(delivery, "mode")
-            else "none"
-        ),
-        "channelName": getattr(delivery, "channel_name", ""),
-        "channelId": getattr(delivery, "channel_id", ""),
-        "accountId": getattr(delivery, "account_id", ""),
-        "threadId": getattr(delivery, "thread_id", ""),
-    }
-
-
-def _as_string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [str(item) for item in value if str(item).strip()]
-    raise ValueError("toolPolicy list fields must be strings or arrays")
-
-
-def _normalize_tool_policy(raw: Any) -> dict[str, Any]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError("toolPolicy must be an object")
-    result: dict[str, Any] = {}
-    if "profile" in raw:
-        profile = raw.get("profile")
-        result["profile"] = None if profile is None else str(profile)
-    for key in ("allow", "deny"):
-        if key in raw:
-            result[key] = _as_string_list(raw.get(key))
-    if "alsoAllow" in raw or "also_allow" in raw:
-        result["also_allow"] = _as_string_list(raw.get("alsoAllow", raw.get("also_allow")))
-    return result
-
-
-def _tool_policy_from_params(params: dict[str, Any]) -> dict[str, Any]:
-    if "toolPolicy" not in params and "tool_policy" not in params:
-        return {}
-    return _normalize_tool_policy(params.get("toolPolicy", params.get("tool_policy")))
-
-
-def _tool_policy_to_wire(policy: Any) -> dict[str, Any]:
-    normalized = _normalize_tool_policy(policy or {})
-    return {
-        "profile": normalized.get("profile"),
-        "allow": normalized.get("allow", []),
-        "alsoAllow": normalized.get("also_allow", []),
-        "deny": normalized.get("deny", []),
-    }
-
-
-def _manual_run_to_wire(result: Any) -> dict[str, Any]:
-    status = getattr(result, "status", "")
-    status_str = status.value if hasattr(status, "value") else str(status)
-    execution = getattr(result, "execution", None)
-    if status_str == "accepted" and execution is not None:
-        return {
-            "success": execution.success,
-            "status": status_str,
-            "reply": execution.summary,
-            "error": execution.error,
-            "duration_ms": (
-                int((execution.finished_at - execution.started_at).total_seconds() * 1000)
-                if execution.finished_at and execution.started_at
-                else None
-            ),
-        }
-
-    body = {
-        "success": False,
-        "status": status_str or "blocked",
-        "reason": getattr(result, "reason", "") or status_str,
-        "error": getattr(result, "error", None),
-    }
-    current_status = getattr(result, "current_status", "")
-    if current_status:
-        body["currentStatus"] = current_status
-    backoff_until = getattr(result, "backoff_until", None)
-    if backoff_until is not None:
-        body["backoffUntil"] = _iso(backoff_until)
-    return body
-
-
-def _iso(dt: object) -> str | None:
-    """Convert datetime to ISO string, pass through strings, return None otherwise."""
-    if dt is None:
-        return None
-    if isinstance(dt, str):
-        return dt
-    return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
-
-
-def _resolve_session_target(params: dict[str, Any]) -> SessionTarget:
-    raw = params.get("sessionTarget")
-    if isinstance(raw, str) and raw.strip():
-        return SessionTarget(raw)
-    payload_kind_param = params.get("payloadKind")
-    if payload_kind_param == SYSTEM_EVENT_KIND:
-        return SessionTarget.MAIN
-    return SessionTarget.ISOLATED
-
-
-def _resolve_target_session_key(
-    params: dict[str, Any],
-    session_target: SessionTarget,
-) -> str:
-    if session_target == SessionTarget.MAIN:
-        return (
-            params.get("targetSessionKey")
-            or params.get("target_session_key")
-            or params.get("sessionKey")
-            or params.get("session_key")
-            or ""
-        )
-    if session_target in (SessionTarget.CURRENT, SessionTarget.SESSION):
-        return (
-            params.get("targetSessionKey")
-            or params.get("target_session_key")
-            or params.get("sessionKey")
-            or params.get("session_key")
-            or params.get("originSessionKey")
-            or ""
-        )
-    return params.get("targetSessionKey") or params.get("target_session_key") or ""
-
-
-def _resolve_origin_session_key(params: dict[str, Any], session_target: SessionTarget) -> str:
-    if session_target == SessionTarget.MAIN:
-        return ""
-    return (
-        params.get("originSessionKey")
-        or params.get("sessionKey")
-        or params.get("session_key")
-        or ""
-    )
-
-
-def _resolve_wake_mode(params: dict[str, Any], current: Any = "now") -> str:
-    raw = params.get("wakeMode", params.get("wake_mode", current))
-    value = raw.value if hasattr(raw, "value") else str(raw or "now")
-    value = value.strip().lower()
-    if value not in {"now", "next-heartbeat"}:
-        raise ValueError("wakeMode must be 'now' or 'next-heartbeat'")
-    return value
-
-
-def _parse_delivery_overrides(delivery_raw: Any) -> dict[str, str] | None:
-    if not isinstance(delivery_raw, dict) or not delivery_raw.get("channelName"):
-        return None
-    return {
-        "channel_name": delivery_raw["channelName"],
-        "channel_id": delivery_raw.get("channelId", ""),
-        "account_id": delivery_raw.get("accountId", ""),
-        "thread_id": delivery_raw.get("threadId", ""),
-    }
-
-
-def _ensure_delivery_supported(
-    *,
-    session_target: SessionTarget,
-    delivery_raw: Any,
-) -> None:
-    if session_target != SessionTarget.MAIN:
-        return
-    if isinstance(delivery_raw, dict) and delivery_raw.get("mode") == "none":
-        return
-    if _parse_delivery_overrides(delivery_raw) is not None:
-        raise ValueError(
-            'cron channel delivery config is only supported for sessionTarget="isolated"'
-        )
-
-
-def _originating_reply_target(ctx: RpcContext) -> ReplyTargetSnapshot | None:
-    envelope = getattr(ctx, "originating_envelope", None)
-    target = getattr(envelope, "reply_target", None)
-    if target is None or getattr(target, "kind", None) != "channel":
-        return None
-    return ReplyTargetSnapshot(
-        channel_name=getattr(target, "channel_name", "") or "",
-        channel_type=getattr(target, "channel_type", "") or "",
-        to=getattr(target, "to", "") or "",
-        account_id=getattr(target, "account_id", "") or "",
-        thread_id=getattr(target, "thread_id", "") or "",
-        request_id=getattr(envelope, "session_id", None),
-    )
-
-
-def _build_payload(
-    params: dict[str, Any],
-    session_target: SessionTarget,
-    *,
-    require_text: bool = True,
-) -> tuple[str, dict[str, str]]:
-    raw_text = params.get("text")
-    if raw_text is None:
-        raw_text = params.get("prompt")
-    if raw_text is None:
-        raw_text = params.get("message")
-    text = raw_text if isinstance(raw_text, str) else ""
-    kind = params.get("payloadKind")
-    if not isinstance(kind, str) or not kind:
-        kind = SYSTEM_EVENT_KIND if session_target == SessionTarget.MAIN else AGENT_TURN_KIND
-    agent_id = params.get("agentId", "main")
-    if require_text and not text.strip():
-        raise ValueError("Cron text is required")
-    if kind == SYSTEM_EVENT_KIND:
-        if session_target != SessionTarget.MAIN:
-            raise ValueError("payloadKind='system_event' requires sessionTarget='main'")
-        return kind, make_system_event_payload(text, agent_id)
-    if session_target == SessionTarget.MAIN:
-        raise ValueError("payloadKind='agent_turn' cannot use sessionTarget='main'")
-    return kind, make_agent_turn_payload(text, agent_id)
-
-
 @_d.method("cron.list", scope="operator.read")
 async def _handle_cron_list(params: dict | None, ctx: RpcContext) -> list[dict]:
     scheduler = getattr(ctx, "cron_scheduler", None)
     if scheduler is None:
         return []
     jobs = await scheduler.list_jobs()
-    result = [_job_to_wire(j) for j in jobs]
+    result = [cron_job_to_wire(j) for j in jobs]
     agent_id = (params or {}).get("agentId")
     if agent_id:
         result = [j for j in result if j.get("agentId") == agent_id]
@@ -328,70 +48,27 @@ async def _handle_cron_status(params: dict | None, ctx: RpcContext) -> dict[str,
     job = await scheduler.get_job(params["id"])
     if job is None:
         raise KeyError(f"Cron job not found: {params['id']}")
-    return _job_to_wire(job)
+    return cron_job_to_wire(job)
 
 
 @_d.method("cron.add", scope="operator.admin")
 async def _handle_cron_add(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
-    if not isinstance(params, dict):
-        raise ValueError("params required: expression, text")
-    if "expression" not in params:
-        raise ValueError("params.expression is required")
-    session_target = _resolve_session_target(params)
-    payload_kind_name, payload = _build_payload(params, session_target, require_text=True)
-    text = payload_text(payload, session_target)
-    target_session_key = _resolve_target_session_key(params, session_target)
-    origin_session_key = _resolve_origin_session_key(params, session_target)
-    delivery_raw = params.get("delivery")
-    _ensure_delivery_supported(session_target=session_target, delivery_raw=delivery_raw)
+    params = require_cron_add_params(params)
     scheduler = _require_scheduler(ctx)
-    # Infer or parse delivery config
-    user_overrides = _parse_delivery_overrides(delivery_raw)
-
-    delivery = None
-    try:
-        from opensquilla.scheduler.delivery import infer_delivery
-
-        sm = getattr(ctx, "session_manager", None)
-        if sm is not None and session_target != SessionTarget.MAIN:
-            storage = getattr(sm, "_storage", sm)
-            sk = origin_session_key
-            delivery = await infer_delivery(
-                session_storage=storage,
-                session_key=sk,
-                user_overrides=user_overrides,
-            )
-    except Exception:
-        pass
-    if user_overrides is not None and delivery is None:
-        delivery = DeliveryConfig(
-            mode=DeliveryMode.CHANNEL,
-            channel_name=user_overrides["channel_name"],
-            channel_id=user_overrides["channel_id"],
-            account_id=user_overrides["account_id"],
-            thread_id=user_overrides["thread_id"],
-        )
-    elif (
-        session_target != SessionTarget.MAIN
-        and user_overrides is None
-        and (snapshot := _originating_reply_target(ctx)) is not None
-    ):
-        delivery = delivery or DeliveryConfig()
-        delivery.originating_reply_target = snapshot
-
-    job = await scheduler.add_job(
-        name=params.get("name") or text,
-        schedule_raw=params.get("schedule") or params["expression"],
-        handler_key="system_event" if payload_kind_name == SYSTEM_EVENT_KIND else "agent_run",
-        payload=payload,
-        session_target=session_target,
-        session_key=target_session_key,
-        timeout_seconds=float(params.get("timeout", 600)),
-        wake_mode=_resolve_wake_mode(params),
-        delivery=delivery,
-        origin_session_key=origin_session_key,
-        tool_policy=_tool_policy_from_params(params),
+    session_manager = getattr(ctx, "session_manager", None)
+    session_storage = (
+        getattr(session_manager, "_storage", session_manager)
+        if session_manager is not None
+        else None
     )
+    add_kwargs = await build_cron_add_job_kwargs(
+        params,
+        session_storage=session_storage,
+        originating_reply_target=reply_target_snapshot_from_envelope(
+            getattr(ctx, "originating_envelope", None)
+        ),
+    )
+    job = await scheduler.add_job(**add_kwargs)
     # Populate ws_topic
     if job.delivery and not job.delivery.ws_topic:
         job.delivery.ws_topic = f"cron:{job.id}"
@@ -399,7 +76,7 @@ async def _handle_cron_add(params: dict | None, ctx: RpcContext) -> dict[str, An
             await scheduler.update_job(job.id, delivery=job.delivery)
         except Exception:
             pass
-    return _job_to_wire(job)
+    return cron_job_to_wire(job)
 
 
 # Alias: cron.js sends cron.create for new jobs
@@ -412,135 +89,29 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
         raise ValueError("params.id is required")
     scheduler = _require_scheduler(ctx)
 
-    patch = {}
-    if "name" in params:
-        patch["name"] = params["name"]
-
-    if "expression" in params or "schedule" in params:
-        patch["schedule_raw"] = params.get("schedule") or params.get("expression")
-
     if "enabled" in params:
         if params["enabled"]:
             # If currently paused, resume
             job = await scheduler.get_job(params["id"])
             if job and job.status.value == "paused":
                 job = await scheduler.resume_job(params["id"])
-                return _job_to_wire(job) if job else {}
+                return cron_job_to_wire(job) if job else {}
         else:
             job = await scheduler.pause_job(params["id"])
-            return _job_to_wire(job) if job else {}
+            return cron_job_to_wire(job) if job else {}
 
     current_job = await scheduler.get_job(params["id"])
     if current_job is None:
         raise KeyError(f"Cron job not found: {params['id']}")
 
-    payload_related = any(
-        key in params
-        for key in (
-            "text",
-            "prompt",
-            "message",
-            "payloadKind",
-            "agentId",
-            "sessionTarget",
-            "targetSessionKey",
-            "target_session_key",
-            "originSessionKey",
-            "sessionKey",
-            "session_key",
-        )
-    )
-    if payload_related:
-        current_text = payload_text(current_job.payload, current_job.session_target)
-        merged_params = {
-            "text": params.get(
-                "text",
-                params.get("prompt", params.get("message", current_text)),
-            ),
-            "payloadKind": params.get(
-                "payloadKind",
-                payload_kind(current_job.payload, current_job.session_target),
-            ),
-            "agentId": params.get("agentId", payload_agent_id(current_job.payload)),
-            "sessionTarget": params.get(
-                "sessionTarget",
-                getattr(current_job.session_target, "value", str(current_job.session_target)),
-            ),
-            "originSessionKey": params.get(
-                "originSessionKey",
-                params.get(
-                    "sessionKey",
-                    params.get("session_key", current_job.origin_session_key),
-                ),
-            ),
-        }
-        session_target = _resolve_session_target(merged_params)
-        if session_target == SessionTarget.MAIN:
-            merged_params["targetSessionKey"] = params.get(
-                "targetSessionKey",
-                params.get(
-                    "target_session_key",
-                    params.get(
-                        "sessionKey",
-                        params.get("session_key", current_job.session_key),
-                    ),
-                ),
-            )
-        else:
-            merged_params["targetSessionKey"] = params.get(
-                "targetSessionKey",
-                params.get("target_session_key", current_job.session_key),
-            )
-        payload_kind_name, payload = _build_payload(
-            merged_params,
-            session_target,
-            require_text=False,
-        )
-        patch["handler_key"] = (
-            "system_event" if payload_kind_name == SYSTEM_EVENT_KIND else "agent_run"
-        )
-        patch["payload"] = payload
-        patch["session_target"] = session_target
-        patch["session_key"] = _resolve_target_session_key(merged_params, session_target)
-        patch["origin_session_key"] = _resolve_origin_session_key(merged_params, session_target)
-        if session_target == SessionTarget.MAIN and "delivery" not in params:
-            patch["delivery"] = DeliveryConfig()
-
-    if "timeout" in params:
-        patch["timeout_seconds"] = float(params["timeout"])
-
-    if "wakeMode" in params or "wake_mode" in params:
-        patch["wake_mode"] = _resolve_wake_mode(
-            params,
-            getattr(current_job, "wake_mode", "now"),
-        )
-
-    if "delivery" in params:
-        delivery_raw = params.get("delivery")
-        effective_target = patch.get("session_target", current_job.session_target)
-        _ensure_delivery_supported(session_target=effective_target, delivery_raw=delivery_raw)
-        if isinstance(delivery_raw, dict) and delivery_raw.get("mode") == "none":
-            patch["delivery"] = DeliveryConfig()
-        elif isinstance(delivery_raw, dict) and delivery_raw.get("channelName"):
-            patch["delivery"] = type(current_job.delivery)(
-                mode=type(current_job.delivery.mode).CHANNEL,
-                channel_name=delivery_raw["channelName"],
-                channel_id=delivery_raw.get("channelId", ""),
-                account_id=delivery_raw.get("accountId", ""),
-                thread_id=delivery_raw.get("threadId", ""),
-                ws_topic=current_job.delivery.ws_topic,
-            )
-
-    if "toolPolicy" in params or "tool_policy" in params:
-        patch["tool_policy"] = _tool_policy_from_params(params)
-
+    patch = build_cron_update_patch(params, current_job)
     if patch:
         job = await scheduler.update_job(params["id"], **patch)
     else:
         job = current_job
     if job is None:
         raise KeyError(f"Cron job not found: {params['id']}")
-    return _job_to_wire(job)
+    return cron_job_to_wire(job)
 
 
 @_d.method("cron.remove", scope="operator.admin")
@@ -558,7 +129,7 @@ async def _handle_cron_run(params: dict | None, ctx: RpcContext) -> dict[str, An
         raise ValueError("params.id is required")
     scheduler = _require_scheduler(ctx)
     result = await scheduler.run_job_now(params["id"])
-    return _manual_run_to_wire(result)
+    return manual_run_to_wire(result)
 
 
 @_d.method("cron.runs", scope="operator.read")
@@ -573,25 +144,7 @@ async def _handle_cron_runs(params: dict | None, ctx: RpcContext) -> list[dict]:
     if scheduler is None:
         return []
     runs = await scheduler.get_runs(job_id, limit=limit)
-    return [
-        {
-            "id": r.id,
-            "started_at": r.started_at.isoformat() if r.started_at else None,
-            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
-            "success": r.success,
-            "status": "ok" if r.success else "error",
-            "duration_ms": (
-                int((r.finished_at - r.started_at).total_seconds() * 1000)
-                if r.started_at and r.finished_at
-                else None
-            ),
-            "error": r.error,
-            "summary": r.summary,
-            "sessionKey": r.session_key or None,
-            "deliveryStatus": r.delivery_status or None,
-        }
-        for r in runs
-    ]
+    return [cron_run_to_wire(run) for run in runs]
 
 
 @_d.method("cron.subscribe", scope="operator.read")
@@ -599,14 +152,14 @@ async def _handle_cron_subscribe(params: dict | None, ctx: RpcContext) -> dict[s
     """Subscribe this connection to cron events."""
     sub_mgr = getattr(ctx, "subscription_manager", None)
     if sub_mgr is None:
-        return {"ok": False, "error": "subscription_manager not available"}
+        return cron_subscription_error_response("subscription_manager not available")
     conn_id = getattr(ctx, "conn_id", None)
     if not conn_id:
-        return {"ok": False, "error": "no connection context"}
+        return cron_subscription_error_response("no connection context")
     job_id = (params or {}).get("jobId")
     topic = f"cron:{job_id}" if job_id else "cron:*"
     sub_mgr.subscribe_topic(conn_id, topic)
-    return {"ok": True, "topic": topic}
+    return cron_subscription_response(topic)
 
 
 @_d.method("cron.unsubscribe", scope="operator.read")
@@ -614,11 +167,11 @@ async def _handle_cron_unsubscribe(params: dict | None, ctx: RpcContext) -> dict
     """Unsubscribe this connection from cron events."""
     sub_mgr = getattr(ctx, "subscription_manager", None)
     if sub_mgr is None:
-        return {"ok": False, "error": "subscription_manager not available"}
+        return cron_subscription_error_response("subscription_manager not available")
     conn_id = getattr(ctx, "conn_id", None)
     if not conn_id:
-        return {"ok": False, "error": "no connection context"}
+        return cron_subscription_error_response("no connection context")
     job_id = (params or {}).get("jobId")
     topic = f"cron:{job_id}" if job_id else "cron:*"
     sub_mgr.unsubscribe_topic(conn_id, topic)
-    return {"ok": True, "topic": topic}
+    return cron_subscription_response(topic)

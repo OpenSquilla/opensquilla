@@ -13,6 +13,7 @@ import structlog
 from cachetools import TTLCache
 
 from opensquilla.env import trust_env as _trust_env
+from opensquilla.safety.injection_guard import xml_escape
 from opensquilla.sandbox.integration import sandboxed
 from opensquilla.tools.registry import tool
 from opensquilla.tools.ssrf import validate_http_url_for_fetch
@@ -182,11 +183,14 @@ async def web_fetch(
 ) -> str:
     # --- SSRF guard ---
     _check_ssrf(url)
-    from opensquilla.tools.builtin.web import _sensitive_body_block, _sensitive_url_marker
+    from opensquilla.safety.sensitive_payloads import (
+        sensitive_body_block,
+        sensitive_url_marker,
+    )
 
-    marker = _sensitive_url_marker(url)
+    marker = sensitive_url_marker(url)
     if marker is not None:
-        return _sensitive_body_block("web_fetch", marker)
+        return sensitive_body_block("web_fetch", marker)
 
     effective_max_chars = _resolve_effective_max_chars(max_chars)
 
@@ -215,7 +219,7 @@ async def web_fetch(
             current_url = url
             for _redirect_count in range(_MAX_REDIRECTS + 1):
                 _check_ssrf(current_url)
-                marker = _sensitive_url_marker(current_url)
+                marker = sensitive_url_marker(current_url)
                 if marker is not None:
                     raise ValueError("Blocked redirect URL containing sensitive data")
 
@@ -366,7 +370,10 @@ async def web_fetch(
 
 
 def _wrap_content(source: str, content: str) -> str:
-    return f'<external-content source="{source}">{content}</external-content>'
+    return (
+        f'<external-content source="{xml_escape(source)}">'
+        f"{xml_escape(content)}</external-content>"
+    )
 
 
 def _extract_inner(wrapped: str) -> str:
@@ -376,6 +383,17 @@ def _extract_inner(wrapped: str) -> str:
     if start_tag_end == -1 or end_tag_start == -1:
         return wrapped
     return wrapped[start_tag_end + 1 : end_tag_start]
+
+
+def _xml_unescape(text: str) -> str:
+    """Reverse this module's XML escaping before internal truncation."""
+    return (
+        text.replace("&apos;", "'")
+        .replace("&quot;", '"')
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
+    )
 
 
 def _apply_max_chars(result: dict[str, Any], max_chars: int | None) -> dict[str, Any]:
@@ -388,7 +406,7 @@ def _apply_max_chars(result: dict[str, Any], max_chars: int | None) -> dict[str,
         return dict(result)
 
     output = dict(result)
-    inner = _extract_inner(str(output.get("text", "")))
+    inner = _xml_unescape(_extract_inner(str(output.get("text", ""))))
     if len(inner) <= max_chars:
         return output
 

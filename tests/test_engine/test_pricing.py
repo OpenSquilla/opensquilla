@@ -49,7 +49,7 @@ async def test_pricing_cache_refresh_adds_openrouter_app_attribution() -> None:
         request=_httpx.Request("GET", "https://openrouter.ai/api/v1/models"),
     )
 
-    with patch("opensquilla.engine.pricing.httpx.AsyncClient") as mock_client:
+    with patch("opensquilla.engine._pricing_cache.httpx.AsyncClient") as mock_client:
         mock_instance = AsyncMock()
 
         async def capture_get(url, *, headers):
@@ -194,7 +194,7 @@ def test_local_embedding_model_does_not_fetch_openrouter_pricing(
     def fail_fetch(*_args, **_kwargs):
         raise AssertionError("local embedding models should not hit OpenRouter pricing")
 
-    monkeypatch.setattr("opensquilla.engine.pricing._fetch_openrouter_json_sync", fail_fetch)
+    monkeypatch.setattr("opensquilla.engine._pricing_live._fetch_openrouter_json_sync", fail_fetch)
 
     price = lookup_price("BAAI/bge-small-zh-v1.5")
 

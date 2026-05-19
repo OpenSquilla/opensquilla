@@ -63,12 +63,20 @@ import opensquilla.gateway.rpc_logs  # noqa: E402, F401
 import opensquilla.gateway.rpc_memory  # noqa: E402, F401
 import opensquilla.gateway.rpc_models  # noqa: E402, F401
 import opensquilla.gateway.rpc_onboarding  # noqa: E402, F401
+import opensquilla.gateway.rpc_onboarding_channels  # noqa: E402, F401
+import opensquilla.gateway.rpc_onboarding_memory  # noqa: E402, F401
+import opensquilla.gateway.rpc_onboarding_providers  # noqa: E402, F401
+import opensquilla.gateway.rpc_onboarding_router  # noqa: E402, F401
+import opensquilla.gateway.rpc_onboarding_search  # noqa: E402, F401
+import opensquilla.gateway.rpc_providers  # noqa: E402, F401
+import opensquilla.gateway.rpc_search  # noqa: E402, F401
 import opensquilla.gateway.rpc_secrets  # noqa: E402, F401
 import opensquilla.gateway.rpc_sessions  # noqa: E402, F401
 import opensquilla.gateway.rpc_skills  # noqa: E402, F401
 import opensquilla.gateway.rpc_system  # noqa: E402, F401
 import opensquilla.gateway.rpc_tools  # noqa: E402, F401
 import opensquilla.gateway.rpc_usage  # noqa: E402, F401
+import opensquilla.gateway.rpc_wizard  # noqa: E402, F401
 
 # Fail fast if any registered handler disagrees with ``gateway.scopes``.
 validate_classification()

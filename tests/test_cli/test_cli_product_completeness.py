@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import ast
+import asyncio
 import json
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 from opensquilla.cli.main import app
@@ -58,6 +63,14 @@ class FakeGatewayClient:
         type(self).calls.append(("sessions.abort", {"key": key}))
         return type(self).rpc_payloads.get("sessions.abort", {"aborted": False, "key": key})
 
+    async def delete_sessions(self, keys: list[str]) -> dict[str, Any]:
+        type(self).calls.append(("sessions.delete", {"keys": keys}))
+        return type(self).rpc_payloads.get("sessions.delete", {"deleted": keys})
+
+    async def session_history(self, session_key: str, limit: int = 1000) -> dict[str, Any]:
+        type(self).calls.append(("chat.history", {"sessionKey": session_key, "limit": limit}))
+        return type(self).rpc_payloads.get("chat.history", {"messages": []})
+
     async def usage_cost(self) -> dict[str, Any]:
         type(self).calls.append(("usage.cost", {}))
         return type(self).cost_payload
@@ -111,6 +124,147 @@ def test_catalog_list_json_surfaces(tmp_path: Path, monkeypatch):
     assert "***" in channels.stdout
 
 
+def test_cli_agents_commands_use_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        agents_cmd,
+        agents_config_mutations,
+        agents_config_queries,
+        agents_presenters,
+        agents_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(agents_cmd.__file__).read_text(encoding="utf-8"))
+    mutation_tree = ast.parse(
+        Path(agents_config_mutations.__file__).read_text(encoding="utf-8")
+    )
+    query_tree = ast.parse(
+        Path(agents_config_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(agents_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(agents_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.agents_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.agents_config_queries"
+        for alias in node.names
+    }
+    workflow_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.agents_config_mutations"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.agents_presenters"
+        for alias in node.names
+    }
+    query_config_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_config_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_session_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.session.keys"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    command_calls = {
+        node.func.id
+        for function_name in {"agents_list", "agents_add", "agents_delete"}
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == function_name
+        for node in ast.walk(command)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    cmd_identifiers = {
+        node.id
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {
+        "add_agent_for_cli",
+        "delete_agent_for_cli",
+        "list_agents_for_cli",
+    }
+    assert cmd_direct_modules == {"opensquilla.cli.agents_workflows"}
+    assert workflow_query_names == {"list_configured_agents", "load_agent_registry"}
+    assert workflow_mutation_names == {
+        "create_agent_in_config",
+        "delete_agent_from_config",
+    }
+    assert {
+        "confirm_agent_delete",
+        "emit_agent_config_error",
+        "emit_agent_deleted",
+        "emit_agent_saved",
+        "emit_agents",
+    } <= workflow_presenter_names
+    assert query_config_names == {"default_config_path", "load_config"}
+    assert mutation_config_names == {"PersistResult", "persist_config"}
+    assert mutation_session_names == {"normalize_agent_id"}
+    assert presenter_output_names == {"print_json"}
+    assert {"add_agent_for_cli", "delete_agent_for_cli", "list_agents_for_cli"} <= command_calls
+    assert not (
+        cmd_identifiers
+        & {
+            "AgentRegistry",
+            "Console",
+            "Table",
+            "default_config_path",
+            "load_config",
+            "persist_config",
+            "normalize_agent_id",
+            "asyncio",
+            "json",
+            "redirect_stdout",
+            "StringIO",
+        }
+    )
+
+
 def test_models_list_json_uses_gateway_client(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.model_rows = [
@@ -127,6 +281,96 @@ def test_models_list_json_uses_gateway_client(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert json.loads(result.stdout)[0]["id"] == "model-a"
     assert ("models.list", {"provider": "openrouter", "capabilities": None}) in fake.calls
+
+
+def test_cli_models_list_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        models_cmd,
+        models_gateway_queries,
+        models_presenters,
+        models_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(models_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(models_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(models_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(models_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.models_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.models_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.models_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    models_list = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "models_list"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(models_list)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    cmd_identifiers = {
+        node.id
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {"list_models_for_cli"}
+    assert cmd_direct_modules == {"opensquilla.cli.models_workflows"}
+    assert workflow_query_names == {"list_models_from_gateway"}
+    assert workflow_presenter_names == {"emit_model_rows"}
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert "list_models_for_cli" in command_calls
+    assert not (
+        cmd_identifiers
+        & {"run_gateway_sync", "print_json", "console", "Table", "cast", "client"}
+    )
 
 
 def test_config_get_honors_env_path_and_redacts(tmp_path: Path, monkeypatch):
@@ -160,6 +404,109 @@ def test_config_get_explicit_config_path_wins(tmp_path: Path):
 
     assert result.exit_code == 0, result.stdout
     assert "explicit/model" in result.stdout
+
+
+def test_cli_config_commands_use_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        config_cmd,
+        config_presenters,
+        config_queries,
+        config_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(config_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(Path(config_queries.__file__).read_text(encoding="utf-8"))
+    presenter_tree = ast.parse(
+        Path(config_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(config_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.config_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.config_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.config_presenters"
+        for alias in node.names
+    }
+    query_gateway_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.gateway.config"
+        for alias in node.names
+    }
+    presenter_ui_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.ui"
+        for alias in node.names
+    }
+    command_calls = {
+        node.func.id
+        for function_name in {"config_get", "config_set"}
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == function_name
+        for node in ast.walk(command)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    cmd_identifiers = {
+        node.id
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {"get_config_for_cli", "set_config_for_cli"}
+    assert cmd_direct_modules == {"opensquilla.cli.config_workflows"}
+    assert workflow_query_names == {
+        "is_missing_config_value",
+        "load_public_config",
+        "lookup_config_value",
+    }
+    assert workflow_presenter_names == {
+        "emit_config_export_hint",
+        "emit_config_table",
+        "emit_config_value",
+        "emit_missing_config_key",
+    }
+    assert query_gateway_names == {"GatewayConfig"}
+    assert presenter_ui_names == {"console"}
+    assert {"get_config_for_cli", "set_config_for_cli"} <= command_calls
+    assert not (
+        cmd_identifiers
+        & {
+            "GatewayConfig",
+            "console",
+            "Table",
+            "escape",
+            "os",
+            "_get_key",
+            "_add_flat",
+        }
+    )
 
 
 def test_gateway_json_errors_go_to_stderr(monkeypatch):
@@ -198,6 +545,379 @@ def test_skills_view_and_update_use_gateway_rpc(monkeypatch):
     assert ("skills.update", {"name": "planner"}) in fake.calls
 
 
+def test_cli_skill_gateway_queries_use_gateway_rpc_boundary(monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "skills.get": {"name": "planner", "description": "Plan work"},
+        "skills.update": {"results": [{"success": True, "name": "planner"}]},
+    }
+    from opensquilla.cli.skills_gateway_queries import (
+        load_gateway_skill,
+        update_gateway_skills,
+    )
+
+    skill = load_gateway_skill("planner", json_output=True)
+    update_one = update_gateway_skills(
+        "planner",
+        all_skills=False,
+        json_output=True,
+    )
+    update_all = update_gateway_skills(None, all_skills=True, json_output=True)
+
+    assert skill["name"] == "planner"
+    assert update_one["results"][0]["name"] == "planner"
+    assert update_all["results"][0]["success"] is True
+    assert ("skills.get", {"name": "planner"}) in fake.calls
+    assert ("skills.update", {"name": "planner"}) in fake.calls
+    assert ("skills.update", {}) in fake.calls
+
+
+def test_cli_skill_gateway_presenter_exits_on_update_failure(capsys):
+    import typer
+
+    from opensquilla.cli.skills_gateway_presenters import emit_gateway_skill_update
+
+    with pytest.raises(typer.Exit) as exc_info:
+        emit_gateway_skill_update(
+            {
+                "results": [
+                    {"success": False, "name": "planner", "message": "failed"}
+                ]
+            },
+            json_output=True,
+        )
+
+    assert exc_info.value.exit_code == 1
+    assert json.loads(capsys.readouterr().out)["results"][0]["name"] == "planner"
+
+
+def test_cli_skill_catalog_presenters_emit_json(capsys):
+    from opensquilla.cli.skills_catalog_presenters import (
+        emit_skill_rows,
+        emit_skill_search_results,
+    )
+
+    rows = [
+        {
+            "name": "planner",
+            "layer": "bundled",
+            "eligible": True,
+            "description": "Plan work",
+        }
+    ]
+
+    emit_skill_rows(rows, json_output=True)
+    emit_skill_search_results("plan", rows, json_output=True)
+
+    output = capsys.readouterr().out.strip().splitlines()
+    assert json.loads(output[0])[0]["name"] == "planner"
+    assert json.loads(output[1])[0]["description"] == "Plan work"
+
+
+def test_cli_skill_mutation_presenters_emit_local_json_without_empty_scan(capsys):
+    from opensquilla.cli.skills_mutation_presenters import (
+        emit_local_skill_install_result,
+        emit_local_skill_uninstall_result,
+    )
+
+    @dataclass(frozen=True)
+    class LocalResult:
+        success: bool
+        name: str
+        message: str
+        path: str | None = None
+        scan: object | None = None
+
+    install = LocalResult(
+        success=True,
+        name="planner",
+        message="installed",
+        path="/tmp/planner",
+        scan=None,
+    )
+    uninstall = LocalResult(
+        success=True,
+        name="planner",
+        message="removed",
+        path=None,
+        scan=None,
+    )
+
+    emit_local_skill_install_result(install, json_output=True)
+    emit_local_skill_uninstall_result(uninstall, json_output=True)
+
+    output = capsys.readouterr().out.strip().splitlines()
+    install_payload = json.loads(output[0])
+    uninstall_payload = json.loads(output[1])
+    assert install_payload["path"] == "/tmp/planner"
+    assert "scan" not in install_payload
+    assert uninstall_payload["message"] == "removed"
+    assert "scan" not in uninstall_payload
+
+
+def test_cli_skill_tap_presenters_emit_tap_states(capsys):
+    from opensquilla.cli.skills_tap_presenters import (
+        emit_skill_tap_added,
+        emit_skill_tap_removed,
+        emit_skill_taps,
+    )
+
+    tap = SimpleNamespace(
+        full_name="acme/tap",
+        url="https://example.test/acme/tap",
+        added_at="2026-05-17T00:00:00Z",
+    )
+
+    emit_skill_tap_added(tap)
+    emit_skill_taps([tap])
+    emit_skill_tap_removed("acme/tap", removed=True)
+    emit_skill_tap_removed("missing/tap", removed=False)
+
+    output = capsys.readouterr().out
+    assert "Added tap" in output
+    assert "acme/tap" in output
+    assert "Removed" in output
+    assert "Not found" in output
+
+
+def test_cli_skill_publish_presenter_emits_success_and_failure(capsys):
+    from opensquilla.cli.skills_publish_presenters import emit_skill_publish_result
+
+    emit_skill_publish_result(SimpleNamespace(success=True, message="validated"))
+    emit_skill_publish_result(SimpleNamespace(success=False, message="missing manifest"))
+
+    output = capsys.readouterr().out
+    assert "OK" in output
+    assert "validated" in output
+    assert "Failed" in output
+    assert "missing manifest" in output
+
+
+def test_skills_search_delegates_to_cli_search_rows_boundary(monkeypatch):
+    from opensquilla.cli import skills_search_workflows
+
+    async def fake_search_skill_rows(query: str, *, limit: int = 20):
+        assert query == "plan"
+        assert limit == 20
+        return [
+            {
+                "name": "Planner",
+                "description": "Plan work",
+                "version": "1.0.0",
+                "author": "Tests",
+                "source_id": "clawhub",
+                "trust_level": "community",
+                "identifier": "planner",
+            }
+        ]
+
+    monkeypatch.setattr(
+        skills_search_workflows,
+        "search_skill_rows",
+        fake_search_skill_rows,
+    )
+
+    result = runner.invoke(app, ["skills", "search", "plan", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload[0]["name"] == "Planner"
+    assert payload[0]["source_id"] == "clawhub"
+
+
+def test_cli_skill_search_rows_use_hub_operation_boundary(monkeypatch):
+    from opensquilla.cli.skills_search_rows import search_skill_rows
+    from opensquilla.skills.hub import operations as hub_operations
+
+    @dataclass(frozen=True)
+    class SearchResult:
+        name: str
+        description: str
+        version: str
+        author: str
+        source_id: str
+        trust_level: str
+        identifier: str
+
+    calls: list[tuple[str, object]] = []
+
+    def fake_skill_search_request(params: object) -> object:
+        calls.append(("request", params))
+        return ("search", params)
+
+    async def fake_search_skills(router: object, request: object) -> SimpleNamespace:
+        assert router is None
+        calls.append(("search", request))
+        return SimpleNamespace(
+            results=[
+                SearchResult(
+                    name="Planner",
+                    description="Plan work",
+                    version="1.0.0",
+                    author="Tests",
+                    source_id="clawhub",
+                    trust_level="community",
+                    identifier="planner",
+                )
+            ],
+            unavailable=False,
+        )
+
+    monkeypatch.setattr(
+        hub_operations,
+        "skill_search_request",
+        fake_skill_search_request,
+    )
+    monkeypatch.setattr(hub_operations, "search_skills", fake_search_skills)
+
+    rows = asyncio.run(search_skill_rows("plan", limit=7))
+
+    assert rows == [
+        {
+            "name": "Planner",
+            "description": "Plan work",
+            "version": "1.0.0",
+            "author": "Tests",
+            "source_id": "clawhub",
+            "trust_level": "community",
+            "identifier": "planner",
+        }
+    ]
+    assert calls == [
+        ("request", {"query": "plan", "limit": 7}),
+        ("search", ("search", {"query": "plan", "limit": 7})),
+    ]
+
+
+def test_skills_list_delegates_to_cli_rows_boundary(monkeypatch):
+    from opensquilla.cli import skills_list_workflows
+
+    calls: list[str] = []
+
+    def fake_load_skill_rows() -> list[dict[str, object]]:
+        calls.append("load")
+        return [
+            {
+                "name": "planner",
+                "layer": "bundled",
+                "eligible": True,
+                "description": "Plan work",
+                "always": False,
+                "triggers": ["plan"],
+                "path": "",
+                "filePath": "/skills/planner/SKILL.md",
+                "baseDir": "/skills/planner",
+                "homepage": "https://example.test/planner",
+                "userInvocable": True,
+                "disableModelInvocation": False,
+                "provenance": {
+                    "origin": "opensquilla-original",
+                    "license": "Apache-2.0",
+                    "upstreamUrl": "",
+                    "maintainedBy": "OpenSquilla",
+                },
+            }
+        ]
+
+    monkeypatch.setattr(skills_list_workflows, "load_skill_rows", fake_load_skill_rows)
+
+    result = runner.invoke(app, ["skills", "list", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload[0]["name"] == "planner"
+    assert calls == ["load"]
+
+
+def test_cli_skill_rows_use_configured_loader_and_eligibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opensquilla.cli.skills_rows import load_skill_rows
+    from opensquilla.gateway import config as gateway_config
+    from opensquilla.skills import eligibility, runtime
+
+    calls: list[tuple[str, object]] = []
+    ctx = object()
+
+    skill = SimpleNamespace(
+        name="planner",
+        layer=SimpleNamespace(value="bundled"),
+        description="Plan work",
+        always=False,
+        triggers=["plan"],
+        path=None,
+        file_path="/skills/planner/SKILL.md",
+        base_dir="/skills/planner",
+        homepage="https://example.test/planner",
+        user_invocable=True,
+        disable_model_invocation=False,
+        provenance=SimpleNamespace(
+            origin="opensquilla-original",
+            license="Apache-2.0",
+            upstream_url="https://example.test/upstream",
+            maintained_by="OpenSquilla",
+        ),
+    )
+
+    class FakeLoader:
+        def load_all(self) -> list[SimpleNamespace]:
+            calls.append(("load_all", None))
+            return [skill]
+
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", "/tmp/config.toml")
+    monkeypatch.setattr(
+        gateway_config.GatewayConfig,
+        "load",
+        staticmethod(
+            lambda path: (
+                calls.append(("config", path))
+                or SimpleNamespace(
+                    skills=SimpleNamespace(enabled=True),
+                    workspace_dir="/tmp/ws",
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "create_configured_skill_loader",
+        lambda skills_config, *, workspace_dir: (
+            calls.append(("runtime", (skills_config.enabled, workspace_dir)))
+            or SimpleNamespace(loader=FakeLoader())
+        ),
+    )
+    monkeypatch.setattr(
+        eligibility.EligibilityContext,
+        "auto",
+        staticmethod(lambda: calls.append(("ctx", None)) or ctx),
+    )
+    monkeypatch.setattr(
+        eligibility,
+        "check_eligibility",
+        lambda actual_skill, actual_ctx: (
+            calls.append(("eligible", (actual_skill.name, actual_ctx is ctx))) or True
+        ),
+    )
+
+    rows = load_skill_rows()
+
+    assert rows[0]["name"] == "planner"
+    assert rows[0]["eligible"] is True
+    assert rows[0]["provenance"] == {
+        "origin": "opensquilla-original",
+        "license": "Apache-2.0",
+        "upstreamUrl": "https://example.test/upstream",
+        "maintainedBy": "OpenSquilla",
+    }
+    assert calls == [
+        ("config", "/tmp/config.toml"),
+        ("runtime", (True, "/tmp/ws")),
+        ("ctx", None),
+        ("load_all", None),
+        ("eligible", ("planner", True)),
+    ]
+
+
 def test_skills_update_all_exits_nonzero_on_partial_failure(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.rpc_payloads = {
@@ -230,6 +950,16 @@ def test_skills_update_exits_nonzero_on_top_level_failure(monkeypatch):
     assert result.exit_code == 1
     assert json.loads(result.stdout)["message"] == "No skill installer configured"
     assert ("skills.update", {"name": "planner"}) in fake.calls
+
+
+def test_skills_update_requires_exactly_one_target() -> None:
+    missing = runner.invoke(app, ["skills", "update", "--json"])
+    conflicting = runner.invoke(app, ["skills", "update", "planner", "--all", "--json"])
+
+    assert missing.exit_code != 0
+    assert conflicting.exit_code != 0
+    assert "provide exactly one of NAME or --all" in missing.output
+    assert "provide exactly one of NAME or --all" in conflicting.output
 
 
 def test_skills_install_and_uninstall_use_gateway_rpc_when_available(monkeypatch):
@@ -287,6 +1017,1062 @@ def test_skills_install_and_uninstall_fall_back_when_gateway_unavailable(monkeyp
     assert json.loads(install.stdout)["path"] == "/tmp/skill"
     assert uninstall.exit_code == 1
     assert json.loads(uninstall.stdout)["message"] == "missing"
+
+
+def test_skills_install_and_uninstall_fallback_delegates_to_local_mutations(
+    monkeypatch,
+):
+    _install_fake_gateway(monkeypatch, FailingConnectGatewayClient)
+    from opensquilla.cli import skills_mutation_workflows
+
+    @dataclass(frozen=True)
+    class LocalResult:
+        success: bool
+        name: str
+        message: str
+        path: str | None = None
+        scan: object | None = None
+
+    calls: list[tuple[str, object]] = []
+
+    async def fake_run_local_skill_install(
+        identifier: str,
+        *,
+        source: str,
+        force: bool,
+    ) -> SimpleNamespace:
+        calls.append(
+            ("install", {"identifier": identifier, "source": source, "force": force})
+        )
+        return SimpleNamespace(
+            result=LocalResult(True, "planner", "installed", "/tmp/planner"),
+            unavailable_message="",
+        )
+
+    async def fake_run_local_skill_uninstall(name: str) -> SimpleNamespace:
+        calls.append(("uninstall", {"name": name}))
+        return SimpleNamespace(
+            result=LocalResult(True, "planner", "removed"),
+            unavailable_message="",
+        )
+
+    monkeypatch.setattr(
+        skills_mutation_workflows,
+        "run_local_skill_install",
+        fake_run_local_skill_install,
+    )
+    monkeypatch.setattr(
+        skills_mutation_workflows,
+        "run_local_skill_uninstall",
+        fake_run_local_skill_uninstall,
+    )
+
+    install = runner.invoke(
+        app,
+        ["skills", "install", "planner", "--source", "github", "--force", "--json"],
+    )
+    uninstall = runner.invoke(app, ["skills", "uninstall", "planner", "--json"])
+
+    assert install.exit_code == 0, install.stdout
+    assert json.loads(install.stdout)["path"] == "/tmp/planner"
+    assert uninstall.exit_code == 0, uninstall.stdout
+    assert json.loads(uninstall.stdout)["message"] == "removed"
+    assert calls == [
+        (
+            "install",
+            {"identifier": "planner", "source": "github", "force": True},
+        ),
+        ("uninstall", {"name": "planner"}),
+    ]
+
+
+def test_cli_local_skill_mutations_use_hub_operation_workflows(monkeypatch) -> None:
+    from opensquilla.cli.skills_local_mutations import (
+        run_local_skill_install,
+        run_local_skill_uninstall,
+    )
+    from opensquilla.skills.hub import operations as hub_operations
+
+    calls: list[tuple[str, object]] = []
+
+    def fake_skill_install_request(params: object) -> object:
+        calls.append(("install_request", params))
+        return ("install", params)
+
+    def fake_skill_uninstall_request(params: object) -> object:
+        calls.append(("uninstall_request", params))
+        return ("uninstall", params)
+
+    async def fake_run_skill_install_operation(
+        loader: object,
+        request: object,
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        assert loader is None
+        assert kwargs == {"require_loader": False}
+        calls.append(("install", request))
+        return SimpleNamespace(result="installed", unavailable_message="")
+
+    async def fake_run_skill_uninstall_operation(
+        loader: object,
+        request: object,
+    ) -> SimpleNamespace:
+        assert loader is None
+        calls.append(("uninstall", request))
+        return SimpleNamespace(result="removed", unavailable_message="")
+
+    monkeypatch.setattr(
+        hub_operations,
+        "skill_install_request",
+        fake_skill_install_request,
+    )
+    monkeypatch.setattr(
+        hub_operations,
+        "skill_uninstall_request",
+        fake_skill_uninstall_request,
+    )
+    monkeypatch.setattr(
+        hub_operations,
+        "run_skill_install_operation",
+        fake_run_skill_install_operation,
+    )
+    monkeypatch.setattr(
+        hub_operations,
+        "run_skill_uninstall_operation",
+        fake_run_skill_uninstall_operation,
+    )
+
+    install = asyncio.run(
+        run_local_skill_install("planner", source="github", force=True)
+    )
+    uninstall = asyncio.run(run_local_skill_uninstall("planner"))
+
+    assert install.result == "installed"
+    assert uninstall.result == "removed"
+    assert calls == [
+        (
+            "install_request",
+            {"identifier": "planner", "source": "github", "force": True},
+        ),
+        (
+            "install",
+            ("install", {"identifier": "planner", "source": "github", "force": True}),
+        ),
+        ("uninstall_request", {"name": "planner"}),
+        ("uninstall", ("uninstall", {"name": "planner"})),
+    ]
+
+
+def test_cli_skills_does_not_import_hub_defaults() -> None:
+    from opensquilla.cli import skills_cmd
+
+    tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    }
+
+    assert "opensquilla.skills.hub.defaults" not in imported_modules
+    assert "opensquilla.skills.hub.search" not in imported_modules
+    assert "opensquilla.gateway.config" not in imported_modules
+    assert "opensquilla.skills.eligibility" not in imported_modules
+    assert "opensquilla.skills.runtime" not in imported_modules
+
+
+def test_cli_skills_async_runner_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        skills_cmd,
+        skills_mutation_workflows,
+        skills_publish_workflows,
+        skills_search_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_trees = [
+        ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        for module in (
+            skills_search_workflows,
+            skills_mutation_workflows,
+            skills_publish_workflows,
+        )
+    ]
+    cmd_imported_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+    cmd_import_names = {
+        alias.name for node in ast.walk(cmd_tree) if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    cmd_identifiers = {
+        node.id for node in ast.walk(cmd_tree) if isinstance(node, ast.Name)
+    }
+    workflow_import_names = {
+        alias.name
+        for tree in workflow_trees
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    workflow_asyncio_run_calls = [
+        node
+        for tree in workflow_trees
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "asyncio"
+        and node.func.attr == "run"
+    ]
+
+    assert "asyncio" not in cmd_import_names
+    assert "asyncio" not in cmd_imported_modules
+    assert "asyncio" not in cmd_identifiers
+    assert "asyncio" in workflow_import_names
+    assert len(workflow_asyncio_run_calls) == 4
+
+
+def test_cli_skills_commands_use_workflow_facade_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    facade_tree = ast.parse(Path(skills_workflows.__file__).read_text(encoding="utf-8"))
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom) and node.module != "__future__"
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_workflows"
+        for alias in node.names
+    }
+    facade_modules = {
+        node.module for node in ast.walk(facade_tree) if isinstance(node, ast.ImportFrom)
+    }
+
+    assert cmd_workflow_names == {
+        "add_skill_tap_for_cli",
+        "install_skill_for_cli_command",
+        "list_skill_taps_for_cli",
+        "list_skills_for_cli",
+        "publish_skill_for_cli_command",
+        "remove_skill_tap_for_cli",
+        "search_skills_for_cli_command",
+        "uninstall_skill_for_cli_command",
+        "update_gateway_skills_for_cli_command",
+        "view_gateway_skill_for_cli",
+    }
+    assert cmd_direct_modules == {"opensquilla.cli.skills_workflows"}
+    assert {
+        "opensquilla.cli.skills_gateway_workflows",
+        "opensquilla.cli.skills_list_workflows",
+        "opensquilla.cli.skills_mutation_workflows",
+        "opensquilla.cli.skills_publish_workflows",
+        "opensquilla.cli.skills_search_workflows",
+        "opensquilla.cli.skills_tap_workflows",
+    }.issubset(facade_modules)
+
+
+def test_cli_skills_search_does_not_import_hub_search_operation_details() -> None:
+    from opensquilla.cli import skills_cmd, skills_search_workflows, skills_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    facade_tree = ast.parse(Path(skills_workflows.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_search_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.skills.hub.operations"
+        for alias in node.names
+    }
+    imported_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_workflows"
+        for alias in node.names
+    }
+    facade_workflow_names = {
+        alias.name
+        for node in ast.walk(facade_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_search_workflows"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+
+    assert "search_skills_for_cli_command" in imported_workflow_names
+    assert facade_workflow_names == {"search_skills_for_cli_command"}
+    assert "opensquilla.cli.skills_search_workflows" not in cmd_direct_modules
+    assert "opensquilla.cli.skills_search_rows" not in cmd_direct_modules
+    assert "search_skills" not in imported_names
+    assert "skill_search_request" not in imported_names
+
+
+def test_cli_skills_install_fallback_uses_local_mutation_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_mutation_workflows, skills_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    facade_tree = ast.parse(Path(skills_workflows.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_mutation_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.skills.hub.operations"
+        for alias in node.names
+    }
+    imported_cli_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_local_mutations"
+        for alias in node.names
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_workflows"
+        for alias in node.names
+    }
+    facade_workflow_names = {
+        alias.name
+        for node in ast.walk(facade_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_mutation_workflows"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+
+    assert "install_skill_for_cli_command" in cmd_workflow_names
+    assert "uninstall_skill_for_cli_command" in cmd_workflow_names
+    assert facade_workflow_names == {
+        "install_skill_for_cli_command",
+        "uninstall_skill_for_cli_command",
+    }
+    assert "opensquilla.cli.skills_mutation_workflows" not in cmd_direct_modules
+    assert "opensquilla.cli.skills_local_mutations" not in cmd_direct_modules
+    assert "run_local_skill_install" in imported_cli_names
+    assert "run_local_skill_uninstall" in imported_cli_names
+    assert "run_skill_install_operation" not in imported_names
+    assert "run_skill_uninstall_operation" not in imported_names
+    assert "skill_install_request" not in imported_names
+    assert "skill_uninstall_request" not in imported_names
+    assert "default_skill_installer_factory" not in imported_names
+    assert "install_skill" not in imported_names
+    assert "uninstall_skill" not in imported_names
+
+
+def test_cli_skills_install_gateway_mutations_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_mutation_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_mutation_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_gateway_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    imported_output_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    imported_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_gateway_mutations"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+    identifiers = {
+        node.id for node in ast.walk(workflow_tree) if isinstance(node, ast.Name)
+    }
+    function_names = {
+        node.name for node in ast.walk(workflow_tree) if isinstance(node, ast.FunctionDef)
+    } | {
+        node.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+    }
+
+    assert "opensquilla.cli.skills_gateway_mutations" not in cmd_direct_modules
+    assert "try_gateway_skill_mutation" in imported_mutation_names
+    assert "default_gateway_url" not in imported_gateway_names
+    assert "rpc_error_exit_code" not in imported_gateway_names
+    assert "emit_error" not in imported_output_names
+    assert "GatewayClient" not in identifiers
+    assert "GatewayRPCError" not in identifiers
+    assert "_try_gateway_skill_mutation" not in function_names
+
+
+def test_cli_skills_gateway_queries_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_gateway_workflows, skills_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    facade_tree = ast.parse(Path(skills_workflows.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_gateway_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_gateway_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    imported_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_gateway_queries"
+        for alias in node.names
+    }
+    imported_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_workflows"
+        for alias in node.names
+    }
+    facade_workflow_names = {
+        alias.name
+        for node in ast.walk(facade_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_gateway_workflows"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+    identifiers = {node.id for node in ast.walk(cmd_tree) if isinstance(node, ast.Name)}
+    constants = {
+        node.value for node in ast.walk(cmd_tree) if isinstance(node, ast.Constant)
+    }
+    client_calls = [
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "call"
+    ]
+
+    bad_parameter_refs = [
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Attribute) and node.attr == "BadParameter"
+    ]
+
+    assert "update_gateway_skills_for_cli_command" in imported_workflow_names
+    assert "view_gateway_skill_for_cli" in imported_workflow_names
+    assert facade_workflow_names == {
+        "update_gateway_skills_for_cli_command",
+        "view_gateway_skill_for_cli",
+    }
+    assert imported_query_names == {"load_gateway_skill", "update_gateway_skills"}
+    assert "opensquilla.cli.skills_gateway_workflows" not in cmd_direct_modules
+    assert "opensquilla.cli.skills_gateway_queries" not in cmd_direct_modules
+    assert bad_parameter_refs == []
+    assert "run_gateway_sync" not in imported_gateway_names
+    assert "run_gateway_sync" not in identifiers
+    assert "provide exactly one of NAME or --all" not in constants
+    assert "skills.get" not in constants
+    assert "skills.update" not in constants
+    assert client_calls == []
+
+
+def test_cli_skills_gateway_presenters_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_gateway_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_gateway_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+    imported_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_gateway_presenters"
+        for alias in node.names
+    }
+    identifiers = {node.id for node in ast.walk(cmd_tree) if isinstance(node, ast.Name)}
+    constants = {
+        node.value for node in ast.walk(cmd_tree) if isinstance(node, ast.Constant)
+    }
+
+    assert imported_presenter_names == {
+        "emit_gateway_skill_update",
+        "emit_gateway_skill_view",
+    }
+    assert "opensquilla.cli.skills_gateway_presenters" not in imported_modules
+    assert "rich.panel" not in imported_modules
+    assert "Panel" not in identifiers
+    assert "Skill updates" not in constants
+    assert "file_path" not in constants
+    assert "base_dir" not in constants
+    assert "homepage" not in constants
+
+
+def test_cli_skills_catalog_presenters_use_cli_boundary() -> None:
+    from opensquilla.cli import (
+        skills_cmd,
+        skills_list_workflows,
+        skills_search_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    list_workflow_tree = ast.parse(
+        Path(skills_list_workflows.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(skills_search_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    imported_presenter_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_catalog_presenters"
+        for alias in node.names
+    }
+    list_workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(list_workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_catalog_presenters"
+        for alias in node.names
+    }
+    list_workflow_row_names = {
+        alias.name
+        for node in ast.walk(list_workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_rows"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_catalog_presenters"
+        for alias in node.names
+    }
+    identifiers = {node.id for node in ast.walk(cmd_tree) if isinstance(node, ast.Name)}
+    constants = {
+        node.value for node in ast.walk(cmd_tree) if isinstance(node, ast.Constant)
+    }
+
+    assert imported_presenter_names == set()
+    assert list_workflow_presenter_names == {"emit_skill_rows"}
+    assert list_workflow_row_names == {"load_skill_rows"}
+    assert workflow_presenter_names == {"emit_skill_search_results"}
+    assert "opensquilla.cli.skills_catalog_presenters" not in imported_modules
+    assert "opensquilla.cli.skills_rows" not in imported_modules
+    assert "rich.table" not in imported_modules
+    assert "Table" not in identifiers
+    assert "Skills (" not in constants
+    assert "Search: " not in constants
+    assert "No results for '" not in constants
+
+
+def test_cli_skills_mutation_presenters_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_mutation_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_mutation_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    imported_output_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    imported_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_mutation_presenters"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+    identifiers = {
+        node.id for node in ast.walk(workflow_tree) if isinstance(node, ast.Name)
+    }
+    function_names = {
+        node.name for node in ast.walk(workflow_tree) if isinstance(node, ast.FunctionDef)
+    } | {
+        node.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+    }
+    constants = {
+        node.value
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.Constant)
+    }
+
+    assert "opensquilla.cli.skills_mutation_presenters" not in cmd_direct_modules
+    assert imported_presenter_names == {
+        "emit_failed_skill_mutation",
+        "emit_local_skill_install_result",
+        "emit_local_skill_install_start",
+        "emit_local_skill_uninstall_result",
+        "emit_missing_skill_mutation_result",
+        "emit_skill_mutation_payload",
+    }
+    assert "dataclasses" not in imported_modules
+    assert "asdict" not in identifiers
+    assert "print_json" not in imported_output_names
+    assert "print_json" not in identifiers
+    assert "_install_result_payload" not in function_names
+    assert "_emit_skill_mutation_result" not in function_names
+    assert "No skill install result returned" not in constants
+    assert "No skill uninstall result returned" not in constants
+    assert "Security: " not in constants
+
+
+def test_skills_tap_commands_delegate_to_cli_tap_boundary(monkeypatch):
+    from opensquilla.cli import skills_tap_workflows
+
+    calls: list[tuple[str, object]] = []
+
+    def fake_add_skill_tap(owner_repo: str) -> SimpleNamespace:
+        calls.append(("add", owner_repo))
+        return SimpleNamespace(full_name="acme/tap", url="https://example.test/acme/tap")
+
+    def fake_list_skill_taps() -> list[SimpleNamespace]:
+        calls.append(("list", None))
+        return [
+            SimpleNamespace(
+                full_name="acme/tap",
+                url="https://example.test/acme/tap",
+                added_at="2026-05-17T00:00:00Z",
+            )
+        ]
+
+    def fake_remove_skill_tap(owner_repo: str) -> bool:
+        calls.append(("remove", owner_repo))
+        return True
+
+    monkeypatch.setattr(skills_tap_workflows, "add_skill_tap", fake_add_skill_tap)
+    monkeypatch.setattr(skills_tap_workflows, "list_skill_taps", fake_list_skill_taps)
+    monkeypatch.setattr(
+        skills_tap_workflows,
+        "remove_skill_tap",
+        fake_remove_skill_tap,
+    )
+
+    add = runner.invoke(app, ["skills", "tap", "add", "acme/tap"])
+    listed = runner.invoke(app, ["skills", "tap", "list"])
+    removed = runner.invoke(app, ["skills", "tap", "remove", "acme/tap"])
+
+    assert add.exit_code == 0, add.stdout
+    assert listed.exit_code == 0, listed.stdout
+    assert removed.exit_code == 0, removed.stdout
+    assert "acme/tap" in add.stdout
+    assert "acme/tap" in listed.stdout
+    assert "Removed" in removed.stdout
+    assert calls == [
+        ("add", "acme/tap"),
+        ("list", None),
+        ("remove", "acme/tap"),
+    ]
+
+
+def test_cli_skill_taps_use_hub_tap_operations(monkeypatch):
+    from opensquilla.cli.skills_taps import (
+        add_skill_tap,
+        list_skill_taps,
+        remove_skill_tap,
+    )
+    from opensquilla.skills.hub import operations as hub_operations
+
+    manager = object()
+    calls: list[tuple[str, object]] = []
+
+    def fake_taps_manager_factory() -> object:
+        calls.append(("factory", None))
+        return manager
+
+    def fake_add_tap(actual_manager: object, request: object) -> SimpleNamespace:
+        assert actual_manager is manager
+        calls.append(("add", request))
+        return SimpleNamespace(full_name="acme/tap", url="https://example.test/acme/tap")
+
+    def fake_list_taps(actual_manager: object) -> list[SimpleNamespace]:
+        assert actual_manager is manager
+        calls.append(("list", None))
+        return [
+            SimpleNamespace(
+                full_name="acme/tap",
+                url="https://example.test/acme/tap",
+                added_at="2026-05-17T00:00:00Z",
+            )
+        ]
+
+    def fake_remove_tap(actual_manager: object, request: object) -> bool:
+        assert actual_manager is manager
+        calls.append(("remove", request))
+        return True
+
+    monkeypatch.setattr(
+        hub_operations,
+        "default_taps_manager_factory",
+        fake_taps_manager_factory,
+    )
+    monkeypatch.setattr(hub_operations, "add_tap", fake_add_tap)
+    monkeypatch.setattr(hub_operations, "list_taps", fake_list_taps)
+    monkeypatch.setattr(hub_operations, "remove_tap", fake_remove_tap)
+    monkeypatch.setattr(
+        hub_operations,
+        "tap_add_request",
+        lambda params: ("add", params),
+    )
+    monkeypatch.setattr(
+        hub_operations,
+        "tap_remove_request",
+        lambda params: ("remove", params),
+    )
+
+    added = add_skill_tap("acme/tap")
+    taps = list_skill_taps()
+    removed = remove_skill_tap("acme/tap")
+
+    assert added.full_name == "acme/tap"
+    assert taps[0].full_name == "acme/tap"
+    assert removed is True
+    assert calls == [
+        ("factory", None),
+        ("add", ("add", {"owner_repo": "acme/tap"})),
+        ("factory", None),
+        ("list", None),
+        ("factory", None),
+        ("remove", ("remove", {"owner_repo": "acme/tap"})),
+    ]
+
+
+def test_cli_skills_tap_does_not_import_taps_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_tap_workflows, skills_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    facade_tree = ast.parse(Path(skills_workflows.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_tap_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    imported_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.skills.hub.operations"
+        for alias in node.names
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_workflows"
+        for alias in node.names
+    }
+    facade_workflow_names = {
+        alias.name
+        for node in ast.walk(facade_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_tap_workflows"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+
+    assert "add_skill_tap_for_cli" in cmd_workflow_names
+    assert "list_skill_taps_for_cli" in cmd_workflow_names
+    assert "remove_skill_tap_for_cli" in cmd_workflow_names
+    assert facade_workflow_names == {
+        "add_skill_tap_for_cli",
+        "list_skill_taps_for_cli",
+        "remove_skill_tap_for_cli",
+    }
+    assert "opensquilla.cli.skills_tap_workflows" not in cmd_direct_modules
+    assert "opensquilla.cli.skills_taps" not in cmd_direct_modules
+    assert "opensquilla.skills.hub.taps" not in imported_modules
+    assert "default_taps_manager_factory" not in imported_names
+    assert "add_tap" not in imported_names
+    assert "list_taps" not in imported_names
+    assert "remove_tap" not in imported_names
+    assert "tap_add_request" not in imported_names
+    assert "tap_remove_request" not in imported_names
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "TapsManager"
+        for node in ast.walk(workflow_tree)
+    )
+
+
+def test_cli_skills_tap_presenters_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_tap_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_tap_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_tap_presenters"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+    constants = {
+        node.value
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.Constant)
+    }
+
+    assert "opensquilla.cli.skills_tap_presenters" not in cmd_direct_modules
+    assert imported_presenter_names == {
+        "emit_skill_tap_added",
+        "emit_skill_tap_error",
+        "emit_skill_tap_removed",
+        "emit_skill_taps",
+    }
+    assert "Added tap:" not in constants
+    assert "No taps registered." not in constants
+    assert "Removed:" not in constants
+    assert "Not found:" not in constants
+
+
+def test_skills_publish_delegates_to_cli_publish_boundary(monkeypatch):
+    from opensquilla.cli import skills_publish_workflows
+
+    calls: list[tuple[str, object]] = []
+
+    async def fake_publish_skill_for_cli(
+        skill_dir: str,
+        repo: str | None = None,
+    ) -> SimpleNamespace:
+        calls.append(("publish", {"skill_dir": skill_dir, "repo": repo}))
+        return SimpleNamespace(success=True, message="validated")
+
+    monkeypatch.setattr(
+        skills_publish_workflows,
+        "publish_skill_for_cli",
+        fake_publish_skill_for_cli,
+    )
+
+    result = runner.invoke(
+        app,
+        ["skills", "publish", "/tmp/demo-skill", "--repo", "acme/skills"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "validated" in result.stdout
+    assert calls == [
+        ("publish", {"skill_dir": "/tmp/demo-skill", "repo": "acme/skills"}),
+    ]
+
+
+def test_cli_skill_publish_uses_hub_operation_boundary(monkeypatch):
+    from opensquilla.cli.skills_publish import publish_skill_for_cli
+    from opensquilla.skills.hub import operations as hub_operations
+
+    calls: list[tuple[str, object]] = []
+
+    def fake_skill_publish_request(params: object) -> object:
+        calls.append(("request", params))
+        return ("publish", params)
+
+    async def fake_publish_skill_from_request(request: object) -> SimpleNamespace:
+        calls.append(("publish", request))
+        return SimpleNamespace(success=True, message="validated")
+
+    monkeypatch.setattr(
+        hub_operations,
+        "skill_publish_request",
+        fake_skill_publish_request,
+    )
+    monkeypatch.setattr(
+        hub_operations,
+        "publish_skill_from_request",
+        fake_publish_skill_from_request,
+    )
+
+    result = asyncio.run(publish_skill_for_cli("/tmp/demo-skill", "acme/skills"))
+
+    assert result.success is True
+    assert result.message == "validated"
+    assert calls == [
+        (
+            "request",
+            {"skill_dir": "/tmp/demo-skill", "target_repo": "acme/skills"},
+        ),
+        (
+            "publish",
+            ("publish", {"skill_dir": "/tmp/demo-skill", "target_repo": "acme/skills"}),
+        ),
+    ]
+
+
+def test_cli_skills_publish_does_not_import_publisher_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_publish_workflows, skills_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    facade_tree = ast.parse(Path(skills_workflows.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_publish_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    imported_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.skills.hub.operations"
+        for alias in node.names
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_workflows"
+        for alias in node.names
+    }
+    facade_workflow_names = {
+        alias.name
+        for node in ast.walk(facade_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_publish_workflows"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+
+    assert "publish_skill_for_cli_command" in cmd_workflow_names
+    assert facade_workflow_names == {"publish_skill_for_cli_command"}
+    assert "opensquilla.cli.skills_publish_workflows" not in cmd_direct_modules
+    assert "opensquilla.cli.skills_publish" not in cmd_direct_modules
+    assert "opensquilla.skills.hub.publisher" not in imported_modules
+    assert "publish_skill_from_request" not in imported_names
+    assert "skill_publish_request" not in imported_names
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "publish_skill"
+        for node in ast.walk(workflow_tree)
+    )
+
+
+def test_cli_skills_publish_presenters_use_cli_boundary() -> None:
+    from opensquilla.cli import skills_cmd, skills_publish_workflows
+
+    cmd_tree = ast.parse(Path(skills_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(skills_publish_workflows.__file__).read_text(encoding="utf-8")
+    )
+    imported_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    imported_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.skills_publish_presenters"
+        for alias in node.names
+    }
+    cmd_direct_modules = {
+        node.module for node in ast.walk(cmd_tree) if isinstance(node, ast.ImportFrom)
+    }
+    constants = {
+        node.value
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.Constant)
+    }
+
+    assert "opensquilla.cli.ui" not in imported_modules
+    assert "opensquilla.cli.skills_publish_presenters" not in cmd_direct_modules
+    assert imported_presenter_names == {"emit_skill_publish_result"}
+    assert "OK:" not in constants
+    assert "Failed:" not in constants
+
+
+def test_skill_publish_request_builds_publish_request(tmp_path: Path) -> None:
+    from opensquilla.skills.hub.publisher import skill_publish_request
+
+    request = skill_publish_request(
+        {"skill_dir": tmp_path / "demo-skill", "repo": "acme/skills"}
+    )
+
+    assert request.skill_dir == tmp_path / "demo-skill"
+    assert request.target_repo == "acme/skills"
+
+
+def test_publish_skill_from_request_delegates(monkeypatch, tmp_path: Path) -> None:
+    from opensquilla.skills.hub import publisher
+
+    calls: list[tuple[Path, str | None]] = []
+
+    async def fake_publish_skill(skill_dir: Path, target_repo: str | None = None):
+        calls.append((skill_dir, target_repo))
+        return publisher.PublishResult(success=True, message="ok", skill_name="demo")
+
+    monkeypatch.setattr(publisher, "publish_skill", fake_publish_skill)
+
+    result = asyncio.run(
+        publisher.publish_skill_from_request(
+            publisher.SkillPublishRequest(
+                skill_dir=tmp_path / "demo-skill",
+                target_repo="acme/skills",
+            )
+        )
+    )
+
+    assert result.success is True
+    assert calls == [(tmp_path / "demo-skill", "acme/skills")]
 
 
 def test_skills_install_fallback_exposes_github_source_without_token(monkeypatch):
@@ -396,6 +2182,91 @@ def test_sessions_list_json_filters_client_side(monkeypatch):
     assert payload["sessions"][0]["key"] == "a"
 
 
+def test_cli_sessions_list_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        sessions_cmd,
+        sessions_gateway_queries,
+        sessions_presenters,
+        sessions_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(sessions_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(sessions_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(Path(sessions_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(sessions_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    sessions_list = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "sessions_list"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(sessions_list)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(sessions_list) if isinstance(node, ast.Name)
+    }
+
+    assert "list_sessions_for_cli" in cmd_workflow_names
+    assert "list_sessions_from_gateway" in workflow_query_names
+    assert "emit_sessions_list" in workflow_presenter_names
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert "list_sessions_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(sessions_list))
+    assert not (
+        command_identifiers
+        & {
+            "_filter_sessions",
+            "_parse_since",
+            "console",
+            "print_json",
+            "raw_rows",
+            "run_gateway_sync",
+            "Table",
+        }
+    )
+
+
 def test_sessions_show_json_resolves_and_previews(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.rpc_payloads = {
@@ -428,6 +2299,91 @@ def test_sessions_show_json_resolves_and_previews(monkeypatch):
     assert ("sessions.preview", {"keys": ["agent:main:abc"], "limit": 50}) in fake.calls
 
 
+def test_cli_sessions_show_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        sessions_cmd,
+        sessions_gateway_queries,
+        sessions_presenters,
+        sessions_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(sessions_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(sessions_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(Path(sessions_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(sessions_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    sessions_show = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "sessions_show"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(sessions_show)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(sessions_show) if isinstance(node, ast.Name)
+    }
+
+    assert "show_session_for_cli" in cmd_workflow_names
+    assert "load_session_preview_from_gateway" in workflow_query_names
+    assert "emit_session_preview" in workflow_presenter_names
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert "show_session_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(sessions_show))
+    assert not (
+        command_identifiers
+        & {
+            "_resolved_key",
+            "console",
+            "preview",
+            "print_json",
+            "resolved",
+            "run_gateway_sync",
+            "Table",
+        }
+    )
+
+
 def test_sessions_show_json_errors_go_to_stderr(monkeypatch):
     _install_fake_gateway(monkeypatch, FailingConnectGatewayClient)
 
@@ -436,6 +2392,310 @@ def test_sessions_show_json_errors_go_to_stderr(monkeypatch):
     assert result.exit_code == 1
     assert result.stdout == ""
     assert json.loads(result.stderr)["error"]["code"] == "GATEWAY_UNAVAILABLE"
+
+
+def test_sessions_resume_resolves_then_runs_chat(monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "sessions.resolve": {"key": "agent:main:abc", "session_id": "abc"},
+    }
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "opensquilla.cli.chat_cmd.run_chat",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    result = runner.invoke(app, ["sessions", "resume", "abc"])
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == [{"session_id": "agent:main:abc"}]
+    assert ("sessions.resolve", {"key": "abc"}) in fake.calls
+
+
+def test_sessions_resume_gateway_unavailable_keeps_legacy_message(monkeypatch):
+    _install_fake_gateway(monkeypatch, FailingConnectGatewayClient)
+    monkeypatch.setattr(
+        "opensquilla.cli.chat_cmd.run_chat",
+        lambda **kwargs: pytest.fail(f"run_chat should not be called: {kwargs}"),
+    )
+
+    result = runner.invoke(app, ["sessions", "resume", "abc"])
+
+    assert result.exit_code == 0
+    assert "gateway offline" in result.stdout
+    assert "Session 'abc' requires a running gateway." in result.stdout
+
+
+def test_cli_sessions_resume_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        sessions_cmd,
+        sessions_gateway_queries,
+        sessions_presenters,
+        sessions_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(sessions_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(sessions_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(Path(sessions_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(sessions_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_presenters"
+        for alias in node.names
+    }
+    query_url_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.url_utils"
+        for alias in node.names
+    }
+    presenter_ui_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.ui"
+        for alias in node.names
+    }
+    sessions_resume = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "sessions_resume"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(sessions_resume)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(sessions_resume) if isinstance(node, ast.Name)
+    }
+
+    assert "resume_session_for_cli" in cmd_workflow_names
+    assert "resolve_session_key_from_gateway" in workflow_query_names
+    assert "SessionGatewayUnavailable" in workflow_query_names
+    assert "SessionGatewayActionFailed" in workflow_query_names
+    assert "emit_session_resume_unavailable" in workflow_presenter_names
+    assert "emit_session_resume_error" in workflow_presenter_names
+    assert query_url_names == {"normalize_gateway_url"}
+    assert {"console", "error_panel"} <= presenter_ui_names
+    assert "resume_session_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(sessions_resume))
+    assert not (
+        command_identifiers
+        & {
+            "_ACTION_FAILED",
+            "_CLIENT_UNAVAILABLE",
+            "_resolved_key",
+            "_with_client",
+            "asyncio",
+            "console",
+            "result",
+            "run_chat",
+        }
+    )
+
+
+def test_sessions_export_json_resolves_preview_history_and_writes(tmp_path, monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "sessions.resolve": {
+            "key": "agent:main:abc",
+            "session_id": "abc",
+            "status": "done",
+            "model": "gpt-test",
+        },
+        "sessions.preview": {
+            "previews": [{"key": "agent:main:abc", "lastMessage": "preview"}],
+        },
+        "chat.history": {
+            "messages": [{"role": "assistant", "text": "persisted transcript"}],
+        },
+    }
+    target = tmp_path / "session.json"
+
+    result = runner.invoke(
+        app,
+        ["sessions", "export", "abc", "--format", "json", "--output", str(target)],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Exported:" in result.stdout
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["resolved"]["key"] == "agent:main:abc"
+    assert payload["history"]["messages"][0]["text"] == "persisted transcript"
+    assert ("sessions.resolve", {"key": "abc"}) in fake.calls
+    assert ("sessions.preview", {"keys": ["agent:main:abc"], "limit": 50}) in fake.calls
+    assert ("chat.history", {"sessionKey": "agent:main:abc", "limit": 1000}) in fake.calls
+
+
+def test_sessions_export_markdown_uses_history_messages(tmp_path, monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "sessions.resolve": {
+            "key": "agent:main:abc",
+            "status": "done",
+            "model": "gpt-test",
+            "updated_at": "2026-05-17T00:00:00Z",
+        },
+        "sessions.preview": {
+            "previews": [{"key": "agent:main:abc", "lastMessage": "preview only"}],
+        },
+        "chat.history": {
+            "messages": [
+                {"role": "user", "text": "hello"},
+                {"role": "assistant", "content": "hi there"},
+            ],
+        },
+    }
+    target = tmp_path / "session.md"
+
+    result = runner.invoke(app, ["sessions", "export", "abc", "-o", str(target)])
+
+    assert result.exit_code == 0, result.stdout
+    body = target.read_text(encoding="utf-8")
+    assert "# Session agent:main:abc" in body
+    assert "- Status: done" in body
+    assert "- Model: gpt-test" in body
+    assert "## You\n\nhello" in body
+    assert "## Assistant\n\nhi there" in body
+    assert "preview only" not in body
+
+
+def test_sessions_export_gateway_unavailable_keeps_legacy_message(tmp_path, monkeypatch):
+    _install_fake_gateway(monkeypatch, FailingConnectGatewayClient)
+    target = tmp_path / "session.md"
+
+    result = runner.invoke(app, ["sessions", "export", "abc", "-o", str(target)])
+
+    assert result.exit_code == 0
+    assert "gateway offline" in result.stdout
+    assert "Session export requires a running gateway." in result.stdout
+    assert not target.exists()
+
+
+def test_sessions_export_invalid_format_does_not_connect(monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+
+    result = runner.invoke(app, ["sessions", "export", "abc", "--format", "txt"])
+
+    assert result.exit_code == 2
+    assert "--format must be md or json" in result.stdout
+    assert fake.calls == []
+
+
+def test_cli_sessions_export_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        sessions_cmd,
+        sessions_presenters,
+        sessions_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(sessions_cmd.__file__).read_text(encoding="utf-8"))
+    presenter_tree = ast.parse(Path(sessions_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(sessions_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_presenters"
+        for alias in node.names
+    }
+    presenter_repl_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.repl.session_state"
+        for alias in node.names
+    }
+    sessions_export = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "sessions_export"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(sessions_export)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(sessions_export) if isinstance(node, ast.Name)
+    }
+
+    assert "export_session_for_cli" in cmd_workflow_names
+    assert "load_session_export_from_gateway" in workflow_query_names
+    assert "SessionGatewayUnavailable" in workflow_query_names
+    assert "SessionGatewayActionFailed" in workflow_query_names
+    assert "emit_session_export_format_error" in workflow_presenter_names
+    assert "emit_session_export_unavailable" in workflow_presenter_names
+    assert "emit_session_export_error" in workflow_presenter_names
+    assert "emit_session_export_empty" in workflow_presenter_names
+    assert "write_session_export" in workflow_presenter_names
+    assert "emit_session_exported" in workflow_presenter_names
+    assert presenter_repl_names == {"messages_to_markdown"}
+    assert "opensquilla.cli.repl.session_state" not in cmd_direct_modules
+    assert "opensquilla.cli.ui" not in cmd_direct_modules
+    assert "opensquilla.cli.url_utils" not in cmd_direct_modules
+    assert "export_session_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(sessions_export))
+    assert not (
+        command_identifiers
+        & {
+            "_ACTION_FAILED",
+            "_CLIENT_UNAVAILABLE",
+            "_resolved_key",
+            "_with_client",
+            "asyncio",
+            "console",
+            "history",
+            "json",
+            "messages_to_markdown",
+            "preview",
+            "result",
+            "target",
+        }
+    )
 
 
 def test_sessions_abort_resolves_then_aborts(monkeypatch):
@@ -452,6 +2712,194 @@ def test_sessions_abort_resolves_then_aborts(monkeypatch):
     assert payload["aborted"] is True
     assert ("sessions.resolve", {"key": "abc"}) in fake.calls
     assert ("sessions.abort", {"key": "agent:main:abc"}) in fake.calls
+
+
+def test_cli_sessions_abort_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        sessions_cmd,
+        sessions_gateway_queries,
+        sessions_presenters,
+        sessions_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(sessions_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(sessions_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(Path(sessions_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(sessions_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    sessions_abort = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "sessions_abort"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(sessions_abort)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(sessions_abort) if isinstance(node, ast.Name)
+    }
+
+    assert "abort_session_for_cli" in cmd_workflow_names
+    assert "abort_session_from_gateway" in workflow_query_names
+    assert "emit_session_abort" in workflow_presenter_names
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert "abort_session_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(sessions_abort))
+    assert not (
+        command_identifiers
+        & {
+            "_resolved_key",
+            "console",
+            "payload",
+            "print_json",
+            "resolved",
+            "run_gateway_sync",
+        }
+    )
+
+
+def test_sessions_delete_resolves_then_deletes(monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "sessions.resolve": {"key": "agent:main:abc", "session_id": "abc"},
+        "sessions.delete": {"deleted": ["agent:main:abc"], "count": 1},
+    }
+
+    result = runner.invoke(app, ["sessions", "delete", "abc", "--yes"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["deleted"] == ["agent:main:abc"]
+    assert ("sessions.resolve", {"key": "abc"}) in fake.calls
+    assert ("sessions.delete", {"keys": ["agent:main:abc"]}) in fake.calls
+
+
+def test_cli_sessions_delete_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        sessions_cmd,
+        sessions_gateway_queries,
+        sessions_presenters,
+        sessions_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(sessions_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(sessions_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(Path(sessions_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(sessions_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.sessions_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    sessions_delete = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "sessions_delete"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(sessions_delete)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(sessions_delete) if isinstance(node, ast.Name)
+    }
+
+    assert "delete_session_for_cli" in cmd_workflow_names
+    assert "delete_session_from_gateway" in workflow_query_names
+    assert "confirm_session_delete" in workflow_presenter_names
+    assert "emit_session_delete" in workflow_presenter_names
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert "delete_session_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(sessions_delete))
+    assert not (
+        command_identifiers
+        & {
+            "_ACTION_FAILED",
+            "_CLIENT_UNAVAILABLE",
+            "_resolved_key",
+            "_with_client",
+            "asyncio",
+            "confirmed",
+            "console",
+            "delete_sessions",
+            "result",
+        }
+    )
 
 
 def test_memory_status_json_reuses_doctor_rpc(monkeypatch):
@@ -635,6 +3083,739 @@ def test_channels_status_and_logout_use_existing_rpcs(monkeypatch):
     assert ("channels.logout", {"name": "slack"}) in fake.calls
 
 
+def test_cli_channels_catalog_uses_workflow_boundary() -> None:
+    from opensquilla.cli import channels_cmd, channels_presenters, channels_workflows
+
+    cmd_tree = ast.parse(Path(channels_cmd.__file__).read_text(encoding="utf-8"))
+    presenter_tree = ast.parse(
+        Path(channels_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(channels_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_workflows"
+        for alias in node.names
+    }
+    workflow_spec_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.channel_specs"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_presenters"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    channels_types = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "channels_types"
+    )
+    channels_describe = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "channels_describe"
+    )
+    catalog_command_identifiers = {
+        node.id
+        for command in (channels_types, channels_describe)
+        for node in ast.walk(command)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {
+        "add_channel_for_cli",
+        "describe_channel_type_for_cli",
+        "disable_channel_for_cli",
+        "edit_channel_for_cli",
+        "enable_channel_for_cli",
+        "list_configured_channels_for_cli",
+        "list_channel_types_for_cli",
+        "logout_channel_for_cli",
+        "remove_channel_for_cli",
+        "restart_channel_for_cli",
+        "show_channel_status_for_cli",
+    }
+    assert "opensquilla.onboarding.channel_specs" not in cmd_direct_modules
+    assert workflow_spec_names == {"get_channel_setup_spec", "list_channel_setup_specs"}
+    assert workflow_presenter_names == {
+        "emit_channel_action_result",
+        "emit_channel_catalog_error",
+        "emit_channel_config_error",
+        "emit_channel_config_path",
+        "emit_channel_enabled_state",
+        "emit_channel_removed",
+        "emit_channel_restart_notice",
+        "emit_channel_saved",
+        "emit_channel_status",
+        "emit_channel_type_description",
+        "emit_channel_types",
+        "emit_channel_updated",
+        "emit_channel_verification_next_step",
+        "emit_configured_channels",
+    }
+    assert presenter_output_names == {"print_json"}
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "list_channel_types_for_cli"
+        for node in ast.walk(channels_types)
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "describe_channel_type_for_cli"
+        for node in ast.walk(channels_describe)
+    )
+    assert not (
+        catalog_command_identifiers
+        & {
+            "Console",
+            "Table",
+            "KeyError",
+            "get_channel_setup_spec",
+            "list_channel_setup_specs",
+            "print_json",
+            "secho",
+        }
+    )
+
+
+def test_cli_channels_add_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        channels_cmd,
+        channels_config_mutations,
+        channels_presenters,
+        channels_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(channels_cmd.__file__).read_text(encoding="utf-8"))
+    mutation_tree = ast.parse(
+        Path(channels_config_mutations.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(channels_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(channels_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_workflows"
+        for alias in node.names
+    }
+    workflow_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_mutations"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_presenters"
+        for alias in node.names
+    }
+    mutation_field_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channel_fields"
+        for alias in node.names
+    }
+    mutation_config_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_onboarding_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.mutations"
+        for alias in node.names
+    }
+    presenter_function_names = {
+        node.name for node in ast.walk(presenter_tree) if isinstance(node, ast.FunctionDef)
+    }
+    channels_add = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "channels_add"
+    )
+    add_identifiers = {
+        node.id for node in ast.walk(channels_add) if isinstance(node, ast.Name)
+    }
+
+    assert "add_channel_for_cli" in cmd_workflow_names
+    assert "add_channel_to_config" in workflow_mutation_names
+    assert "resolve_channel_config_path" in workflow_query_names
+    assert {
+        "emit_channel_config_error",
+        "emit_channel_config_path",
+        "emit_channel_restart_notice",
+        "emit_channel_saved",
+        "emit_channel_verification_next_step",
+    } <= workflow_presenter_names
+    assert mutation_field_names == {"apply_channel_token", "parse_channel_field_pairs"}
+    assert mutation_config_names == {"PersistResult", "load_config", "persist_config"}
+    assert mutation_onboarding_names == {
+        "remove_channel",
+        "set_channel_enabled",
+        "upsert_channel",
+    }
+    assert {
+        "emit_channel_config_error",
+        "emit_channel_restart_notice",
+        "emit_channel_saved",
+        "emit_channel_verification_next_step",
+    } <= presenter_function_names
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "add_channel_for_cli"
+        for node in ast.walk(channels_add)
+    )
+    assert not (
+        add_identifiers
+        & {
+            "apply_channel_token",
+            "parse_channel_field_pairs",
+            "load_config",
+            "persist_config",
+            "upsert_channel",
+            "secho",
+            "Exit",
+        }
+    )
+
+
+def test_cli_channels_edit_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        channels_cmd,
+        channels_config_mutations,
+        channels_presenters,
+        channels_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(channels_cmd.__file__).read_text(encoding="utf-8"))
+    mutation_tree = ast.parse(
+        Path(channels_config_mutations.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(channels_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(channels_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_workflows"
+        for alias in node.names
+    }
+    workflow_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_mutations"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_presenters"
+        for alias in node.names
+    }
+    mutation_field_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channel_fields"
+        for alias in node.names
+    }
+    mutation_config_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_onboarding_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.mutations"
+        for alias in node.names
+    }
+    presenter_function_names = {
+        node.name for node in ast.walk(presenter_tree) if isinstance(node, ast.FunctionDef)
+    }
+    channels_edit = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "channels_edit"
+    )
+    edit_identifiers = {
+        node.id for node in ast.walk(channels_edit) if isinstance(node, ast.Name)
+    }
+
+    assert "edit_channel_for_cli" in cmd_workflow_names
+    assert "edit_channel_in_config" in workflow_mutation_names
+    assert "resolve_channel_config_path" in workflow_query_names
+    assert {
+        "emit_channel_config_error",
+        "emit_channel_config_path",
+        "emit_channel_restart_notice",
+        "emit_channel_updated",
+        "emit_channel_verification_next_step",
+    } <= workflow_presenter_names
+    assert mutation_field_names == {"apply_channel_token", "parse_channel_field_pairs"}
+    assert mutation_config_names == {"PersistResult", "load_config", "persist_config"}
+    assert mutation_onboarding_names == {
+        "remove_channel",
+        "set_channel_enabled",
+        "upsert_channel",
+    }
+    assert "emit_channel_updated" in presenter_function_names
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "edit_channel_for_cli"
+        for node in ast.walk(channels_edit)
+    )
+    assert not (
+        edit_identifiers
+        & {
+            "apply_channel_token",
+            "parse_channel_field_pairs",
+            "load_config",
+            "persist_config",
+            "upsert_channel",
+            "secho",
+            "Exit",
+        }
+    )
+
+
+def test_cli_channels_state_changes_use_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        channels_cmd,
+        channels_config_mutations,
+        channels_presenters,
+        channels_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(channels_cmd.__file__).read_text(encoding="utf-8"))
+    mutation_tree = ast.parse(
+        Path(channels_config_mutations.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(channels_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(channels_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_workflows"
+        for alias in node.names
+    }
+    workflow_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_mutations"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_presenters"
+        for alias in node.names
+    }
+    mutation_config_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_onboarding_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.mutations"
+        for alias in node.names
+    }
+    presenter_function_names = {
+        node.name for node in ast.walk(presenter_tree) if isinstance(node, ast.FunctionDef)
+    }
+    state_commands = [
+        next(
+            node
+            for node in ast.walk(cmd_tree)
+            if isinstance(node, ast.FunctionDef) and node.name == command_name
+        )
+        for command_name in ("channels_remove", "channels_enable", "channels_disable")
+    ]
+    state_identifiers = {
+        node.id
+        for command in state_commands
+        for node in ast.walk(command)
+        if isinstance(node, ast.Name)
+    }
+
+    assert {
+        "disable_channel_for_cli",
+        "enable_channel_for_cli",
+        "remove_channel_for_cli",
+    } <= cmd_workflow_names
+    assert "opensquilla.onboarding.config_store" not in cmd_direct_modules
+    assert "opensquilla.onboarding.mutations" not in cmd_direct_modules
+    assert {
+        "remove_channel_from_config",
+        "set_channel_enabled_in_config",
+    } <= workflow_mutation_names
+    assert "resolve_channel_config_path" in workflow_query_names
+    assert {
+        "emit_channel_config_error",
+        "emit_channel_config_path",
+        "emit_channel_enabled_state",
+        "emit_channel_removed",
+        "emit_channel_restart_notice",
+    } <= workflow_presenter_names
+    assert mutation_config_names == {"PersistResult", "load_config", "persist_config"}
+    assert mutation_onboarding_names == {
+        "remove_channel",
+        "set_channel_enabled",
+        "upsert_channel",
+    }
+    assert {
+        "emit_channel_enabled_state",
+        "emit_channel_removed",
+    } <= presenter_function_names
+    for command, workflow_name in zip(
+        state_commands,
+        (
+            "remove_channel_for_cli",
+            "enable_channel_for_cli",
+            "disable_channel_for_cli",
+        ),
+        strict=True,
+    ):
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == workflow_name
+            for node in ast.walk(command)
+        )
+    assert not (
+        state_identifiers
+        & {
+            "_print_restart_notice",
+            "_resolve_and_announce",
+            "load_config",
+            "persist_config",
+            "remove_channel",
+            "set_channel_enabled",
+            "secho",
+            "Exit",
+        }
+    )
+
+
+def test_cli_channels_list_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        channels_cmd,
+        channels_config_queries,
+        channels_presenters,
+        channels_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(channels_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(channels_config_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(channels_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(channels_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_config_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_presenters"
+        for alias in node.names
+    }
+    query_config_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    query_mutation_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.mutations"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    channels_list = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "channels_list"
+    )
+    list_identifiers = {
+        node.id for node in ast.walk(channels_list) if isinstance(node, ast.Name)
+    }
+
+    assert "list_configured_channels_for_cli" in cmd_workflow_names
+    assert workflow_query_names == {
+        "load_configured_channel_entries",
+        "resolve_channel_config_path",
+    }
+    assert {
+        "emit_channel_config_path",
+        "emit_configured_channels",
+    } <= workflow_presenter_names
+    assert query_config_names == {"load_config", "resolve_config_path"}
+    assert query_mutation_names == {"list_channel_entries"}
+    assert presenter_output_names == {"print_json"}
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "list_configured_channels_for_cli"
+        for node in ast.walk(channels_list)
+    )
+    assert not (
+        list_identifiers
+        & {
+            "Console",
+            "Table",
+            "_render_channels_table",
+            "_resolve_and_announce",
+            "list_channel_entries",
+            "load_config",
+            "print_json",
+            "resolve_config_path",
+        }
+    )
+
+
+def test_cli_channels_runtime_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        channels_cmd,
+        channels_gateway_queries,
+        channels_presenters,
+        channels_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(channels_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(channels_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(channels_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(channels_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_gateway_queries"
+        for alias in node.names
+    }
+    workflow_gateway_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.channels_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    runtime_commands = [
+        next(
+            node
+            for node in ast.walk(cmd_tree)
+            if isinstance(node, ast.FunctionDef) and node.name == command_name
+        )
+        for command_name in ("channels_status", "channels_restart", "channels_logout")
+    ]
+    runtime_identifiers = {
+        node.id
+        for command in runtime_commands
+        for node in ast.walk(command)
+        if isinstance(node, ast.Name)
+    }
+
+    assert {
+        "logout_channel_for_cli",
+        "restart_channel_for_cli",
+        "show_channel_status_for_cli",
+    } <= cmd_workflow_names
+    assert "opensquilla.cli.gateway_rpc" not in cmd_direct_modules
+    assert workflow_query_names == {
+        "load_channel_status",
+        "logout_channel",
+        "restart_channel",
+    }
+    assert workflow_gateway_names == {"confirm_or_exit"}
+    assert {
+        "emit_channel_action_result",
+        "emit_channel_status",
+    } <= workflow_presenter_names
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    for command, workflow_name in zip(
+        runtime_commands,
+        (
+            "show_channel_status_for_cli",
+            "restart_channel_for_cli",
+            "logout_channel_for_cli",
+        ),
+        strict=True,
+    ):
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == workflow_name
+            for node in ast.walk(command)
+        )
+        assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(command))
+    assert not (
+        runtime_identifiers
+        & {"run_gateway_sync", "print_json", "confirm_or_exit", "client", "Console", "Table"}
+    )
+
+
 def test_cost_json_returns_gateway_payload(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.cost_payload = {
@@ -647,6 +3828,239 @@ def test_cost_json_returns_gateway_payload(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert json.loads(result.stdout)["totalCostUsd"] == 0.1
     assert ("usage.cost", {}) in fake.calls
+
+
+def test_cost_by_model_json_groups_gateway_payload(monkeypatch):
+    fake = _install_fake_gateway(monkeypatch)
+    fake.cost_payload = {
+        "breakdown": [
+            {
+                "session": "s1",
+                "model": "m",
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "cost_usd": 0.125,
+            },
+            {
+                "sessionKey": "s2",
+                "model": "m",
+                "inputTokens": 3,
+                "outputTokens": 4,
+                "costUsd": 0.25,
+            },
+        ],
+        "totalCostUsd": 0.375,
+    }
+
+    result = runner.invoke(app, ["cost", "--by-model", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout) == {
+        "byModel": [
+            {
+                "model": "m",
+                "inputTokens": 4,
+                "outputTokens": 6,
+                "costUsd": 0.375,
+            }
+        ],
+        "totalCostUsd": 0.375,
+    }
+    assert ("usage.cost", {}) in fake.calls
+
+
+def test_cli_cost_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        cost_cmd,
+        cost_gateway_queries,
+        cost_presenters,
+        cost_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(cost_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(cost_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(Path(cost_presenters.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(Path(cost_workflows.__file__).read_text(encoding="utf-8"))
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.cost_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.cost_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.cost_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    cost_command = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "cost"
+    )
+    command_calls = {
+        node.func.id
+        for node in ast.walk(cost_command)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id for node in ast.walk(cost_command) if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {"show_usage_cost_for_cli"}
+    assert cmd_direct_modules == {"opensquilla.cli.cost_workflows"}
+    assert workflow_query_names == {"load_usage_cost_from_gateway"}
+    assert workflow_presenter_names == {"emit_usage_cost"}
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert "show_usage_cost_for_cli" in command_calls
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(cost_command))
+    assert not (
+        command_identifiers
+        & {"run_gateway_sync", "print_json", "console", "Table", "defaultdict", "cast", "client"}
+    )
+
+
+def test_cli_diagnostics_commands_use_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        diagnostics_cmd,
+        diagnostics_gateway_queries,
+        diagnostics_presenters,
+        diagnostics_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(diagnostics_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(diagnostics_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(diagnostics_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(diagnostics_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.diagnostics_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.diagnostics_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.diagnostics_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    command_calls = {
+        node.func.id
+        for command_name in ("diagnostics_status", "diagnostics_on", "diagnostics_off")
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == command_name
+        for node in ast.walk(command)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    command_identifiers = {
+        node.id
+        for command_name in ("diagnostics_status", "diagnostics_on", "diagnostics_off")
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == command_name
+        for node in ast.walk(command)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {
+        "disable_diagnostics_for_cli",
+        "enable_diagnostics_for_cli",
+        "show_diagnostics_status_for_cli",
+    }
+    assert cmd_direct_modules == {"opensquilla.cli.diagnostics_workflows"}
+    assert workflow_query_names == {
+        "load_diagnostics_status",
+        "set_diagnostics_enabled",
+    }
+    assert workflow_presenter_names == {"emit_diagnostics_status"}
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert {
+        "disable_diagnostics_for_cli",
+        "enable_diagnostics_for_cli",
+        "show_diagnostics_status_for_cli",
+    } <= command_calls
+    assert not any(
+        isinstance(node, ast.AsyncFunctionDef)
+        for command_name in ("diagnostics_status", "diagnostics_on", "diagnostics_off")
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == command_name
+        for node in ast.walk(command)
+    )
+    assert not (
+        command_identifiers
+        & {"run_gateway_sync", "print_json", "console", "Table", "cast", "client"}
+    )
 
 
 def test_provider_and_search_diagnostics_use_gateway_rpcs(monkeypatch):
@@ -684,6 +4098,426 @@ def test_provider_and_search_diagnostics_use_gateway_rpcs(monkeypatch):
         "search.query",
         {"query": "hello", "provider": "duckduckgo", "limit": 2},
     ) in fake.calls
+
+
+def test_cli_providers_list_uses_workflow_boundary() -> None:
+    from opensquilla.cli import providers_cmd, providers_workflows
+
+    cmd_tree = ast.parse(Path(providers_cmd.__file__).read_text(encoding="utf-8"))
+    workflow_tree = ast.parse(
+        Path(providers_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.providers_workflows"
+        for alias in node.names
+    }
+    providers_list = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "providers_list"
+    )
+    provider_specs_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.provider_specs"
+        for alias in node.names
+    }
+
+    assert "list_providers_for_cli" in cmd_workflow_names
+    assert "opensquilla.onboarding.provider_specs" not in cmd_direct_modules
+    assert provider_specs_names == {
+        "list_provider_setup_specs",
+        "provider_catalog_payload",
+    }
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "list_providers_for_cli"
+        for node in ast.walk(providers_list)
+    )
+    assert not any(
+        isinstance(node, ast.Name)
+        and node.id in {"provider_catalog_payload", "list_provider_setup_specs"}
+        for node in ast.walk(providers_list)
+    )
+
+
+def test_cli_providers_status_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        providers_cmd,
+        providers_gateway_queries,
+        providers_presenters,
+        providers_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(providers_cmd.__file__).read_text(encoding="utf-8"))
+    query_tree = ast.parse(
+        Path(providers_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(providers_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(providers_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.providers_workflows"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.providers_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.providers_presenters"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    providers_status = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "providers_status"
+    )
+    status_identifiers = {
+        node.id for node in ast.walk(providers_status) if isinstance(node, ast.Name)
+    }
+
+    assert "show_provider_status_for_cli" in cmd_workflow_names
+    assert "opensquilla.cli.gateway_rpc" not in cmd_direct_modules
+    assert "opensquilla.cli.output" not in cmd_direct_modules
+    assert workflow_query_names == {"load_provider_status"}
+    assert "emit_provider_status" in workflow_presenter_names
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "show_provider_status_for_cli"
+        for node in ast.walk(providers_status)
+    )
+    assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(providers_status))
+    assert not (
+        status_identifiers
+        & {"run_gateway_sync", "print_json", "Console", "Table", "client"}
+    )
+
+
+def test_cli_providers_configure_uses_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        providers_cmd,
+        providers_config_mutations,
+        providers_presenters,
+        providers_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(providers_cmd.__file__).read_text(encoding="utf-8"))
+    mutation_tree = ast.parse(
+        Path(providers_config_mutations.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(providers_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(providers_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.providers_workflows"
+        for alias in node.names
+    }
+    workflow_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.providers_config_mutations"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.providers_presenters"
+        for alias in node.names
+    }
+    mutation_config_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_onboarding_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.mutations"
+        for alias in node.names
+    }
+    presenter_function_names = {
+        node.name for node in ast.walk(presenter_tree) if isinstance(node, ast.FunctionDef)
+    }
+    providers_configure = next(
+        node
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "providers_configure"
+    )
+    configure_identifiers = {
+        node.id for node in ast.walk(providers_configure) if isinstance(node, ast.Name)
+    }
+
+    assert "configure_provider_for_cli" in cmd_workflow_names
+    assert "opensquilla.onboarding.config_store" not in cmd_direct_modules
+    assert "opensquilla.onboarding.mutations" not in cmd_direct_modules
+    assert workflow_mutation_names == {"configure_provider_in_config"}
+    assert "emit_provider_configure_error" in workflow_presenter_names
+    assert "emit_provider_configured" in workflow_presenter_names
+    assert mutation_config_names == {
+        "PersistResult",
+        "default_config_path",
+        "load_config",
+        "persist_config",
+    }
+    assert mutation_onboarding_names == {"upsert_llm_provider"}
+    assert "emit_provider_configure_error" in presenter_function_names
+    assert "emit_provider_configured" in presenter_function_names
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "configure_provider_for_cli"
+        for node in ast.walk(providers_configure)
+    )
+    assert not (
+        configure_identifiers
+        & {
+            "default_config_path",
+            "load_config",
+            "persist_config",
+            "upsert_llm_provider",
+            "secho",
+            "Exit",
+        }
+    )
+
+
+def test_cli_search_commands_use_workflow_boundary() -> None:
+    from opensquilla.cli import (
+        search_cmd,
+        search_config_mutations,
+        search_gateway_queries,
+        search_presenters,
+        search_workflows,
+    )
+
+    cmd_tree = ast.parse(Path(search_cmd.__file__).read_text(encoding="utf-8"))
+    mutation_tree = ast.parse(
+        Path(search_config_mutations.__file__).read_text(encoding="utf-8")
+    )
+    query_tree = ast.parse(
+        Path(search_gateway_queries.__file__).read_text(encoding="utf-8")
+    )
+    presenter_tree = ast.parse(
+        Path(search_presenters.__file__).read_text(encoding="utf-8")
+    )
+    workflow_tree = ast.parse(
+        Path(search_workflows.__file__).read_text(encoding="utf-8")
+    )
+
+    cmd_direct_modules = {
+        node.module
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("opensquilla.")
+    }
+    cmd_workflow_names = {
+        alias.name
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.search_workflows"
+        for alias in node.names
+    }
+    workflow_mutation_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.search_config_mutations"
+        for alias in node.names
+    }
+    workflow_query_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.search_gateway_queries"
+        for alias in node.names
+    }
+    workflow_presenter_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.search_presenters"
+        for alias in node.names
+    }
+    workflow_onboarding_names = {
+        alias.name
+        for node in ast.walk(workflow_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {
+            "opensquilla.onboarding.next_steps",
+            "opensquilla.onboarding.search_specs",
+        }
+        for alias in node.names
+    }
+    mutation_config_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.config_store"
+        for alias in node.names
+    }
+    mutation_onboarding_names = {
+        alias.name
+        for node in ast.walk(mutation_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.onboarding.mutations"
+        for alias in node.names
+    }
+    query_rpc_names = {
+        alias.name
+        for node in ast.walk(query_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.gateway_rpc"
+        for alias in node.names
+    }
+    presenter_output_names = {
+        alias.name
+        for node in ast.walk(presenter_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "opensquilla.cli.output"
+        for alias in node.names
+    }
+    command_calls = {
+        node.func.id
+        for function_name in {
+            "search_list",
+            "search_status",
+            "search_query",
+            "search_configure",
+        }
+        for command in ast.walk(cmd_tree)
+        if isinstance(command, ast.FunctionDef) and command.name == function_name
+        for node in ast.walk(command)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    cmd_identifiers = {
+        node.id
+        for node in ast.walk(cmd_tree)
+        if isinstance(node, ast.Name)
+    }
+
+    assert cmd_workflow_names == {
+        "configure_search_provider_for_cli",
+        "list_search_providers_for_cli",
+        "query_search_for_cli",
+        "show_search_status_for_cli",
+    }
+    assert cmd_direct_modules == {"opensquilla.cli.search_workflows"}
+    assert workflow_mutation_names == {"configure_search_provider_in_config"}
+    assert workflow_query_names == {"load_search_status", "run_search_query"}
+    assert {
+        "emit_search_configure_error",
+        "emit_search_provider_catalog_payload",
+        "emit_search_provider_configured",
+        "emit_search_provider_setup_specs",
+        "emit_search_query_result",
+        "emit_search_status",
+    } <= workflow_presenter_names
+    assert workflow_onboarding_names == {
+        "env_reference_warnings",
+        "list_search_provider_setup_specs",
+        "search_provider_catalog_payload",
+    }
+    assert mutation_config_names == {
+        "PersistResult",
+        "default_config_path",
+        "load_config",
+        "persist_config",
+    }
+    assert mutation_onboarding_names == {"upsert_search_provider"}
+    assert query_rpc_names == {"run_gateway_sync"}
+    assert presenter_output_names == {"print_json"}
+    assert {
+        "configure_search_provider_for_cli",
+        "list_search_providers_for_cli",
+        "query_search_for_cli",
+        "show_search_status_for_cli",
+    } <= command_calls
+    assert not (
+        cmd_identifiers
+        & {
+            "run_gateway_sync",
+            "print_json",
+            "Console",
+            "Table",
+            "default_config_path",
+            "load_config",
+            "persist_config",
+            "upsert_search_provider",
+            "env_reference_warnings",
+            "client",
+        }
+    )
 
 
 def test_search_query_json_exits_nonzero_on_diagnostic_failure(monkeypatch):

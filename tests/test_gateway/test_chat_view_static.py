@@ -50,8 +50,7 @@ def test_chat_renders_live_and_historical_artifacts_as_header_auth_downloads() -
     assert "data-artifact-download" in source
     assert "headers['x-opensquilla-session-key'] = _sessionKey" in source
     assert "url.searchParams.delete('sessionKey')" in source
-    assert "fetch(downloadUrl" in source
-    assert "Authorization" in source
+    assert "WebUiHttp.download(downloadUrl" in source
 
 
 def test_chat_artifact_images_render_as_preview_cards_and_refresh_on_done() -> None:
@@ -138,10 +137,13 @@ def test_chat_maps_task_terminal_events_during_migration() -> None:
     source = CHAT_JS.read_text(encoding="utf-8")
 
     assert "function _taskTerminalAsSessionEvent(event, payload)" in source
-    assert "task.failed" in source
-    assert "task.timeout" in source
-    assert "task.abandoned" in source
-    assert "task.cancelled" in source
+    assert "terminalStatuses: Object.freeze([" in source
+    assert "'failed'" in source
+    assert "'timeout'" in source
+    assert "'abandoned'" in source
+    assert "'cancelled'" in source
+    assert "event: 'session.event.done'" in source
+    assert "event: 'session.event.error'" in source
     assert "function _taskTerminalMessage(status, payload)" in source
     assert "function _sessionErrorMessage(payload)" in source
     assert "payload?.terminal_message" in source
@@ -154,6 +156,64 @@ def test_chat_maps_task_terminal_events_during_migration() -> None:
     error_end = source.index("if (_activeTaskGroups.size > 0)", error_start)
     error_handler = source[error_start:error_end]
     assert "_sessionErrorMessage(payload)" in error_handler
+
+
+def test_chat_task_terminal_mapping_uses_central_status_helper() -> None:
+    source = CHAT_JS.read_text(encoding="utf-8")
+    helper = source[
+        source.index("taskTerminalAsSessionEvent(event, payload)") :
+        source.index("    taskTerminalMessage(status, payload)", source.index(
+            "taskTerminalAsSessionEvent(event, payload)"
+        ))
+    ]
+
+    assert "const status = _CHAT_VIEW_STATE.taskTerminalStatus(event);" in helper
+    assert "event === 'task.cancelled'" not in helper
+    assert "'task.failed'" not in helper
+    assert "'task.timeout'" not in helper
+    assert "'task.abandoned'" not in helper
+    assert "event: 'session.event.done'" in helper
+    assert "event: 'session.event.error'" in helper
+
+
+def test_chat_task_terminal_fallback_strings_are_isolated() -> None:
+    source = CHAT_JS.read_text(encoding="utf-8")
+    messages_start = source.index("terminalMessages: Object.freeze({")
+    messages_end = source.index("    runStatusLabel(status)", messages_start)
+    messages = source[messages_start:messages_end]
+    mapper_start = source.index("taskTerminalAsSessionEvent(event, payload)")
+    mapper_end = source.index("    taskTerminalMessage(status, payload)", mapper_start)
+    mapper = source[mapper_start:mapper_end]
+    wildcard_start = source.index("_rpc.on('*', (rawEvent, rawPayload) => {")
+    wildcard_end = source.index("    }));", wildcard_start)
+    wildcard_handler = source[wildcard_start:wildcard_end]
+
+    fallback_texts = [
+        line.split("'", 2)[1]
+        for line in messages.splitlines()
+        if ": '" in line
+    ]
+
+    assert fallback_texts
+    for text in fallback_texts:
+        assert text not in mapper
+        assert text not in wildcard_handler
+    assert "_CHAT_VIEW_STATE.taskTerminalMessage(status, payload)" in mapper
+
+
+def test_chat_task_terminal_message_prefers_server_payload_text() -> None:
+    source = CHAT_JS.read_text(encoding="utf-8")
+    start = source.index("taskTerminalMessage(status, payload)")
+    end = source.index("    sessionErrorMessage(payload)", start)
+    helper = source[start:end]
+
+    assert "payload?.terminal_message" in helper
+    assert helper.index("payload?.terminal_message") < helper.index(
+        "_CHAT_VIEW_STATE.terminalMessages.timeout"
+    )
+    assert helper.index("payload?.terminal_message") < helper.index(
+        "_CHAT_VIEW_STATE.terminalMessages[status]"
+    )
 
 
 def test_chat_subscribe_failure_is_visible() -> None:
@@ -190,6 +250,63 @@ def test_chat_surfaces_persisted_run_state_in_header_and_session_picker() -> Non
     # by the _runStatusChipClass helper (see components.css for .chip styling).
     assert "_runStatusChipClass" in source
     assert ".chat-session-popover-item-run" in css
+
+
+def test_chat_view_state_helper_owns_run_and_terminal_mappings() -> None:
+    source = CHAT_JS.read_text(encoding="utf-8")
+    helper_marker = "const _CHAT_VIEW_STATE = Object.freeze({"
+
+    assert helper_marker in source
+
+    helper_start = source.index(helper_marker)
+    helper_end = source.index("  function _runStatusLabel", helper_start)
+    helper = source[helper_start:helper_end]
+
+    assert "runLabels: Object.freeze({" in helper
+    assert "terminalStatuses: Object.freeze([" in helper
+    assert "taskTerminalAsSessionEvent(event, payload)" in helper
+    assert "sessionErrorMessage(payload)" in helper
+    assert "timeout: 'The task timed out before it could finish.'" in helper
+    assert "cancelled: 'The task was cancelled before it finished.'" in helper
+
+    expected_delegates = {
+        "function _runStatusLabel(status)": (
+            "function _normalizeRunStatus(status)",
+            "return _CHAT_VIEW_STATE.runStatusLabel(status);",
+        ),
+        "function _normalizeRunStatus(status)": (
+            "function _runStatusChipClass(status)",
+            "return _CHAT_VIEW_STATE.normalizeRunStatus(status);",
+        ),
+        "function _runStatusChipClass(status)": (
+            "function _sessionRunStatus(source)",
+            "return _CHAT_VIEW_STATE.runStatusChipClass(status);",
+        ),
+        "function _sessionRunStatus(source)": (
+            "function _taskGroupId(payload)",
+            "return _CHAT_VIEW_STATE.sessionRunStatus(source);",
+        ),
+        "function _taskTerminalStatus(event)": (
+            "function _taskTerminalAsSessionEvent(event, payload)",
+            "return _CHAT_VIEW_STATE.taskTerminalStatus(event);",
+        ),
+        "function _taskTerminalAsSessionEvent(event, payload)": (
+            "function _taskTerminalMessage(status, payload)",
+            "return _CHAT_VIEW_STATE.taskTerminalAsSessionEvent(event, payload);",
+        ),
+        "function _taskTerminalMessage(status, payload)": (
+            "function _sessionErrorMessage(payload)",
+            "return _CHAT_VIEW_STATE.taskTerminalMessage(status, payload);",
+        ),
+        "function _sessionErrorMessage(payload)": (
+            "function _noteStreamSeq(payload)",
+            "return _CHAT_VIEW_STATE.sessionErrorMessage(payload);",
+        ),
+    }
+    for start_marker, (end_marker, delegate) in expected_delegates.items():
+        start = source.index(start_marker)
+        end = source.index(end_marker, start)
+        assert delegate in source[start:end]
 
 
 def test_chat_resets_replay_cursor_after_stream_gap() -> None:

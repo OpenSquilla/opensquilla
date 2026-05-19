@@ -2,11 +2,17 @@
 
 from .anthropic import AnthropicProvider
 from .credentials import Credential, CredentialPool, NoCredentialsAvailable
+from .factory import ProviderFactory, ProviderFactoryPort, build_provider_from_config
 from .failures import (
     ProviderFailureKind,
     ProviderRecoveryAction,
     classify_provider_error,
     decide_recovery_action,
+)
+from .model_listing import (
+    ProviderModelRow,
+    list_provider_model_rows,
+    list_provider_models_rpc_payload,
 )
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
@@ -28,6 +34,15 @@ from .registry import (
     list_provider_names,
     list_provider_specs,
 )
+from .runtime_status import (
+    ProviderModelProbe,
+    ProviderStatusReport,
+    ProviderStatusRow,
+    build_provider_status_payload,
+    build_provider_status_report,
+    build_provider_status_rpc_payload,
+    probe_provider_models,
+)
 from .selector import (
     ModelSelector,
     ProviderBuildError,
@@ -36,6 +51,7 @@ from .selector import (
     build_provider,
 )
 from .smart_routing import RefusalDecision, should_refuse
+from .thinking import THINKING_BUDGETS, ThinkingLevel
 from .types import (
     ChatConfig,
     ContentBlockDocument,
@@ -90,6 +106,19 @@ __all__ = [
     "ProviderConfig",
     "ProviderBuildError",
     "build_provider",
+    "ProviderFactory",
+    "ProviderFactoryPort",
+    "build_provider_from_config",
+    "ProviderModelRow",
+    "list_provider_model_rows",
+    "list_provider_models_rpc_payload",
+    "ProviderModelProbe",
+    "ProviderStatusReport",
+    "ProviderStatusRow",
+    "build_provider_status_payload",
+    "build_provider_status_rpc_payload",
+    "build_provider_status_report",
+    "probe_provider_models",
     # Credentials
     "Credential",
     "CredentialPool",
@@ -97,6 +126,8 @@ __all__ = [
     # Smart routing
     "RefusalDecision",
     "should_refuse",
+    "ThinkingLevel",
+    "THINKING_BUDGETS",
     # Types
     "StreamEvent",
     "TextDeltaEvent",

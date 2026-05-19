@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import structlog
 
 from opensquilla.artifacts import artifact_payload
 from opensquilla.gateway.config import GatewayConfig
 from opensquilla.gateway.context_overflow import apply_context_overflow_policy
 from opensquilla.gateway.rpc import RpcContext, RpcUnavailableError, get_dispatcher
-from opensquilla.session.compaction import build_compaction_config_from_provider
+from opensquilla.gateway.rpc_compaction_inputs import build_gateway_compaction_config
 from opensquilla.session.keys import build_webchat_key, canonicalize_session_key
+from opensquilla.session.rpc_payload import (
+    chat_abort_response,
+    chat_abort_unavailable_response,
+    chat_history_response,
+    chat_inject_response,
+    chat_send_instant_accept_response,
+    chat_send_refusal_response,
+    chat_send_response,
+)
 
 _d = get_dispatcher()
 log = structlog.get_logger(__name__)
@@ -35,43 +42,6 @@ def _require_chat_session_manager(ctx: RpcContext):
     return ctx.session_manager
 
 
-def _effective_compaction_model(session: object | None) -> str | None:
-    if session is None:
-        return None
-    return getattr(session, "model_override", None) or getattr(session, "model", None)
-
-
-def _resolve_compaction_provider(ctx: RpcContext, session: object | None) -> object | None:
-    selector = getattr(ctx, "provider_selector", None)
-    if selector is None:
-        return None
-
-    resolved_selector = selector
-    clone = getattr(selector, "clone", None)
-    if callable(clone):
-        try:
-            resolved_selector = clone()
-        except Exception:  # noqa: BLE001
-            resolved_selector = selector
-
-    model = _effective_compaction_model(session)
-    if model and resolved_selector is not selector:
-        override = getattr(resolved_selector, "override_model", None)
-        if callable(override):
-            try:
-                override(model)
-            except Exception:  # noqa: BLE001
-                pass
-
-    resolver = getattr(resolved_selector, "resolve", None)
-    if not callable(resolver):
-        return None
-    try:
-        return cast(object | None, resolver())
-    except Exception:  # noqa: BLE001
-        return None
-
-
 async def _build_context_overflow_compaction_config(ctx: RpcContext, session_key: str):
     session = None
     storage = getattr(getattr(ctx, "session_manager", None), "_storage", None)
@@ -80,11 +50,7 @@ async def _build_context_overflow_compaction_config(ctx: RpcContext, session_key
             session = await storage.get_session(session_key)
         except Exception:  # noqa: BLE001
             session = None
-    return build_compaction_config_from_provider(
-        _resolve_compaction_provider(ctx, session),
-        model_override=_effective_compaction_model(session),
-        compaction_config=getattr(getattr(ctx, "config", None), "compaction", None),
-    )
+    return build_gateway_compaction_config(ctx, session)
 
 
 async def _enforce_context_overflow(
@@ -161,7 +127,7 @@ async def _handle_chat_send(params: dict | None, ctx: RpcContext) -> dict:
     # turn. This matches the roundtrip the WebUI observes on first paint
     # before the sessions engine is attached.
     if ctx.session_manager is None:
-        return {"ok": True, "sessionKey": session_key, "instant_accept": True}
+        return chat_send_instant_accept_response(session_key)
 
     mgr = _require_chat_session_manager(ctx)
     intent = params.get("intent")
@@ -169,7 +135,7 @@ async def _handle_chat_send(params: dict | None, ctx: RpcContext) -> dict:
     # Gate the turn on the configured context-overflow policy.
     refusal = await _enforce_context_overflow(ctx, session_key, message)
     if refusal is not None:
-        return {"ok": False, "sessionKey": session_key, **refusal}
+        return chat_send_refusal_response(session_key, refusal)
 
     if intent != "new_chat":
         # Ensure session exists — auto-create if needed
@@ -222,7 +188,7 @@ async def _handle_chat_send(params: dict | None, ctx: RpcContext) -> dict:
         if source_key in params:
             send_params[target_key] = params[source_key]
     result = await _handle_sessions_send(send_params, ctx)
-    return {"ok": True, "sessionKey": session_key, **result}
+    return chat_send_response(session_key, result)
 
 
 @_d.method("chat.abort", scope="operator.write")
@@ -231,12 +197,12 @@ async def _handle_chat_abort(params: dict | None, ctx: RpcContext) -> dict:
     # Fresh-WebUI / smoke path: abort always returns an ok envelope keyed by
     # sessionKey, regardless of whether a live task exists to cancel.
     if ctx.session_manager is None:
-        return {"ok": True, "sessionKey": session_key, "aborted": False}
+        return chat_abort_unavailable_response(session_key)
     _require_chat_session_manager(ctx)
     from opensquilla.gateway.rpc_sessions import _handle_sessions_abort
 
     result = await _handle_sessions_abort({"key": session_key}, ctx)
-    return {"sessionKey": session_key, **result}
+    return chat_abort_response(session_key, result)
 
 
 @_d.method("chat.history", scope="operator.read")
@@ -247,65 +213,7 @@ async def _handle_chat_history(params: dict | None, ctx: RpcContext) -> dict:
     mgr = _require_chat_session_manager(ctx)
 
     transcript = await mgr.get_transcript(session_key)
-    if not transcript:
-        return {"messages": []}
-
-    import json as _json
-
-    messages = []
-    for entry in transcript[-limit:]:
-        content = getattr(entry, "content", "") or ""
-        attachments = None
-        artifacts = None
-        # Parse JSON-encoded content with attachments
-        if content and content.startswith("{"):
-            try:
-                parsed = _json.loads(content)
-                if isinstance(parsed, dict) and "text" in parsed:
-                    content = parsed["text"]
-                    attachments = parsed.get("attachments")
-                    parsed_artifacts = parsed.get("artifacts")
-                    if isinstance(parsed_artifacts, list):
-                        artifacts = [
-                            artifact_payload(item)
-                            for item in parsed_artifacts
-                            if isinstance(item, dict)
-                        ]
-            except (ValueError, KeyError):
-                pass
-        # Recover from corrupted Python repr of content blocks (old compaction bug).
-        # Extract text from ContentBlockText entries; skip pure tool-only messages.
-        if content and content.lstrip().startswith("[ContentBlock"):
-            import re
-
-            texts = re.findall(
-                r"ContentBlockText\(type='text', text='(.*?)'\)",
-                content,
-            )
-            content = "\n".join(t.replace("\\n", "\n") for t in texts) if texts else ""
-            if not content.strip():
-                continue
-        msg = {
-            "id": getattr(entry, "message_id", None),
-            "message_id": getattr(entry, "message_id", None),
-            "role": getattr(entry, "role", "unknown"),
-            "text": content,
-            "timestamp": getattr(entry, "created_at", None),
-            "provenance_kind": getattr(entry, "provenance_kind", None),
-            "provenance_source_session_key": getattr(
-                entry, "provenance_source_session_key", None
-            ),
-            "provenance_source_tool": getattr(entry, "provenance_source_tool", None),
-        }
-        if attachments:
-            msg["attachments"] = attachments
-        if artifacts:
-            msg["artifacts"] = artifacts
-        tc = getattr(entry, "tool_calls", None)
-        if tc:
-            msg["tool_calls"] = tc
-        messages.append(msg)
-    return {"messages": messages}
+    return chat_history_response(transcript, limit=limit, artifact_payload_fn=artifact_payload)
 
 
 @_d.method("chat.inject", scope="operator.admin")
@@ -332,4 +240,4 @@ async def _handle_chat_inject(params: dict | None, ctx: RpcContext) -> dict:
             raise KeyError(f"Session not found: {session_key}")
 
     await ctx.session_manager.append_message(session_key, role=role, content=params["content"])
-    return {"ok": True, "sessionKey": session_key}
+    return chat_inject_response(session_key)

@@ -33,14 +33,13 @@ import functools
 import inspect
 import json
 import logging
-import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from opensquilla.sandbox.backend import Backend, NoopBackend, select_backend
-from opensquilla.sandbox.config import EffectiveMode, SandboxSettings
+from opensquilla.sandbox.config import EffectiveMode, SandboxSettings, apply_host_compatibility
 from opensquilla.sandbox.governance import (
     ApprovalGate,
     DenialLedger,
@@ -70,7 +69,7 @@ log = logging.getLogger(__name__)
 
 
 class _ApprovalQueueLike(Protocol):
-    """Structural subset of :class:`opensquilla.gateway.approval_queue.ApprovalQueue`."""
+    """Structural subset of :class:`opensquilla.application.approval_queue.ApprovalQueue`."""
 
     def request(self, namespace: str = ..., params: dict | None = ...) -> str: ...
 
@@ -118,7 +117,7 @@ def configure_runtime(
     """
     global _runtime
 
-    settings = _apply_host_compatibility(settings)
+    settings = apply_host_compatibility(settings)
     effective = settings.validate_combination()
     cache = stale_cache if stale_cache is not None else get_stale_output_cache()
     ledger = DenialLedger(
@@ -138,8 +137,7 @@ def configure_runtime(
     if approval_queue is not None:
         gate = ApprovalGate(approval_queue)
     else:
-        # Lazy import: avoids a circular import when gateway is not yet loaded.
-        from opensquilla.gateway.approval_queue import get_approval_queue
+        from opensquilla.application.approval_queue import get_approval_queue
 
         gate = ApprovalGate(get_approval_queue())
 
@@ -161,35 +159,6 @@ def configure_runtime(
         effective.insecure_mode,
     )
     return _runtime
-
-
-def _apply_host_compatibility(settings: SandboxSettings) -> SandboxSettings:
-    """Adjust unsupported platform defaults before runtime selection.
-
-    Windows currently has no real sandbox backend in this package. Treating
-    the generated default ``sandbox=true, backend=auto`` as a hard boot
-    failure makes local CLI one-shots unusable on Windows, even for read-only
-    file tools. Keep explicit backend choices fail-closed, but make the auto
-    choice resolve to the same visible insecure mode an operator would get by
-    setting ``sandbox=false``.
-    """
-
-    if (
-        sys.platform.startswith("win")
-        and settings.sandbox
-        and settings.backend == "auto"
-    ):
-        log.warning(
-            "sandbox.windows_auto_backend_unsupported: "
-            "no Windows sandbox backend is available; disabling sandbox for this runtime"
-        )
-        return settings.model_copy(
-            update={
-                "sandbox": False,
-                "security_grading": False,
-            }
-        )
-    return settings
 
 
 def get_runtime() -> SandboxRuntime | None:

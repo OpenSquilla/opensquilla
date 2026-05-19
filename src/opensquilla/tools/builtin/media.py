@@ -20,16 +20,13 @@ from opensquilla.artifacts import (
     artifact_payload,
 )
 from opensquilla.env import trust_env as _trust_env
+from opensquilla.provider import image_generation_runtime
 from opensquilla.provider.image_generation import (
     ImageGenerationRequest,
     generate_with_fallbacks,
-    get_image_generation_provider,
-    list_image_generation_providers,
-    parse_image_generation_model_ref,
-    reset_image_generation_providers,
 )
 from opensquilla.tools.registry import tool
-from opensquilla.tools.ssrf import validate_http_url_for_fetch
+from opensquilla.tools.ssrf import validate_http_url_for_fetch, validate_http_url_scheme
 from opensquilla.tools.types import (
     CallerKind,
     SafeToolError,
@@ -44,13 +41,10 @@ _IMAGE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB
 _PDF_TEXT_LIMIT = 50_000
 _TTS_VALID_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
 _MAX_REDIRECTS = 5
-_image_generation_config: Any | None = None
 
 
 def configure_image_generation(config: Any | None, *, llm_config: Any | None = None) -> None:
-    global _image_generation_config
-    _image_generation_config = config
-    reset_image_generation_providers(config, llm_config=llm_config)
+    image_generation_runtime.configure_image_generation(config, llm_config=llm_config)
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +160,9 @@ def _sensitive_media_path_block(tool_name: str, resolved: Path, original_path: s
 
 
 def _sensitive_media_url_block(tool_name: str, url: str) -> dict | None:
-    from opensquilla.tools.builtin.web import _sensitive_url_marker
+    from opensquilla.safety.sensitive_payloads import sensitive_url_marker
 
-    marker = _sensitive_url_marker(url)
+    marker = sensitive_url_marker(url)
     if marker is None:
         return None
     return {
@@ -192,6 +186,7 @@ async def _fetch_image_url(url: str) -> tuple[bytes, str]:
         if marker is not None:
             raise ToolError("Blocked: URL contains sensitive data")
         try:
+            validate_http_url_scheme(candidate_url)
             validate_http_url_for_fetch(candidate_url)
         except UnsupportedURLSchemeError as exc:
             raise ToolError("Only HTTP/HTTPS URLs are supported for image fetch") from exc
@@ -441,67 +436,20 @@ def _publish_generated_image_artifact(target: Path, mime_type: str) -> dict[str,
 
 
 def _resolve_image_generation_config() -> Any:
-    if _image_generation_config is not None:
-        return _image_generation_config
-    from opensquilla.gateway.config import ImageGenerationConfig
-
-    return ImageGenerationConfig()
+    return image_generation_runtime.current_image_generation_config()
 
 
 def _resolve_image_generation_candidates(model: str | None, config: Any) -> list[str]:
-    candidates: list[str] = []
-    seen: set[str] = set()
-
-    def add(raw: str | None) -> None:
-        if raw and raw not in seen:
-            seen.add(raw)
-            candidates.append(raw)
-
-    add(model)
-    add(getattr(config, "primary", None))
-    for fallback in getattr(config, "fallbacks", []) or []:
-        add(fallback)
-    primary = getattr(config, "primary", None)
-    fallbacks = getattr(config, "fallbacks", []) or []
-    has_explicit_model_routing = (
-        bool(model) or bool(fallbacks) or bool(primary and primary != "openai/gpt-image-1")
-    )
-    if not has_explicit_model_routing:
-        for provider in list_image_generation_providers():
-            if _image_generation_provider_has_auth(provider):
-                add(f"{provider.provider_id}/{provider.default_model}")
-    return candidates
+    return image_generation_runtime.resolve_image_generation_candidates(model, config)
 
 
 def image_generation_available(config: Any | None = None) -> bool:
     """Return whether image generation has at least one configured provider."""
-    resolved_config = config if config is not None else _resolve_image_generation_config()
-    if not getattr(resolved_config, "enabled", False):
-        return False
-
-    for candidate in _resolve_image_generation_candidates(None, resolved_config):
-        try:
-            provider_id, _model = parse_image_generation_model_ref(candidate)
-        except ValueError:
-            continue
-        provider = get_image_generation_provider(provider_id)
-        if provider is not None and _image_generation_provider_has_auth(provider):
-            return True
-    return False
+    return image_generation_runtime.image_generation_available(config)
 
 
 def _image_generation_provider_has_auth(provider: Any) -> bool:
-    resolve_api_key = getattr(provider, "_resolve_api_key", None)
-    if callable(resolve_api_key):
-        try:
-            return bool(resolve_api_key())
-        except Exception:  # noqa: BLE001 - capability checks must be non-fatal
-            return False
-
-    auth_env_vars = tuple(getattr(provider, "auth_env_vars", ()) or ())
-    if not auth_env_vars:
-        return True
-    return any(bool(os.environ.get(env_var)) for env_var in auth_env_vars)
+    return image_generation_runtime.image_generation_provider_has_auth(provider)
 
 
 def _resolve_generated_image_path(filename: str | None, output_format: str) -> Path:

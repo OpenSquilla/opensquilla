@@ -9,65 +9,90 @@ from __future__ import annotations
 
 import asyncio
 import getpass
-import inspect
-import json
 import os
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Protocol, cast
-from uuid import uuid4
 
 import typer
 from rich.panel import Panel
-from rich.table import Table
 
 from opensquilla.cli import attachments as _cli_attachments
-from opensquilla.cli.repl.commands import is_exit_command, render_help_table
-from opensquilla.cli.repl.prompt import prompt_approval, prompt_user
-from opensquilla.cli.repl.session_state import ChatSessionState, messages_to_markdown
+from opensquilla.cli import chat_approval_prompts as _chat_approval_prompts
+from opensquilla.cli import chat_gateway_repl as _chat_gateway_repl
+from opensquilla.cli import chat_standalone_repl as _chat_standalone_repl
+from opensquilla.cli import chat_standalone_transcript_rewrite as _chat_transcript_rewrite
+from opensquilla.cli import chat_stream_presenters
+from opensquilla.cli import chat_stream_support as _chat_stream_support
+from opensquilla.cli.chat_gateway_approvals_workflows import (
+    handle_gateway_approvals_command,
+)
+from opensquilla.cli.chat_gateway_control_route_workflows import (
+    handle_gateway_control_route_command,
+)
+from opensquilla.cli.chat_gateway_exact_route_workflows import (
+    handle_gateway_exact_route_command,
+)
+from opensquilla.cli.chat_gateway_forget_workflows import handle_gateway_forget_command
+from opensquilla.cli.chat_gateway_image_route_workflows import (
+    handle_gateway_image_route_command,
+)
+from opensquilla.cli.chat_gateway_io_route_workflows import (
+    handle_gateway_io_route_command,
+)
+from opensquilla.cli.chat_gateway_model_route_workflows import (
+    handle_gateway_model_route_command,
+)
+from opensquilla.cli.chat_gateway_permissions_workflows import (
+    handle_permissions_command,
+)
+from opensquilla.cli.chat_gateway_session_route_workflows import (
+    handle_gateway_session_route_command,
+)
+from opensquilla.cli.chat_gateway_slash_routes import match_gateway_slash_route
+from opensquilla.cli.chat_gateway_utility_route_workflows import (
+    handle_gateway_utility_route_command,
+)
+from opensquilla.cli.chat_input_builders import (
+    _async_file_prompt_and_attachments,
+    _file_prompt_and_attachments,
+    _gateway_client_is_local,
+    _image_prompt_and_attachments,
+    _image_prompt_from_command,
+    _parse_path_command,
+    _path_prompt_and_attachments,
+    _path_strategy_hint,
+)
+from opensquilla.cli.repl.commands import is_exit_command
+from opensquilla.cli.repl.prompt import prompt_user
+from opensquilla.cli.repl.session_state import ChatSessionState
 from opensquilla.cli.repl.stream import StreamingRenderer, TurnResult, UsageSummary
 from opensquilla.cli.ui import ACCENT, console, error_panel
-from opensquilla.session.compaction import (
-    build_compaction_config_from_provider,
-    call_compact_with_optional_config,
-)
-from opensquilla.session.terminal_reply import build_terminal_reply
 
 _CLI_ALLOWED_FILE_MIMES = _cli_attachments.CLI_ALLOWED_FILE_MIMES
 _CLI_INLINE_THRESHOLD_BYTES = _cli_attachments.CLI_INLINE_THRESHOLD_BYTES
 _PATH_REMOTE_GATEWAY_MESSAGE = _cli_attachments.PATH_REMOTE_GATEWAY_MESSAGE
 _CLI_ATTACHMENT_COMPAT_EXPORTS = (_CLI_ALLOWED_FILE_MIMES, _CLI_INLINE_THRESHOLD_BYTES)
+_CHAT_INPUT_BUILDER_COMPAT_EXPORTS = (
+    _async_file_prompt_and_attachments,
+    _file_prompt_and_attachments,
+    _gateway_client_is_local,
+    _image_prompt_and_attachments,
+    _image_prompt_from_command,
+    _parse_path_command,
+    _path_prompt_and_attachments,
+    _path_strategy_hint,
+)
 
-_DEFAULT_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
-_DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 180.0
-
-
-def _turn_stream_error_message(event: Any) -> str:
-    message = getattr(event, "message", "")
-    code = str(getattr(event, "code", "") or "").lower()
-    message_text = str(message)
-    if "timeout" in code or "stream idle" in message_text.lower():
-        return build_terminal_reply(
-            {
-                "status": "timeout",
-                "terminal_reason": "timeout",
-                "error_class": getattr(event, "code", None),
-                "error_message": message_text,
-            }
-        )
-    return message_text
-
-
-def _timeout_exception_message(exc: BaseException) -> str:
-    return build_terminal_reply(
-        {
-            "status": "timeout",
-            "terminal_reason": "timeout",
-            "error_class": exc.__class__.__name__,
-            "error_message": str(exc),
-        }
-    )
+_optional_positive_config_float = _chat_stream_support._optional_positive_config_float
+_timeout_exception_message = _chat_stream_support._timeout_exception_message
+_turn_stream_error_message = _chat_stream_support._turn_stream_error_message
+_wrap_cli_turn_stream = _chat_stream_support._wrap_cli_turn_stream
+_maybe_handle_approval = _chat_approval_prompts.maybe_handle_approval
+_local_approval_resolver = _chat_approval_prompts.local_approval_resolver
+_read_standalone_transcript = _chat_transcript_rewrite.read_standalone_transcript
+_flush_before_standalone_rewrite = _chat_transcript_rewrite.flush_before_standalone_rewrite
 
 
 class _GatewayClientLike(Protocol):
@@ -118,35 +143,7 @@ class _GatewayClientLike(Protocol):
 
     async def abort_session(self, key: str) -> dict[str, Any]: ...
 
-
-def _optional_positive_config_float(config_source: Any, attr: str, default: float) -> float | None:
-    config = getattr(config_source, "config", config_source)
-    raw = getattr(config, attr, default)
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        value = default
-    return value if value > 0 else None
-
-
-def _wrap_cli_turn_stream(stream: Any, config_source: Any) -> Any:
-    from opensquilla.engine.stream_wrappers import wrap_stream
-
-    return wrap_stream(
-        stream,
-        idle_timeout=_optional_positive_config_float(
-            config_source,
-            "agent_stream_idle_timeout_seconds",
-            _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS,
-        ),
-        heartbeat_interval=_optional_positive_config_float(
-            config_source,
-            "agent_stream_heartbeat_interval_seconds",
-            _DEFAULT_STREAM_HEARTBEAT_INTERVAL_SECONDS,
-        ),
-        heartbeat_phase="cli",
-        heartbeat_message="Still working",
-    )
+    async def session_history(self, session_key: str, limit: int = 1000) -> dict[str, Any]: ...
 
 
 def _resolve_compaction_provider(
@@ -176,127 +173,6 @@ def _resolve_compaction_provider(
         return resolver()
     except Exception:  # noqa: BLE001
         return None
-
-
-async def _maybe_handle_approval(
-    result: Any,
-    live: Any,
-    resolver: Callable[..., Awaitable[Any]],
-    elevated_state: dict[str, str | None] | None = None,
-) -> None:
-    """If *result* is an approval-required/pending payload, prompt/notify the user.
-
-    The prompt offers four approval choices:
-
-    * ``o`` / ``y`` — allow once (approve only this specific call)
-    * ``a``         — allow always (cache intent for the session lifetime)
-    * ``b``         — bypass (approve + flip session into /elevated bypass mode;
-                      future destructive ops auto-approve, sensitive paths still
-                      hard-blocked)
-    * ``d`` / ``n`` — deny
-
-    ``resolver(approval_id, approved, allow_always=...)`` is called with the
-    user's decision. The Live display is paused during input and resumed
-    afterwards so the prompt isn't mangled by the refresh loop.
-    """
-    payload: dict[str, Any]
-    if isinstance(result, str):
-        try:
-            parsed = json.loads(result)
-        except (ValueError, TypeError):
-            return
-        if not isinstance(parsed, dict):
-            return
-        payload = parsed
-    elif isinstance(result, dict):
-        payload = result
-    else:
-        return
-
-    # Hard-block envelope (sensitive path, etc.) — just show the refusal,
-    # no prompt to offer.
-    if payload.get("status") == "blocked":
-        live.stop()
-        try:
-            console.print()
-            console.print(
-                Panel(
-                    f"[bold]Command:[/bold] {str(payload.get('command', '')).strip()}\n"
-                    f"[dim]{payload.get('message', '')}[/dim]",
-                    title="[red]Blocked (sensitive path)[/red]",
-                    border_style="red",
-                )
-            )
-        finally:
-            live.start()
-        return
-
-    status = str(payload.get("status") or "")
-    if status not in {"approval_required", "approval_pending"}:
-        return
-    approval_id = payload.get("approval_id")
-    if not isinstance(approval_id, str) or not approval_id:
-        return
-    command = str(payload.get("command", "")).strip()
-    warning = str(payload.get("warning") or payload.get("message") or "").strip()
-
-    live.stop()
-    try:
-        console.print()
-        body = f"[bold]Command:[/bold] {command or '(not shown)'}"
-        if warning:
-            body += f"\n[dim]{warning}[/dim]"
-        console.print(
-            Panel(
-                body,
-                title=(
-                    "[yellow]Approval pending[/yellow]"
-                    if status == "approval_pending"
-                    else "[yellow]Approval required[/yellow]"
-                ),
-                border_style="yellow",
-            )
-        )
-        console.print(
-            "[dim]  [bold]o[/bold]nce    allow this call only[/dim]\n"
-            "[dim]  [bold]a[/bold]lways  allow this intent for the session[/dim]\n"
-            "[dim]  [bold]b[/bold]ypass  approve + skip future approvals "
-            "(sensitive paths still blocked)[/dim]\n"
-            "[dim]  [bold]d[/bold]eny    reject[/dim]"
-        )
-        answer = await prompt_approval("Decision [o/a/b/d]: ")
-
-        flip_to_bypass = False
-        # Backwards compatibility: y still means once, n still means deny.
-        if answer in ("b", "bypass"):
-            approved, allow_always, label = True, True, "Approved + bypass mode"
-            flip_to_bypass = True
-        elif answer in ("a", "always"):
-            approved, allow_always, label = True, True, "Always approved"
-        elif answer in ("o", "y", "yes", "once", ""):
-            approved, allow_always, label = True, False, "Approved (once)"
-        else:
-            approved, allow_always, label = False, False, "Denied"
-
-        try:
-            await resolver(approval_id, approved, allow_always=allow_always)
-            color = "green" if approved else "red"
-            if flip_to_bypass:
-                if elevated_state is not None:
-                    elevated_state["mode"] = "bypass"
-                suffix = (
-                    " — session now in [red]bypass[/red] mode. "
-                    "Sensitive paths still blocked. Use /elevated off to revert."
-                )
-            elif allow_always:
-                suffix = " — future similar intents auto-approve."
-            else:
-                suffix = ""
-            console.print(f"[{color}]{label}[/{color}]{suffix}")
-        except Exception as exc:  # pragma: no cover — RPC/queue transport errors
-            console.print(f"[red]Failed to resolve approval:[/red] {exc}")
-    finally:
-        live.start()
 
 
 def _cli_sender_id() -> str:
@@ -400,76 +276,6 @@ def run_chat(
 # ---------------------------------------------------------------------------
 
 
-async def _read_standalone_transcript(
-    session_manager: Any,
-    session_key: str,
-) -> list[Any] | None:
-    """Read the durable transcript before a destructive standalone command."""
-    if session_manager is None:
-        return []
-    for method_name in ("get_transcript", "read_transcript"):
-        reader = getattr(session_manager, method_name, None)
-        if not callable(reader):
-            continue
-        try:
-            result = reader(session_key)
-            if inspect.isawaitable(result):
-                result = await result
-        except KeyError:
-            return []
-        except Exception:  # noqa: BLE001
-            return None
-        return list(result or [])
-    return None
-
-
-async def _flush_before_standalone_rewrite(
-    svc: Any,
-    session_key: str,
-    *,
-    operation: str,
-) -> bool:
-    """Fail closed before reset/compact when a durable transcript exists."""
-    transcript = await _read_standalone_transcript(
-        getattr(svc, "session_manager", None),
-        session_key,
-    )
-    if transcript is None:
-        console.print(
-            f"[yellow]{operation} aborted: could not inspect the durable transcript.[/yellow]"
-        )
-        return False
-    if not transcript:
-        return True
-
-    flush_service = getattr(svc, "flush_service", None)
-    if flush_service is None:
-        console.print(
-            f"[yellow]{operation} aborted: flush service is unavailable and "
-            "the durable transcript is non-empty.[/yellow]"
-        )
-        return False
-
-    try:
-        receipt = await flush_service.execute(
-            transcript,
-            session_key,
-            agent_id="main",
-            timeout=30.0,
-            message_window=0,
-            segment_mode="auto",
-        )
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[yellow]{operation} aborted: flush failed ({exc}).[/yellow]")
-        return False
-
-    if getattr(receipt, "mode", None) == "error":
-        error = getattr(receipt, "error", None) or "unknown error"
-        console.print(f"[yellow]{operation} aborted: flush failed ({error}).[/yellow]")
-        return False
-    return True
-
-
 async def _standalone_repl(
     model: str | None,
     session_id: str | None,
@@ -478,209 +284,21 @@ async def _standalone_repl(
     timeout: float | None = None,
 ) -> None:
     """Interactive REPL backed by TurnRunner (full tools, skills, session persistence)."""
-    from opensquilla.cli.agent_cmd import _resolve_workspace_strict
-    from opensquilla.gateway import build_services, build_turn_runner_from_services
-    from opensquilla.gateway.routing import build_cli_route_envelope, tool_context_from_envelope
-
-    svc = await build_services()
-    session_manager = svc.session_manager
-    if session_manager is None:
-        raise RuntimeError("standalone chat requires session manager")
-    session_key = session_id or f"agent:main:standalone:{uuid4().hex[:8]}"
-    await session_manager.get_or_create(session_key, agent_id="main")
-    active_workspace = workspace or getattr(svc.config, "workspace_dir", None)
-    effective_workspace_strict = _resolve_workspace_strict(
-        cli_value=workspace_strict,
-        config_value=getattr(svc.config, "workspace_strict", None),
-        entrypoint_default=bool(active_workspace),
+    await _chat_standalone_repl.run_standalone_repl(
+        model,
+        session_id,
+        workspace=workspace,
+        workspace_strict=workspace_strict,
+        timeout=timeout,
+        prompt_user_fn=prompt_user,
+        stream_response=_stream_response_turnrunner,
+        run_image_command=_handle_image_command_turnrunner,
+        image_prompt_from_command=_image_prompt_from_command,
+        cli_sender_id_fn=_cli_sender_id,
+        flush_before_rewrite=_flush_before_standalone_rewrite,
+        resolve_compaction_provider=_resolve_compaction_provider,
+        console_obj=console,
     )
-
-    def _build_tool_ctx(active_session_key: str) -> object:
-        route_envelope = build_cli_route_envelope(
-            session_key=active_session_key,
-            agent_id="main",
-            channel_id="cli:chat",
-            sender_id=_cli_sender_id(),
-            source_name="chat",
-        )
-        return tool_context_from_envelope(
-            route_envelope,
-            is_owner=True,
-            workspace_dir=active_workspace,
-            workspace_strict=effective_workspace_strict,
-        )
-
-    tool_ctx = _build_tool_ctx(session_key)
-    state = ChatSessionState(session_key=session_key, model=model)
-
-    turn_runner = build_turn_runner_from_services(svc)
-
-    try:
-        while True:
-            try:
-                user_input = await prompt_user(state.prompt_state().label)
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n[yellow]Goodbye.[/yellow]")
-                break
-
-            if user_input is None or is_exit_command(user_input):
-                console.print("[yellow]Goodbye.[/yellow]")
-                break
-
-            stripped = user_input.strip()
-            if not stripped:
-                continue
-
-            if stripped.startswith("/"):
-                if stripped == "/help":
-                    console.print(render_help_table())
-                    continue
-                if parts := _slash_parts(stripped, "/new"):
-                    session_key = f"agent:main:standalone:{uuid4().hex[:8]}"
-                    await session_manager.get_or_create(session_key, agent_id="main")
-                    tool_ctx = _build_tool_ctx(session_key)
-                    state = ChatSessionState(session_key=session_key, model=model)
-                    title = parts[1].strip() if len(parts) > 1 else None
-                    label = f" ({title})" if title else ""
-                    console.print(f"[green]Started new session{label}:[/green] {session_key}")
-                    continue
-                if stripped in {"/status", "/session"}:
-                    console.print(
-                        f"[{ACCENT}]session[/] [dim]{state.session_key}[/dim]\n"
-                        f"[{ACCENT}]model[/] [dim]{state.model or 'default'}[/dim]"
-                    )
-                    continue
-                if stripped == "/models":
-                    console.print("[yellow]/models requires gateway mode.[/yellow]")
-                    continue
-                if parts := _slash_parts(stripped, "/model"):
-                    if len(parts) == 1:
-                        console.print(f"[dim]model={state.model or 'default'}[/dim]")
-                    else:
-                        model = parts[1].strip()
-                        state.model = model
-                        console.print(f"[green]model:[/green] {model}")
-                    continue
-                if stripped == "/cost":
-                    console.print(state.usage.render())
-                    continue
-                if _slash_parts(stripped, "/tool-compress"):
-                    await _handle_tool_compress_command(stripped, config=svc.config)
-                    continue
-                if stripped in {"/clear", "/reset"}:
-                    if svc.session_manager is not None:
-                        safe_to_reset = await _flush_before_standalone_rewrite(
-                            svc,
-                            session_key,
-                            operation="Reset",
-                        )
-                        if not safe_to_reset:
-                            continue
-                        await svc.session_manager.truncate(session_key, max_messages=0)
-                    state.transcript.clear()
-                    state.usage.reset()
-                    console.print(f"[{ACCENT}]cleared[/] [dim]{state.session_key}[/dim]")
-                    continue
-                if stripped == "/compact":
-                    if svc.session_manager is not None:
-                        safe_to_compact = await _flush_before_standalone_rewrite(
-                            svc,
-                            session_key,
-                            operation="Compact",
-                        )
-                        if not safe_to_compact:
-                            continue
-                        context_window = (
-                            getattr(svc.config, "context_budget_tokens", 100_000)
-                            if svc.config is not None
-                            else 100_000
-                        )
-                        compaction_config = build_compaction_config_from_provider(
-                            _resolve_compaction_provider(svc.provider_selector, model),
-                            model_override=model,
-                            compaction_config=getattr(svc.config, "compaction", None),
-                        )
-                        summary = await call_compact_with_optional_config(
-                            svc.session_manager.compact,
-                            session_key,
-                            context_window,
-                            compaction_config,
-                        )
-                        if summary:
-                            console.print(
-                                f"[{ACCENT}]compacted[/] "
-                                f"[dim]summary {len(summary)} chars[/dim]"
-                            )
-                        else:
-                            console.print(
-                                f"[{ACCENT}]compact skipped[/] "
-                                "[dim]context already within budget[/dim]"
-                            )
-                    else:
-                        console.print("[yellow]No session manager available.[/yellow]")
-                    continue
-                if _slash_parts(stripped, "/save"):
-                    _save_transcript_command(stripped, state)
-                    continue
-                if parts := _slash_parts(stripped, "/image"):
-                    if len(parts) == 1 or not parts[1].strip():
-                        console.print("[red]Usage: /image <path> [prompt][/red]")
-                        continue
-                    result = await _handle_image_command_turnrunner(
-                        turn_runner,
-                        session_key,
-                        tool_ctx,
-                        stripped,
-                        model=model,
-                        svc=svc,
-                        timeout=timeout,
-                    )
-                    state.transcript.add("user", _image_prompt_from_command(stripped))
-                    state.transcript.add("assistant", result.text)
-                    state.usage.add(result.usage)
-                    continue
-                if parts := _slash_parts(stripped, "/path"):
-                    if len(parts) == 1 or not parts[1].strip():
-                        console.print("[red]Usage: /path <path> [prompt][/red]")
-                        continue
-                    try:
-                        prompt, attachments = _path_prompt_and_attachments(stripped)
-                    except ValueError as exc:
-                        console.print(error_panel(str(exc)))
-                        continue
-                    if attachments:
-                        console.print(error_panel("/path must not create attachments."))
-                        continue
-                    result = await _stream_response_turnrunner(
-                        turn_runner,
-                        session_key,
-                        tool_ctx,
-                        prompt,
-                        model=model,
-                        svc=svc,
-                        timeout=timeout,
-                    )
-                    state.transcript.add("user", prompt)
-                    state.transcript.add("assistant", result.text)
-                    state.usage.add(result.usage)
-                    continue
-                console.print("[red]Unknown command.[/red] [dim]Use /help.[/dim]")
-                continue
-
-            result = await _stream_response_turnrunner(
-                turn_runner,
-                session_key,
-                tool_ctx,
-                user_input,
-                model=model,
-                svc=svc,
-                timeout=timeout,
-            )
-            state.transcript.add("user", user_input)
-            state.transcript.add("assistant", result.text)
-            state.usage.add(result.usage)
-    finally:
-        await svc.close()
 
 
 # ---------------------------------------------------------------------------
@@ -690,82 +308,17 @@ async def _standalone_repl(
 
 async def _gateway_chat(model: str | None, session_id: str | None) -> None:
     """Chat via gateway daemon. Full features: tools, skills, session persistence."""
-    from opensquilla.cli.gateway_client import GatewayClient, GatewayRPCError
-
-    client = GatewayClient()
-    await client.connect()
-
-    elevated_state: dict[str, str | None] = {"mode": None}
-
-    try:
-        if session_id:
-            session_key = session_id
-            console.print(f"[dim]Connected to gateway. Resuming session: {session_key}[/dim]")
-            if model:
-                console.print(
-                    "[yellow]Note: --model is honored only at session creation; "
-                    "ignored when resuming a session.[/yellow]"
-                )
-        else:
-            session_key = await client.create_session(model=model)
-            console.print(f"[dim]Connected to gateway. Session: {session_key}[/dim]")
-            if model:
-                console.print(f"[dim]Model: {model}[/dim]")
-        state = ChatSessionState(session_key=session_key, model=model)
-
-        # Interactive REPL via gateway
-        console.print(
-            Panel(
-                f"[bold {ACCENT}]OpenSquilla Chat[/bold {ACCENT}]\n"
-                "[dim]Enter sends. Ctrl+C cancels the current turn or clears input. "
-                "Ctrl+D exits. /help lists commands.[/dim]",
-                title="Gateway",
-                border_style=ACCENT,
-            )
-        )
-
-        while True:
-            try:
-                user_input = await prompt_user(state.prompt_state().label)
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n[yellow]Goodbye.[/yellow]")
-                break
-
-            if user_input is None or is_exit_command(user_input):
-                console.print("[yellow]Goodbye.[/yellow]")
-                break
-
-            stripped = user_input.strip()
-            if not stripped:
-                continue
-
-            if stripped.startswith("/"):
-                try:
-                    handled = await _handle_gateway_slash_command(
-                        stripped, state, client, elevated_state
-                    )
-                except GatewayRPCError as exc:
-                    console.print(error_panel(str(exc)))
-                    continue
-                if handled:
-                    session_key = state.session_key
-                    model = state.model
-                    continue
-                console.print("[red]Unknown command.[/red] [dim]Use /help.[/dim]")
-                continue
-
-            try:
-                result = await _stream_response_gateway(
-                    client, session_key, user_input, elevated_state
-                )
-            except GatewayRPCError as exc:
-                console.print(error_panel(str(exc)))
-                continue
-            state.transcript.add("user", user_input)
-            state.transcript.add("assistant", result.text)
-            state.usage.add(result.usage)
-    finally:
-        await client.close()
+    await _chat_gateway_repl.run_gateway_chat(
+        model,
+        session_id,
+        prompt_user_fn=prompt_user,
+        stream_response=_stream_response_gateway,
+        handle_slash_command=cast(Any, _handle_gateway_slash_command),
+        console_obj=cast(Any, console),
+        error_panel_fn=error_panel,
+        state_factory=ChatSessionState,
+        is_exit_command_fn=is_exit_command,
+    )
 
 
 async def _handle_gateway_slash_command(
@@ -776,403 +329,63 @@ async def _handle_gateway_slash_command(
 ) -> bool:
     """Handle gateway-mode slash commands. Returns False for unknown commands."""
 
-    if cmd == "/help":
-        console.print(render_help_table())
+    route_match = match_gateway_slash_route(cmd)
+    if route_match is None:
+        return False
+
+    route_name = route_match.name
+    parts = route_match.parts
+
+    if await handle_gateway_exact_route_command(route_name, state, client):
         return True
 
-    if parts := _slash_parts(cmd, "/new"):
-        title = parts[1].strip() if len(parts) > 1 else None
-        session_key = await client.create_session(model=state.model, display_name=title)
-        state.session_key = session_key
-        state.transcript.clear()
-        state.usage.reset()
-        label = f" ({title})" if title else ""
-        console.print(f"[green]Started new session{label}:[/green] {session_key}")
+    if await handle_gateway_session_route_command(route_name, cmd, parts, state, client):
         return True
 
-    if cmd in {"/status", "/session"}:
-        console.print(
-            f"[{ACCENT}]session[/] [dim]{state.session_key}[/dim]\n"
-            f"[{ACCENT}]model[/] [dim]{state.model or 'default'}[/dim]\n"
-            f"[{ACCENT}]permissions[/] [dim]{state.elevated or 'normal'}[/dim]"
-        )
+    if await handle_gateway_model_route_command(route_name, parts, state, client):
         return True
 
-    if parts := _slash_parts(cmd, "/sessions"):
-        limit = 10
-        if len(parts) > 1:
-            try:
-                limit = int(parts[1])
-            except ValueError:
-                console.print("[red]Usage: /sessions [limit][/red]")
-                return True
-        payload = await client.list_sessions(limit=limit)
-        _print_sessions_table(payload.get("sessions", []))
+    if await handle_gateway_utility_route_command(route_name, cmd, state, client):
         return True
 
-    if parts := _slash_parts(cmd, "/resume"):
-        if len(parts) == 1 or not parts[1].strip():
-            console.print("[red]Usage: /resume <id>[/red]")
-            return True
-        target = cmd.split(maxsplit=1)[1].strip()
-        payload = await client.resolve_session(target)
-        state.session_key = payload.get("session_key") or payload.get("key") or target
-        state.model = payload.get("model") or state.model
-        state.transcript.clear()
-        state.usage.reset()
-        console.print(f"[green]Resumed session:[/green] {state.session_key}")
+    if await handle_gateway_image_route_command(
+        route_name,
+        cmd,
+        parts,
+        state,
+        client=client,
+        elevated_state=elevated_state,
+        stream_response=_stream_response_gateway,
+        image_prompt_and_attachments=_image_prompt_and_attachments,
+    ):
         return True
 
-    if parts := _slash_parts(cmd, "/delete"):
-        if len(parts) == 1 or not parts[1].strip():
-            console.print("[red]Usage: /delete <id>[/red]")
-            return True
-        target = cmd.split(maxsplit=1)[1].strip()
-        resolved = await client.resolve_session(target)
-        session_key = resolved.get("session_key") or resolved.get("key") or target
-        payload = await client.delete_sessions([session_key])
-        errors = [str(item) for item in payload.get("errors") or []]
-        deleted = [str(item) for item in payload.get("deleted") or []]
-        if errors:
-            console.print(error_panel("\n".join(errors), title="Delete failed"))
-        elif deleted:
-            console.print(f"[yellow]Deleted session:[/yellow] {deleted[0]}")
-        else:
-            console.print(error_panel("No session was deleted.", title="Delete failed"))
+    if await handle_gateway_io_route_command(
+        route_name,
+        cmd,
+        parts,
+        state,
+        client=client,
+        elevated_state=elevated_state,
+        stream_response=_stream_response_gateway,
+        path_prompt_and_attachments=_path_prompt_and_attachments,
+        gateway_client_is_local=_gateway_client_is_local,
+        remote_gateway_message=_PATH_REMOTE_GATEWAY_MESSAGE,
+        async_file_prompt_and_attachments=_async_file_prompt_and_attachments,
+    ):
         return True
 
-    if cmd in {"/clear", "/reset"}:
-        await client.reset_session(state.session_key)
-        state.transcript.clear()
-        state.usage.reset()
-        console.print(f"[{ACCENT}]cleared[/] [dim]{state.session_key}[/dim]")
-        return True
-
-    if cmd == "/compact":
-        payload = await client.compact_session(state.session_key)
-        if payload.get("compacted"):
-            console.print(
-                f"[{ACCENT}]compacted[/] "
-                f"[dim]summary {payload.get('summary_len', 0)} chars[/dim]"
-            )
-        else:
-            console.print(
-                f"[{ACCENT}]compact skipped[/] "
-                "[dim]context already within budget[/dim]"
-            )
-        return True
-
-    if parts := _slash_parts(cmd, "/models"):
-        if len(parts) > 1:
-            console.print("[red]Usage: /models[/red]")
-            return True
-        models = await client.list_models()
-        _print_models_table(models)
-        return True
-
-    if parts := _slash_parts(cmd, "/model"):
-        if len(parts) == 1:
-            console.print(f"[dim]model={state.model or 'default'}[/dim]")
-        else:
-            new_model = parts[1].strip()
-            await client.patch_session(state.session_key, model=new_model)
-            state.model = new_model
-            console.print(f"[green]model:[/green] {new_model}")
-        return True
-
-    if cmd == "/cost":
-        console.print(state.usage.render())
-        return True
-
-    if cmd == "/usage":
-        payload = await client.usage_status()
-        console.print(
-            "[dim]aggregate usage: "
-            f"{payload.get('totalTokens', 0):,} tok · "
-            f"${float(payload.get('totalCostUsd', 0.0) or 0.0):.6f}[/dim]"
-        )
-        return True
-
-    if _slash_parts(cmd, "/tool-compress"):
-        await _handle_tool_compress_command(cmd, client=client)
-        return True
-
-    if _slash_parts(cmd, "/save"):
-        await _save_gateway_transcript_command(cmd, state, client)
-        return True
-
-    if parts := _slash_parts(cmd, "/image"):
-        if len(parts) == 1 or not parts[1].strip():
-            console.print("[red]Usage: /image <path> [prompt][/red]")
-            return True
-        try:
-            prompt, attachments = _image_prompt_and_attachments(cmd)
-        except ValueError as exc:
-            console.print(error_panel(str(exc)))
-            return True
-        result = await _stream_response_gateway(
-            client,
-            state.session_key,
-            prompt,
-            elevated_state,
-            attachments=attachments,
-        )
-        state.transcript.add("user", prompt)
-        state.transcript.add("assistant", result.text)
-        state.usage.add(result.usage)
-        return True
-
-    if parts := _slash_parts(cmd, "/path"):
-        if len(parts) == 1 or not parts[1].strip():
-            console.print("[red]Usage: /path <path> [prompt][/red]")
-            return True
-        if not _gateway_client_is_local(client):
-            console.print(error_panel(_PATH_REMOTE_GATEWAY_MESSAGE))
-            return True
-        try:
-            prompt, attachments = _path_prompt_and_attachments(cmd)
-        except ValueError as exc:
-            console.print(error_panel(str(exc)))
-            return True
-        result = await _stream_response_gateway(
-            client,
-            state.session_key,
-            prompt,
-            elevated_state,
-            attachments=attachments,
-        )
-        state.transcript.add("user", prompt)
-        state.transcript.add("assistant", result.text)
-        state.usage.add(result.usage)
-        return True
-
-    if parts := _slash_parts(cmd, "/file"):
-        if len(parts) == 1 or not parts[1].strip():
-            console.print("[red]Usage: /file <path> [prompt][/red]")
-            return True
-
-        async def _bridge_upload(path: Path, mime: str, name: str) -> str:
-            return await client.upload_file(path, mime, name)
-
-        try:
-            prompt, attachments = await _async_file_prompt_and_attachments(
-                cmd, upload_callable=_bridge_upload
-            )
-        except ValueError as exc:
-            console.print(error_panel(str(exc)))
-            return True
-        result = await _stream_response_gateway(
-            client,
-            state.session_key,
-            prompt,
-            elevated_state,
-            attachments=attachments,
-        )
-        state.transcript.add("user", prompt)
-        state.transcript.add("assistant", result.text)
-        state.usage.add(result.usage)
-        return True
-
-    if _slash_parts_any(cmd, "/permissions", "/elevated"):
-        await _handle_elevated_command(cmd, elevated_state, client)
-        state.elevated = elevated_state.get("mode")
-        return True
-
-    if cmd == "/forget" or cmd.startswith("/forget "):
-        await _handle_forget_command(cmd, client)
-        return True
-
-    if cmd == "/approvals" or cmd.startswith("/approvals "):
-        await _handle_approvals_command(cmd, client)
+    if await handle_gateway_control_route_command(
+        route_name,
+        cmd,
+        state,
+        elevated_state,
+        client=client,
+        forget_server_approvals=_forget_server_approvals,
+    ):
         return True
 
     return False
-
-
-async def _handle_tool_compress_command(
-    cmd: str,
-    *,
-    config: object | None = None,
-    client: object | None = None,
-) -> None:
-    parts = cmd.split()
-    arg = parts[1].lower() if len(parts) > 1 else "status"
-    aliases = {"on": "truncate", "trim": "truncate", "summary": "summarize"}
-    mode_arg = aliases.get(arg, arg)
-    if len(parts) > 2 or mode_arg not in {"off", "truncate", "summarize", "status"}:
-        console.print("[red]Usage: /tool-compress [off|truncate|summarize|status][/red]")
-        return
-
-    enabled_path = "agent_token_saving.tool_result_compression_enabled"
-    mode_path = "agent_token_saving.tool_result_compression_mode"
-    model_path = "agent_token_saving.tool_result_compression_summary_model"
-    if client is not None:
-        from opensquilla.cli.gateway_client import GatewayClient
-
-        assert isinstance(client, GatewayClient)
-        if mode_arg == "status":
-            mode = await client.get_config(mode_path)
-            enabled = bool(await client.get_config(enabled_path))
-            model = await client.get_config(model_path)
-            mode = mode if mode in {"off", "truncate", "summarize"} else None
-            resolved_mode = str(mode or ("truncate" if enabled else "off"))
-        else:
-            resolved_mode = mode_arg
-            await client.patch_config_safe(
-                {
-                    mode_path: resolved_mode,
-                    enabled_path: resolved_mode != "off",
-                }
-            )
-            model = await client.get_config(model_path) if resolved_mode == "summarize" else None
-    else:
-        cfg = getattr(config, "agent_token_saving", None)
-        if cfg is None:
-            console.print("[yellow]Tool result compression config is unavailable.[/yellow]")
-            return
-        if mode_arg == "status":
-            mode = getattr(cfg, "tool_result_compression_mode", None)
-            enabled = bool(getattr(cfg, "tool_result_compression_enabled", True))
-            model = getattr(cfg, "tool_result_compression_summary_model", None)
-            if mode in {"off", "truncate", "summarize"}:
-                resolved_mode = str(mode)
-            else:
-                resolved_mode = "truncate" if enabled else "off"
-        else:
-            resolved_mode = mode_arg
-            setattr(cfg, "tool_result_compression_mode", resolved_mode)
-            setattr(cfg, "tool_result_compression_enabled", resolved_mode != "off")
-            model = getattr(cfg, "tool_result_compression_summary_model", None)
-
-    model_suffix = f" [dim]model={model}[/dim]" if resolved_mode == "summarize" and model else ""
-    console.print(f"[cyan]tool result compression:[/cyan] {resolved_mode.upper()}{model_suffix}")
-
-
-def _print_sessions_table(rows: list[dict[str, Any]]) -> None:
-    table = Table(title="Sessions", show_header=True, header_style="bold cyan")
-    table.add_column("Key")
-    table.add_column("Status")
-    table.add_column("Model")
-    table.add_column("Messages", justify="right")
-    for row in rows:
-        table.add_row(
-            str(row.get("key") or row.get("session_key") or ""),
-            str(row.get("status") or ""),
-            str(row.get("model") or ""),
-            str(row.get("message_count") or row.get("entry_count") or 0),
-        )
-    console.print(table)
-
-
-def _print_models_table(rows: list[dict[str, Any]]) -> None:
-    table = Table(title="Models", show_header=True, header_style="bold cyan")
-    table.add_column("ID")
-    table.add_column("Provider")
-    table.add_column("Context", justify="right")
-    table.add_column("Capabilities")
-    for row in rows:
-        table.add_row(
-            str(row.get("id") or ""),
-            str(row.get("provider") or ""),
-            str(row.get("contextWindow") or ""),
-            ", ".join(str(v) for v in row.get("capabilities") or []),
-        )
-    console.print(table)
-
-
-def _save_transcript_command(cmd: str, state: ChatSessionState) -> None:
-    parts = cmd.split(maxsplit=1)
-    if len(parts) > 1:
-        target = Path(parts[1]).expanduser()
-    else:
-        suffix = state.session_key.replace(":", "-")
-        target = Path(f"opensquilla-chat-{suffix}.md")
-    target.write_text(state.transcript.to_markdown(), encoding="utf-8")
-    console.print(f"[green]Saved transcript:[/green] {target}")
-
-
-async def _save_gateway_transcript_command(
-    cmd: str, state: ChatSessionState, client: object
-) -> None:
-    from opensquilla.cli.gateway_client import GatewayClient
-
-    assert isinstance(client, GatewayClient)
-    parts = cmd.split(maxsplit=1)
-    if len(parts) > 1:
-        target = Path(parts[1]).expanduser()
-    else:
-        suffix = state.session_key.replace(":", "-")
-        target = Path(f"opensquilla-chat-{suffix}.md")
-
-    history = await client.session_history(state.session_key, limit=1000)
-    messages = history.get("messages") or []
-    markdown = messages_to_markdown(messages) if isinstance(messages, list) else ""
-    if not markdown.strip():
-        markdown = state.transcript.to_markdown()
-    target.write_text(markdown, encoding="utf-8")
-    console.print(f"[green]Saved transcript:[/green] {target}")
-
-
-def _image_prompt_from_command(command: str) -> str:
-    return _cli_attachments.image_prompt_from_command(command)
-
-
-def _image_prompt_and_attachments(command: str) -> tuple[str, list[dict[str, str]]]:
-    prompt, attachments = _cli_attachments.image_prompt_and_attachments(command)
-    if attachments:
-        name = attachments[0].get("name") or "image"
-        data = attachments[0].get("data") or ""
-        console.print(f"[dim]Sending image: {name} ({len(data) // 1024}KB base64)[/dim]")
-    return prompt, attachments
-
-
-def _gateway_client_is_local(client: object) -> bool:
-    local_attr = getattr(client, "is_local_gateway", None)
-    if callable(local_attr):
-        try:
-            return bool(local_attr())
-        except TypeError:
-            return False
-    if local_attr is not None:
-        return bool(local_attr)
-
-    try:
-        from opensquilla.cli.gateway_client import gateway_base_is_local
-    except Exception:  # pragma: no cover - defensive import fallback
-        return False
-    return gateway_base_is_local(getattr(client, "_http_base", None))
-
-
-def _parse_path_command(command: str) -> tuple[Path, str]:
-    return _cli_attachments.parse_path_command(command)
-
-
-def _path_strategy_hint(path: Path) -> str:
-    return _cli_attachments.path_strategy_hint(path)
-
-
-def _path_prompt_and_attachments(command: str) -> tuple[str, list[dict[str, Any]]]:
-    return _cli_attachments.path_prompt_and_attachments(command)
-
-
-def _file_prompt_and_attachments(
-    command: str,
-    *,
-    upload_callable: Any | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
-    return _cli_attachments.file_prompt_and_attachments(
-        command, upload_callable=upload_callable
-    )
-
-
-async def _async_file_prompt_and_attachments(
-    command: str,
-    *,
-    upload_callable: Any | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
-    return await _cli_attachments.async_file_prompt_and_attachments(
-        command, upload_callable=upload_callable
-    )
 
 
 async def _forget_server_approvals(client: object | None, target: str | None = None) -> bool:
@@ -1201,7 +414,7 @@ async def _forget_server_approvals(client: object | None, target: str | None = N
             )
             return False
 
-    from opensquilla.sandbox.intent_cache import get_intent_cache
+    from opensquilla.application.intent_cache import get_intent_cache
 
     cache = get_intent_cache()
     if target:
@@ -1213,86 +426,17 @@ async def _forget_server_approvals(client: object | None, target: str | None = N
 
 
 async def _handle_approvals_command(cmd: str, client: object | None = None) -> None:
-    """Diagnostic view / reset for the approval queue.
-
-    * ``/approvals``        — show the current mode and cached intent entries.
-    * ``/approvals reset``  — reset queue mode to ``prompt`` + clear cache.
-    """
-    parts = cmd.split()
-    arg = parts[1].lower() if len(parts) > 1 else "status"
-
-    if client is None:
-        from opensquilla.gateway.approval_queue import get_approval_queue
-        from opensquilla.sandbox.intent_cache import get_intent_cache
-
-        queue = get_approval_queue()
-        cache = get_intent_cache()
-        if arg == "reset":
-            queue.set_settings(mode="prompt")
-            cache.clear()
-            console.print("[cyan]Approval mode reset to prompt; cache cleared.[/cyan]")
-            return
-        entries = [
-            f"  [dim]{scope}[/dim] {k}:{t}"
-            for (k, t), (_exp, scope) in cache._entries.items()  # noqa: SLF001
-        ]
-        console.print(f"[cyan]mode:[/cyan] {queue.get_settings().mode}")
-        console.print(f"[cyan]cached intents ({len(entries)}):[/cyan]")
-        for line in entries or ["  [dim](none)[/dim]"]:
-            console.print(line)
-        return
-
-    from opensquilla.cli.gateway_client import GatewayClient
-
-    assert isinstance(client, GatewayClient)
-
-    if arg == "reset":
-        try:
-            await client.set_approval_mode("prompt")
-            await client.forget_approvals()
-            console.print("[cyan]Approval mode reset to prompt; server cache cleared.[/cyan]")
-        except Exception as exc:
-            console.print(f"[red]Failed to reset approvals:[/red] {type(exc).__name__}: {exc}")
-            console.print("[red]Restart the gateway if this is an older build.[/red]")
-        return
-
-    try:
-        snap = await client.approvals_snapshot()
-    except Exception as exc:
-        console.print(f"[red]Failed to query approvals:[/red] {type(exc).__name__}: {exc}")
-        console.print("[red]Older gateway? Restart it.[/red]")
-        return
-    console.print(f"[cyan]mode:[/cyan] {snap.get('mode')}")
-    raw_entries = snap.get("intent_cache_entries")
-    approval_entries = (
-        cast(list[dict[str, Any]], raw_entries) if isinstance(raw_entries, list) else []
-    )
-    console.print(f"[cyan]cached intents ({len(approval_entries)}):[/cyan]")
-    if not approval_entries:
-        console.print("  [dim](none)[/dim]")
-    for e in approval_entries:
-        console.print(f"  [dim]{e.get('scope')}[/dim] {e.get('kind')}:{e.get('target')}")
+    """Compatibility wrapper for approval queue diagnostics."""
+    await handle_gateway_approvals_command(cmd, client)
 
 
 async def _handle_forget_command(cmd: str, client: object | None = None) -> None:
-    """Clear cached approvals. ``/forget`` wipes all; ``/forget <path>`` wipes one.
-
-    In gateway mode the RPC ``exec.approval.forget`` reaches the server's
-    intent cache. In standalone mode the in-process singleton is used.
-    """
-    parts = cmd.split(maxsplit=1)
-    if len(parts) < 2:
-        if await _forget_server_approvals(client):
-            console.print(
-                "[cyan]All cached approvals cleared.[/cyan] Future destructive "
-                "ops will prompt again."
-            )
-        return
-    target = parts[1].strip()
-    if await _forget_server_approvals(client, target):
-        console.print(
-            f"[cyan]Cached approval for[/cyan] {target} [cyan]cleared[/cyan] (if one existed)."
-        )
+    """Compatibility wrapper for approval-cache clearing."""
+    await handle_gateway_forget_command(
+        cmd,
+        client=client,
+        forget_server_approvals=_forget_server_approvals,
+    )
 
 
 async def _handle_elevated_command(
@@ -1300,79 +444,14 @@ async def _handle_elevated_command(
     state: dict[str, str | None],
     client: object | None = None,
 ) -> None:
-    """Interpret ``/permissions`` / ``/elevated`` and mutate state in place.
+    """Compatibility wrapper for the shared permissions interpreter."""
 
-    Any mode change is treated as an explicit user action (top priority) and
-    wipes the intent-cache so earlier ``allow-always`` grants don't leak into
-    the new mode. ``status`` is pure-read and leaves state untouched.
-
-    Modes:
-
-    * ``off``     — default sandboxed execution (approval required)
-    * ``on``      — exec on host, approvals still required
-    * ``bypass``  — exec on host, approvals auto-granted, sensitive paths still blocked
-    * ``full``    — exec on host, approvals auto-granted, sensitive paths bypassed
-    """
-    parts = cmd.split()
-    arg = parts[1].lower() if len(parts) > 1 else "status"
-    if arg == "status":
-        current = state["mode"] or "off (sandboxed)"
-        console.print(f"[cyan]permissions:[/cyan] {current}")
-        return
-
-    known = {"off": None, "on": "on", "bypass": "bypass", "full": "full"}
-    if arg not in known:
-        console.print(f"[red]Unknown permissions mode:[/red] {arg}")
-        console.print("Usage: /permissions on | off | bypass | full | status")
-        return
-
-    state["mode"] = known[arg]
-    # Top-priority: explicit mode switch resets the approval trust state.
-    cleared = await _forget_server_approvals(client)
-    # `off` is the "go back to cautious" transition — also drop any stale
-    # queue-level auto-approve setting the operator might have left behind.
-    queue_mode_reset_warning = ""
-    if arg == "off":
-        if client is not None:
-            from opensquilla.cli.gateway_client import GatewayClient
-
-            assert isinstance(client, GatewayClient)
-            try:
-                await client.set_approval_mode("prompt")
-            except Exception as exc:
-                queue_mode_reset_warning = (
-                    f" [bold red]WARNING: queue mode not reset "
-                    f"({type(exc).__name__}: {exc}).[/bold red]"
-                )
-        else:
-            from opensquilla.gateway.approval_queue import get_approval_queue
-
-            get_approval_queue().set_settings(mode="prompt")
-    revoked_suffix = (
-        "Cached approvals revoked."
-        if cleared
-        else "[bold red]WARNING: cached approvals NOT revoked (see error above).[/bold red]"
+    await handle_permissions_command(
+        cmd,
+        state,
+        client=client,
+        forget_server_approvals=_forget_server_approvals,
     )
-
-    if arg == "off":
-        console.print(
-            f"[cyan]permissions: off[/cyan] — exec runs inside the sandbox. "
-            f"Queue mode reset to prompt. {revoked_suffix}{queue_mode_reset_warning}"
-        )
-    elif arg == "on":
-        console.print(
-            f"[yellow]permissions: on[/yellow] — exec on host, approvals required. {revoked_suffix}"
-        )
-    elif arg == "bypass":
-        console.print(
-            f"[red]permissions: bypass[/red] — exec on host, approvals auto-granted. "
-            f"Sensitive paths (~/.ssh, /etc, ...) still hard-blocked. {revoked_suffix}"
-        )
-    else:  # full
-        console.print(
-            f"[red]permissions: full[/red] — exec on host, approvals skipped, "
-            f"sensitive paths bypassed. Trusted operators only. {revoked_suffix}"
-        )
 
 
 def _render_gateway_task_group_status(
@@ -1380,49 +459,19 @@ def _render_gateway_task_group_status(
     event: dict[str, Any],
     renderer: StreamingRenderer,
 ) -> None:
-    phase = event_name.rsplit(".", 1)[-1]
-    style = "dim"
-    if phase == "waiting":
-        pending = event.get("pending_count")
-        suffix = f" ({pending} pending)" if isinstance(pending, int) and pending >= 0 else ""
-        message = f"subagents waiting{suffix}"
-    elif phase == "synthesizing":
-        child_count = event.get("child_count")
-        suffix = f" from {child_count} children" if isinstance(child_count, int) else ""
-        message = f"subagents complete; synthesizing final answer{suffix}"
-    elif phase == "done":
-        delivery_status = event.get("delivery_status")
-        suffix = f" (delivery: {delivery_status})" if isinstance(delivery_status, str) else ""
-        message = f"background synthesis complete{suffix}"
-    elif phase == "failed":
-        error_message = event.get("error_message")
-        suffix = f": {error_message}" if isinstance(error_message, str) and error_message else ""
-        message = f"background synthesis failed{suffix}"
-        style = "yellow"
-    else:
-        return
-    status = getattr(renderer, "status", None)
-    if callable(status):
-        status(message, style=style)
-    else:
-        console.print(f"[{style}]{message}[/]")
+    chat_stream_presenters.render_gateway_task_group_status(event_name, event, renderer)
 
 
 def _artifact_event_payload(event: Any) -> dict[str, Any]:
-    from opensquilla.artifacts import artifact_payload
-
-    if isinstance(event, dict):
-        return artifact_payload(
-            {key: value for key, value in event.items() if key not in {"event", "payload"}}
-        )
-
-    return artifact_payload(event)
+    return chat_stream_presenters.artifact_event_payload(event)
 
 
 def _artifact_status_line(artifact: dict[str, Any]) -> str:
-    name = artifact.get("name") if isinstance(artifact.get("name"), str) else "artifact"
-    target = artifact.get("download_url") if isinstance(artifact.get("download_url"), str) else ""
-    return f"Generated file: {name} -> {target or artifact.get('id', '')}"
+    return chat_stream_presenters.artifact_status_line(artifact)
+
+
+def _render_artifact_status(artifact: dict[str, Any], renderer: StreamingRenderer) -> None:
+    chat_stream_presenters.render_artifact_status(artifact, renderer)
 
 
 async def _stream_response_gateway(
@@ -1458,11 +507,7 @@ async def _stream_response_gateway(
                 elif event_name == "session.event.artifact":
                     artifact = _artifact_event_payload(event)
                     artifacts.append(artifact)
-                    status = getattr(renderer, "status", None)
-                    if callable(status):
-                        status(_artifact_status_line(artifact))
-                    else:
-                        console.print(_artifact_status_line(artifact))
+                    _render_artifact_status(artifact, renderer)
                 elif event_name.startswith("session.event.task_group."):
                     _render_gateway_task_group_status(event_name, event, renderer)
                 elif event_name == "session.event.error":
@@ -1488,25 +533,6 @@ async def _stream_response_gateway(
         cancelled=cancelled,
         artifacts=artifacts,
     )
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-
-def _local_approval_resolver() -> Callable[..., Awaitable[None]]:
-    """Return a resolver that talks directly to the in-process approval queue.
-
-    Used in --standalone mode where there is no gateway RPC to call.
-    """
-
-    async def _resolve(approval_id: str, approved: bool, *, allow_always: bool = False) -> None:
-        from opensquilla.gateway.approval_queue import get_approval_queue
-
-        get_approval_queue().resolve(approval_id, approved, allow_always=allow_always)
-
-    return _resolve
 
 
 async def _stream_response_turnrunner(
@@ -1566,11 +592,7 @@ async def _stream_response_turnrunner(
                 elif isinstance(event, ArtifactEvent):
                     artifact = _artifact_event_payload(event)
                     artifacts.append(artifact)
-                    status = getattr(renderer, "status", None)
-                    if callable(status):
-                        status(_artifact_status_line(artifact))
-                    else:
-                        console.print(_artifact_status_line(artifact))
+                    _render_artifact_status(artifact, renderer)
                 elif isinstance(event, WarningEvent):
                     console.print(f"[yellow]{event.message}[/yellow]")
                 elif isinstance(event, ErrorEvent):

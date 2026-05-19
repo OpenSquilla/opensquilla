@@ -27,6 +27,18 @@ from opensquilla.gateway.attachment_ingest import (
     MAX_TOTAL_ATTACHMENT_BYTES,
     TEXT_ATTACHMENT_BYTES,
 )
+from opensquilla.gateway.rpc_session_send_inputs import (
+    MAX_ATTACHMENT_BYTES as _MAX_ATTACHMENT_BYTES,
+)
+from opensquilla.gateway.rpc_session_send_inputs import (
+    MAX_STAGED_PDF_BYTES as _MAX_STAGED_PDF_BYTES,
+)
+from opensquilla.gateway.rpc_session_send_inputs import (
+    resolve_session_attachments as _resolve_attachments,
+)
+from opensquilla.gateway.rpc_session_send_inputs import (
+    validate_session_attachments,
+)
 from opensquilla.gateway.uploads import (
     AttachmentLostInRestartError,
     AttachmentNotFoundError,
@@ -34,6 +46,11 @@ from opensquilla.gateway.uploads import (
     UploadStore,
     UploadUnsupportedMimeError,
 )
+
+
+def _validate_attachments(raw_attachments: Any) -> list[dict[str, Any]]:
+    return validate_session_attachments(raw_attachments, logger=None)
+
 
 # ---------------------------------------------------------------------------
 # Direct unit tests against UploadStore (no network).
@@ -148,10 +165,9 @@ def test_failed_upload_does_not_leak_uuid(store: UploadStore) -> None:
 def test_uuid_evicted_after_send_success(store: UploadStore) -> None:
     """The store's evict() drops the entry; subsequent get raises NotFound.
 
-    The explicit eviction hook lives in rpc_sessions._handle_sessions_send:
-    after start_turn_via_runtime accepts the turn, every consumed uuid is
-    evict()ed. This unit test locks the store contract that backs the
-    integration.
+    The explicit eviction hook lives in rpc_session_send.handle_sessions_send:
+    after the turn is accepted, every consumed uuid is evict()ed. This unit
+    test locks the store contract that backs the integration.
     """
 
     file_uuid = asyncio.run(store.put("r.pdf", "application/pdf", b"%PDF-1.4\n"))
@@ -198,11 +214,6 @@ def test_file_uuid_resolved_via_store_returns_material_ref(
     material ref; it must not carry the upload uuid or long-lived base64 data.
     """
 
-    from opensquilla.gateway.rpc_sessions import (
-        _resolve_attachments,
-        _validate_attachments,
-    )
-
     pdf = b"%PDF-1.4\nbody\n"
     file_uuid = asyncio.run(store.put("r.pdf", "application/pdf", pdf))
 
@@ -235,11 +246,6 @@ def test_file_uuid_resolved_via_store_returns_material_ref(
 
 
 def test_file_uuid_resolution_requires_material_target(store: UploadStore) -> None:
-    from opensquilla.gateway.rpc_sessions import (
-        _resolve_attachments,
-        _validate_attachments,
-    )
-
     file_uuid = asyncio.run(store.put("r.pdf", "application/pdf", b"%PDF-1.4\nbody\n"))
     validated = _validate_attachments(
         [{"file_uuid": file_uuid, "mime": "application/pdf", "name": "r.pdf"}]
@@ -253,11 +259,6 @@ def test_file_uuid_resolution_revalidates_mime_from_staged_bytes(
     store: UploadStore,
     tmp_path: Path,
 ) -> None:
-    from opensquilla.gateway.rpc_sessions import (
-        _resolve_attachments,
-        _validate_attachments,
-    )
-
     pdf = b"%PDF-1.4\nbody\n"
     file_uuid = asyncio.run(store.put("misnamed.txt", "text/plain", pdf))
 
@@ -284,13 +285,6 @@ def test_file_uuid_resolution_allows_large_staged_pdf(
     store: UploadStore,
     tmp_path: Path,
 ) -> None:
-    from opensquilla.gateway.rpc_sessions import (
-        _MAX_ATTACHMENT_BYTES,
-        _MAX_STAGED_PDF_BYTES,
-        _resolve_attachments,
-        _validate_attachments,
-    )
-
     pdf = b"%PDF-1.4\n" + b"a" * (_MAX_ATTACHMENT_BYTES + 1)
     assert len(pdf) < _MAX_STAGED_PDF_BYTES
     file_uuid = asyncio.run(store.put("large.pdf", "application/pdf", pdf))
@@ -316,11 +310,6 @@ def test_file_uuid_resolution_allows_large_staged_pdf(
 
 
 def test_file_uuid_resolution_rejects_large_staged_image() -> None:
-    from opensquilla.gateway.rpc_sessions import (
-        _resolve_attachments,
-        _validate_attachments,
-    )
-
     payload = _exact_png(IMAGE_ATTACHMENT_BYTES + 1)
     store = _FakeUploadStore(
         {
@@ -351,11 +340,6 @@ def test_file_uuid_resolution_rejects_large_staged_image() -> None:
 
 
 def test_file_uuid_resolution_rejects_large_staged_text_family() -> None:
-    from opensquilla.gateway.rpc_sessions import (
-        _resolve_attachments,
-        _validate_attachments,
-    )
-
     payload = b"a" * (TEXT_ATTACHMENT_BYTES + 1)
     store = _FakeUploadStore(
         {
@@ -386,11 +370,6 @@ def test_file_uuid_resolution_rejects_large_staged_text_family() -> None:
 
 
 def test_file_uuid_resolution_rejects_aggregate_raw_bytes_above_cap(tmp_path: Path) -> None:
-    from opensquilla.gateway.rpc_sessions import (
-        _resolve_attachments,
-        _validate_attachments,
-    )
-
     one_pdf = _exact_pdf(MAX_TOTAL_ATTACHMENT_BYTES // 3 + 1)
     assert len(one_pdf) < MAX_STAGED_PDF_BYTES
     entries = {

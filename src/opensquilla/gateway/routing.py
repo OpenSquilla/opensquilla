@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 from opensquilla.channels.types import IncomingMessage
+from opensquilla.runtime import routing as runtime_routing
 from opensquilla.session.keys import normalize_agent_id, parse_agent_id
 from opensquilla.tools.policy import apply_tool_policy_layer
 from opensquilla.tools.types import (
@@ -88,9 +89,65 @@ def _agent_id(agent_id: str | None, session_key: str) -> str:
     return normalize_agent_id(agent_id) if agent_id else parse_agent_id(session_key)
 
 
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def _thread_id(metadata: dict[str, Any]) -> str | None:
     thread = metadata.get("thread_ts") or metadata.get("thread_id")
     return thread if isinstance(thread, str) and thread else None
+
+
+def _reply_target_from_route(target: object | None) -> ReplyTarget | None:
+    neutral_target = runtime_routing.reply_target_from_route(target)
+    if neutral_target is None:
+        return None
+    return ReplyTarget(
+        kind=neutral_target.kind,
+        channel_name=neutral_target.channel_name,
+        channel_type=neutral_target.channel_type,
+        to=neutral_target.to,
+        account_id=neutral_target.account_id,
+        thread_id=neutral_target.thread_id,
+        metadata=dict(neutral_target.metadata),
+    )
+
+
+def normalize_route_envelope(envelope: object) -> RouteEnvelope:
+    """Normalize a structural route-like object into the gateway RouteEnvelope."""
+    if isinstance(envelope, RouteEnvelope):
+        return envelope
+    metadata = dict(getattr(envelope, "metadata", {}) or {})
+    delivery_context = dict(getattr(envelope, "delivery_context", {}) or {})
+    reply_target = _reply_target_from_route(getattr(envelope, "reply_target", None))
+    source_kind_value = runtime_routing.source_kind_value(
+        getattr(envelope, "source_kind", "system")
+    )
+    source_kind = SourceKind(source_kind_value)
+    source_name = _str_or_none(getattr(envelope, "source_name", None)) or source_kind.value
+    interaction_mode = InteractionMode(
+        runtime_routing.interaction_mode_value(
+            getattr(envelope, "interaction_mode", InteractionMode.INTERACTIVE)
+        )
+    )
+    return RouteEnvelope(
+        source_kind=source_kind,
+        source_name=source_name,
+        agent_id=str(getattr(envelope, "agent_id", "main")),
+        session_key=str(getattr(envelope, "session_key", "")),
+        session_id=_str_or_none(getattr(envelope, "session_id", None)),
+        sender_id=_str_or_none(getattr(envelope, "sender_id", None)),
+        account_id=_str_or_none(getattr(envelope, "account_id", None)),
+        channel_type=_str_or_none(getattr(envelope, "channel_type", None)),
+        channel_name=_str_or_none(getattr(envelope, "channel_name", None)),
+        channel_id=_str_or_none(getattr(envelope, "channel_id", None)),
+        thread_id=_str_or_none(getattr(envelope, "thread_id", None)),
+        reply_target=reply_target,
+        input_provenance=dict(getattr(envelope, "input_provenance", {}) or {}),
+        delivery_context=delivery_context,
+        metadata=metadata,
+        interaction_mode=interaction_mode,
+    )
 
 
 def build_channel_route_envelope(
@@ -317,9 +374,10 @@ def build_subagent_route_envelope(
     )
 
 
-def delivery_fields_from_envelope(envelope: RouteEnvelope) -> dict[str, Any]:
+def delivery_fields_from_envelope(envelope: RouteEnvelope | object) -> dict[str, Any]:
     """Translate a channel-capable route into SessionNode delivery fields."""
-    target = envelope.reply_target
+    normalized = normalize_route_envelope(envelope)
+    target = normalized.reply_target
     if target is None or target.kind != "channel":
         return {}
     return {
@@ -327,18 +385,19 @@ def delivery_fields_from_envelope(envelope: RouteEnvelope) -> dict[str, Any]:
         "last_to": target.to,
         "last_account_id": target.account_id,
         "last_thread_id": target.thread_id,
-        "delivery_context": dict(envelope.delivery_context),
+        "delivery_context": dict(normalized.delivery_context),
     }
 
 
 def tool_context_from_envelope(
-    envelope: RouteEnvelope,
+    envelope: RouteEnvelope | object,
     *,
     is_owner: bool = False,
     workspace_dir: str | None = None,
     workspace_strict: bool = False,
 ) -> ToolContext:
     """Build the runtime ToolContext from the canonical route envelope."""
+    envelope = normalize_route_envelope(envelope)
     caller_kind = _caller_kind(envelope.source_kind)
     allowed_tools: set[str] | None = None
     denied_tools: set[str] = set()
@@ -381,6 +440,66 @@ def tool_context_from_envelope(
     return ctx
 
 
+def _workspace_settings(agent_id: str, config: object | None) -> tuple[str, bool]:
+    from opensquilla.agents.scope import resolve_agent_workspace_dir
+
+    workspace_dir = resolve_agent_workspace_dir(agent_id, config)
+    workspace_strict = getattr(config, "workspace_strict", None)
+    if not isinstance(workspace_strict, bool):
+        workspace_strict = bool(workspace_dir)
+    return str(workspace_dir), workspace_strict
+
+
+def _is_channel_admin_sender(config: object | None, envelope: RouteEnvelope) -> bool:
+    admin_senders = getattr(config, "channel_admin_senders", None)
+    if not isinstance(admin_senders, dict):
+        return False
+
+    source_name = envelope.source_name
+    sender_id = envelope.sender_id
+    if not isinstance(source_name, str) or not source_name:
+        return False
+    if not isinstance(sender_id, str) or not sender_id:
+        return False
+
+    configured = admin_senders.get(source_name)
+    if isinstance(configured, str):
+        return sender_id == configured
+    if not isinstance(configured, list | tuple | set | frozenset):
+        return False
+    return sender_id in {str(item) for item in configured}
+
+
+def _default_route_owner(envelope: RouteEnvelope, config: object | None) -> bool:
+    principal_is_owner = envelope.metadata.get("principal_is_owner")
+    if isinstance(principal_is_owner, bool):
+        return principal_is_owner
+    if envelope.source_kind is SourceKind.CHANNEL:
+        return _is_channel_admin_sender(config, envelope)
+    return envelope.source_kind is SourceKind.CLI
+
+
+def tool_context_from_route_envelope(
+    envelope: RouteEnvelope | object,
+    config: object | None,
+    *,
+    is_owner: bool | None = None,
+    task_id: str | None = None,
+) -> ToolContext:
+    """Build turn-runtime ToolContext from a route and gateway configuration."""
+    normalized = normalize_route_envelope(envelope)
+    workspace_dir, workspace_strict = _workspace_settings(normalized.agent_id, config)
+    ctx = tool_context_from_envelope(
+        normalized,
+        is_owner=_default_route_owner(normalized, config) if is_owner is None else is_owner,
+        workspace_dir=workspace_dir,
+        workspace_strict=workspace_strict,
+    )
+    if task_id is not None:
+        ctx.task_id = task_id
+    return ctx
+
+
 def _interaction_mode(value: InteractionMode | str) -> InteractionMode:
     if isinstance(value, InteractionMode):
         return value
@@ -388,16 +507,18 @@ def _interaction_mode(value: InteractionMode | str) -> InteractionMode:
 
 
 def _caller_kind(source_kind: SourceKind) -> CallerKind:
-    match source_kind:
-        case SourceKind.WEB:
+    source_value = getattr(source_kind, "value", source_kind)
+    match str(source_value):
+        case SourceKind.WEB.value:
             return CallerKind.WEB
-        case SourceKind.CLI:
+        case SourceKind.CLI.value:
             return CallerKind.CLI
-        case SourceKind.CHANNEL:
+        case SourceKind.CHANNEL.value:
             return CallerKind.CHANNEL
-        case SourceKind.CRON:
+        case SourceKind.CRON.value:
             return CallerKind.CRON
-        case SourceKind.SUBAGENT:
+        case SourceKind.SUBAGENT.value:
             return CallerKind.SUBAGENT
-        case SourceKind.SYSTEM:
+        case SourceKind.SYSTEM.value:
             return CallerKind.AGENT
+    raise ValueError(f"Unsupported route source kind: {source_kind!r}")

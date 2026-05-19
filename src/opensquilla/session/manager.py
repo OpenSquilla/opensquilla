@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from opensquilla.engine.steps.inject_time_prefix import stamp as _stamp_time_prefix
 from opensquilla.paths import default_opensquilla_home
 from opensquilla.session.compaction import (
     CompactionConfig,
@@ -29,8 +28,12 @@ from opensquilla.session.models import (
     SessionSummary,
     TranscriptEntry,
 )
+from opensquilla.session.repository import SessionPersistenceRepository
 from opensquilla.session.storage import SessionStorage
+from opensquilla.session.time_prefix import stamp as _stamp_time_prefix
 from opensquilla.session.tokenizer import estimate_tokens
+
+RuntimeStateEvictor = Callable[[str], None]
 
 
 def _validate_iana_name(name: str) -> str | None:
@@ -113,15 +116,23 @@ class SessionManager:
         time_prefix_tz: str | None = None,
         agent_registry: Any = None,
         task_runtime: Any = None,
+        persistence_repository: SessionPersistenceRepository | None = None,
+        runtime_state_evictors: list[RuntimeStateEvictor]
+        | tuple[RuntimeStateEvictor, ...]
+        | None = None,
     ) -> None:
         self._storage = storage
+        self._repository = persistence_repository or SessionPersistenceRepository(storage)
         self._memory_sync_notify = memory_sync_notify
         self._inject_time_prefix = inject_time_prefix
         self._time_prefix_tz = time_prefix_tz
         self._agent_registry = agent_registry
         self._task_runtime = task_runtime
-        # In-process epoch cache so _emit_to_subscribers can
-        # read the current epoch without a DB round-trip on every event.
+        self._runtime_state_evictors: list[RuntimeStateEvictor] = list(
+            runtime_state_evictors or ()
+        )
+        # In-process epoch cache so session event delivery can avoid a
+        # DB round-trip on every event.
         # Invalidated (updated) whenever increment_epoch commits a new value.
         self._epoch_cache: dict[str, int] = {}
 
@@ -141,6 +152,14 @@ class SessionManager:
     def attach_task_runtime(self, task_runtime: Any) -> None:
         """Attach the TaskRuntime so kill_session can cancel running children."""
         self._task_runtime = task_runtime
+
+    def add_runtime_state_evictor(self, evictor: RuntimeStateEvictor) -> None:
+        """Register a process-local cleanup hook for terminal sessions."""
+        if not any(
+            existing is evictor or existing == evictor
+            for existing in self._runtime_state_evictors
+        ):
+            self._runtime_state_evictors.append(evictor)
 
     def _resolve_time_prefix_tz(self) -> str:
         return self._time_prefix_tz or _resolve_local_tz_name()
@@ -176,7 +195,7 @@ class SessionManager:
         """Create a new session entry. Raises ValueError if key already exists."""
         session_key = canonicalize_session_key(session_key)
         agent_id = normalize_agent_id(agent_id)
-        existing = await self._storage.get_session(session_key)
+        existing = await self._repository.get_session(session_key)
         if existing is not None:
             raise ValueError(f"Session already exists: {session_key}")
 
@@ -191,7 +210,7 @@ class SessionManager:
             status=SessionStatus.RUNNING,
             **kwargs,
         )
-        await self._storage.upsert_session(node)
+        await self._repository.save_session(node)
         return node
 
     async def get_or_create(
@@ -203,7 +222,7 @@ class SessionManager:
         """Return (session, created). created=True if a new session was made."""
         session_key = canonicalize_session_key(session_key)
         agent_id = normalize_agent_id(agent_id)
-        existing = await self._storage.get_session(session_key)
+        existing = await self._repository.get_session(session_key)
         if existing is not None:
             return existing, False
         node = await self.create(session_key, agent_id=agent_id, **kwargs)
@@ -213,7 +232,7 @@ class SessionManager:
         """Return the session node for ``session_key`` without mutating it."""
 
         session_key = canonicalize_session_key(session_key)
-        return await self._storage.get_session(session_key)
+        return await self._repository.get_session(session_key)
 
     async def get_agent_config(self, agent_id: str) -> dict[str, Any] | None:
         """Return the registry entry for ``agent_id``, or None when unavailable.
@@ -251,7 +270,7 @@ class SessionManager:
         """Return JSON-serializable session rows for tool/RPC consumers."""
         if agent_id is not None:
             agent_id = normalize_agent_id(agent_id)
-        rows = await self._storage.list_sessions(
+        rows = await self._repository.list_sessions(
             agent_id=agent_id,
             status=status,
             limit=limit,
@@ -308,7 +327,7 @@ class SessionManager:
         Children are killed first so the parent's KILLED status persists.
         """
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
 
         if node is not None and await self._cascade_on_kill(node):
             await self._cascade_kill_children(session_key)
@@ -332,7 +351,7 @@ class SessionManager:
         page_size = 100
         while True:
             try:
-                batch = await self._storage.list_sessions(
+                batch = await self._repository.list_sessions(
                     status=str(SessionStatus.RUNNING),
                     spawned_by=parent_session_key,
                     limit=page_size,
@@ -400,7 +419,7 @@ class SessionManager:
         session_key = canonicalize_session_key(session_key)
         agent_id = normalize_agent_id(agent_id)
         resolved = SessionIntent(intent)
-        existing = await self._storage.get_session(session_key)
+        existing = await self._repository.get_session(session_key)
         if resolved is SessionIntent.NEW_CHAT and existing is not None:
             raise ValueError("session_key conflict")
         if existing is None:
@@ -410,14 +429,14 @@ class SessionManager:
             node = await self._rotate_session_id(existing)
             return node, True
         existing.updated_at = _now_ms()
-        await self._storage.upsert_session(existing)
+        await self._repository.save_session(existing)
         return existing, False
 
     async def _rotate_session_id(self, node: SessionNode) -> SessionNode:
         old_session_id = node.session_id
         await self._archive_session_identity(node)
-        await self._storage.delete_transcript(old_session_id)
-        await self._storage.delete_summaries(old_session_id)
+        await self._repository.delete_transcript(old_session_id)
+        await self._repository.delete_summaries(old_session_id)
         node.session_id = str(uuid.uuid4())
         node.updated_at = _now_ms()
         node.input_tokens = 0
@@ -434,15 +453,15 @@ class SessionManager:
         node.cache_write = 0
         node.context_tokens = None
         node.compaction_count = 0
-        await self._storage.upsert_session(node)
+        await self._repository.save_session(node)
         return node
 
     async def _archive_session_identity(self, node: SessionNode) -> None:
         """Best-effort raw archive before a same-key transcript reset."""
 
         try:
-            entries = await self._storage.get_transcript(node.session_id)
-            summaries = await self._storage.get_all_summaries(node.session_id)
+            entries = await self._repository.get_transcript(node.session_id)
+            summaries = await self._repository.get_all_summaries(node.session_id)
             if not entries and not summaries:
                 return
             archive_dir = _archive_dir()
@@ -467,24 +486,24 @@ class SessionManager:
     async def resume(self, session_key: str) -> SessionNode:
         """Load an existing session; touch updated_at."""
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
         node.updated_at = _now_ms()
-        await self._storage.upsert_session(node)
+        await self._repository.save_session(node)
         return node
 
     async def update(self, session_key: str, **fields: Any) -> SessionNode:
         """Merge fields into an existing session and persist."""
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
         for k, v in fields.items():
             if hasattr(node, k):
                 setattr(node, k, v)
         node.updated_at = _now_ms()
-        await self._storage.upsert_session(node)
+        await self._repository.save_session(node)
         return node
 
     async def finish(
@@ -494,7 +513,7 @@ class SessionManager:
     ) -> SessionNode:
         """Mark a session as finished; set ended_at and runtime_ms."""
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
         now = _now_ms()
@@ -503,38 +522,28 @@ class SessionManager:
         node.updated_at = now
         if node.started_at:
             node.runtime_ms = now - node.started_at
-        await self._storage.upsert_session(node)
+        await self._repository.save_session(node)
         self._evict_session_runtime_state(session_key)
         return node
 
-    @staticmethod
-    def _evict_session_runtime_state(session_key: str) -> None:
-        """Drop in-memory subagent and routing bookkeeping for ``session_key``.
+    def _evict_session_runtime_state(self, session_key: str) -> None:
+        """Drop in-memory lifecycle bookkeeping for ``session_key``.
 
         Called from ``finish`` so terminal sessions don't leak unbounded
-        entries in long-running gateway processes. Imports are local to
-        avoid import cycles with engine/gateway packages.
+        entries in long-running processes. Engine/tool-specific cleanup is
+        supplied by the composition root through ``add_runtime_state_evictor``.
         """
         try:
-            from opensquilla.gateway.subagent_announce import _tracker as _spawn_tracker
+            from opensquilla.session.spawn_groups import spawn_group_tracker
 
-            _spawn_tracker.evict(session_key)
+            spawn_group_tracker.evict(session_key)
         except Exception:
             pass
-        try:
-            from opensquilla.engine.steps.squilla_router import (
-                _history_store as _routing_store,
-            )
-
-            _routing_store.evict(session_key)
-        except Exception:
-            pass
-        try:
-            from opensquilla.tools.builtin.sessions import evict_spawn_lock
-
-            evict_spawn_lock(session_key)
-        except Exception:
-            pass
+        for evictor in tuple(self._runtime_state_evictors):
+            try:
+                evictor(session_key)
+            except Exception:
+                pass
 
     async def branch(
         self,
@@ -550,7 +559,7 @@ class SessionManager:
         """
         parent_session_key = canonicalize_session_key(parent_session_key)
         new_session_key = canonicalize_session_key(new_session_key)
-        parent = await self._storage.get_session(parent_session_key)
+        parent = await self._repository.get_session(parent_session_key)
         if parent is None:
             raise KeyError(f"Parent session not found: {parent_session_key}")
 
@@ -573,8 +582,8 @@ class SessionManager:
         )
 
         if fork_transcript:
-            parent_entries = await self._storage.get_transcript(parent.session_id)
-            parent_summaries = await self._storage.get_all_summaries(parent.session_id)
+            parent_entries = await self._repository.get_transcript(parent.session_id)
+            parent_summaries = await self._repository.get_all_summaries(parent.session_id)
             summary_tokens = sum(
                 estimate_tokens(summary.summary_text) for summary in parent_summaries
             )
@@ -591,9 +600,9 @@ class SessionManager:
                         created_at=entry.created_at,
                         token_count=entry.token_count,
                     )
-                    await self._storage.append_transcript_entry(forked)
+                    await self._repository.append_transcript_entry(forked)
                 for summary in parent_summaries:
-                    await self._storage.save_summary(
+                    await self._repository.save_summary(
                         SessionSummary(
                             session_id=child.session_id,
                             session_key=new_session_key,
@@ -604,7 +613,7 @@ class SessionManager:
                     )
                 child.forked_from_parent = True
 
-        await self._storage.upsert_session(child)
+        await self._repository.save_session(child)
         return child
 
     # ── Transcript ───────────────────────────────────────────────────────────
@@ -623,7 +632,7 @@ class SessionManager:
     ) -> TranscriptEntry:
         """Append a message to the session transcript and touch updated_at."""
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
 
@@ -651,13 +660,13 @@ class SessionManager:
         # Pass the epoch we read from the node so storage can perform an
         # atomic INSERT WHERE epoch=? guard against concurrent resets.
         expected_epoch = node.epoch if node.epoch is not None else 0
-        await self._storage.append_transcript_entry(entry, expected_epoch=expected_epoch)
+        await self._repository.append_transcript_entry(entry, expected_epoch=expected_epoch)
 
         node.updated_at = _now_ms()
         if token_count:
             node.total_tokens += token_count
             node.total_tokens_fresh = False
-        await self._storage.upsert_session(node)
+        await self._repository.save_session(node)
         # Notify memory sync of new message delta
         if self._memory_sync_notify is not None:
             byte_count = len(content.encode("utf-8")) if content else 0
@@ -674,27 +683,27 @@ class SessionManager:
         orphan remains.
         """
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             return False
-        return await self._storage.delete_transcript_entry(node.session_id, message_id)
+        return await self._repository.delete_transcript_entry(node.session_id, message_id)
 
     async def get_transcript(
         self, session_key: str, limit: int | None = None
     ) -> list[TranscriptEntry]:
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
-        return await self._storage.get_transcript(node.session_id, limit=limit)
+        return await self._repository.get_transcript(node.session_id, limit=limit)
 
     async def get_summaries(self, session_key: str) -> list[SessionSummary]:
         """Return durable compaction summaries for a session key."""
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
-        return await self._storage.get_all_summaries(node.session_id)
+        return await self._repository.get_all_summaries(node.session_id)
 
     # ── Compaction ───────────────────────────────────────────────────────────
 
@@ -721,11 +730,11 @@ class SessionManager:
         """Compact the session transcript and return full compaction metadata."""
 
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
 
-        entries = await self._storage.get_transcript(node.session_id)
+        entries = await self._repository.get_transcript(node.session_id)
         raw = [
             {
                 "role": e.role,
@@ -759,7 +768,7 @@ class SessionManager:
         )
         node.compaction_count = (node.compaction_count or 0) + 1
         node.updated_at = _now_ms()
-        await self._storage.rewrite_compacted_session(
+        await self._repository.rewrite_compacted_session(
             node=node,
             summary=summary_record,
             entries=kept_entries,
@@ -783,12 +792,12 @@ class SessionManager:
 
         _log = _structlog.get_logger(__name__)
 
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             _log.warning("persist_compaction.session_not_found", session_key=session_key)
             return
 
-        entries = await self._storage.get_transcript(node.session_id)
+        entries = await self._repository.get_transcript(node.session_id)
         removed_entries = entries[: max(0, len(entries) - len(kept_entries))]
         preserved_entries = entries[len(removed_entries) :]
 
@@ -825,7 +834,7 @@ class SessionManager:
 
         node.compaction_count = (node.compaction_count or 0) + 1
         node.updated_at = _now_ms()
-        await self._storage.rewrite_compacted_session(
+        await self._repository.rewrite_compacted_session(
             node=node,
             summary=summary_record,
             entries=rewritten_entries,
@@ -846,23 +855,23 @@ class SessionManager:
             raise ValueError("max_messages must be >= 0")
 
         session_key = canonicalize_session_key(session_key)
-        node = await self._storage.get_session(session_key)
+        node = await self._repository.get_session(session_key)
         if node is None:
             raise KeyError(f"Session not found: {session_key}")
 
-        entries = await self._storage.get_transcript(node.session_id)
+        entries = await self._repository.get_transcript(node.session_id)
         before_count = len(entries)
 
         if before_count <= max_messages:
             return {"truncated": False, "before_count": before_count, "after_count": before_count}
 
         recent = [] if max_messages == 0 else entries[-max_messages:]
-        await self._storage.delete_transcript(node.session_id)
+        await self._repository.delete_transcript(node.session_id)
         for entry in recent:
-            await self._storage.append_transcript_entry(entry)
+            await self._repository.append_transcript_entry(entry)
 
         node.updated_at = _now_ms()
-        await self._storage.upsert_session(node)
+        await self._repository.save_session(node)
 
         return {"truncated": True, "before_count": before_count, "after_count": len(recent)}
 
@@ -871,18 +880,18 @@ class SessionManager:
     async def prune_stale(self, max_age_ms: int) -> int:
         """Delete sessions older than max_age_ms. Returns number pruned."""
         cutoff = _now_ms() - max_age_ms
-        return await self._storage.prune_stale_sessions(cutoff)
+        return await self._repository.prune_stale_sessions(cutoff)
 
     async def cap_entries(self, max_entries: int = 500) -> int:
         """Delete oldest sessions beyond max_entries. Returns number deleted."""
-        total = await self._storage.count_sessions()
+        total = await self._repository.count_sessions()
         if total <= max_entries:
             return 0
-        sessions = await self._storage.list_sessions(limit=total)
+        sessions = await self._repository.list_sessions(limit=total)
         # sorted by updated_at asc — oldest first
         to_delete = sorted(sessions, key=lambda s: s.updated_at)[: total - max_entries]
         for s in to_delete:
-            await self._storage.delete_session(s.session_key)
+            await self._repository.delete_session(s.session_key)
         return len(to_delete)
 
     async def archive(self, session_key: str) -> None:

@@ -30,6 +30,19 @@ from opensquilla.bootstrap_types import BootstrapFileReport
 from opensquilla.engine.agent import Agent, ToolHandler
 from opensquilla.engine.cache_break_monitor import notify_compaction
 from opensquilla.engine.pipeline import TurnContext
+from opensquilla.engine.preflight_compaction import (
+    T3_FLUSH_FAILED as _T3_FLUSH_FAILED,
+)
+from opensquilla.engine.preflight_compaction import (
+    T3_NOT_APPLICABLE as _T3_NOT_APPLICABLE,
+)
+from opensquilla.engine.preflight_compaction import (
+    PreflightCompactionCoordinator,
+    flush_receipt_allows_destructive_compaction,
+    pre_compaction_flush_enabled,
+    pre_compaction_flush_timeout_seconds,
+    preflight_compact_ratio,
+)
 from opensquilla.engine.pricing import PriceEntry, lookup_price
 from opensquilla.engine.tool_text_compat import strip_synthetic_tool_call_text
 from opensquilla.engine.types import (
@@ -95,19 +108,8 @@ _ROUTER_HISTORY_USER_MAX_TURNS: Final[int] = 4
 _CONTEXT_SUMMARY_MARKER: Final[str] = "[Context Summary]"
 _COMPACTION_SUMMARY_CONTEXT_HEADER: Final[str] = "[Compacted Session Summaries]"
 _COMPACTION_SUMMARY_CONTEXT_MAX_CHARS: Final[int] = 16_000
-_DEFAULT_PREFLIGHT_COMPACT_RATIO: Final[float] = 0.85
 _COMPACTION_FAILURE_LIMIT: Final[int] = 3
 _COMPACTION_CIRCUIT_COOLDOWN_SECONDS: Final[float] = 300.0
-_T3_NOT_APPLICABLE: Final[str] = "not_applicable"
-_T3_HANDLED: Final[str] = "handled"
-_T3_FLUSH_FAILED: Final[str] = "flush_failed"
-_T3_COMPACT_FAILED: Final[str] = "compact_failed"
-_SAFE_FLUSH_OUTPUT_COVERAGE_STATUSES: Final[frozenset[str]] = frozenset(
-    {"ok", "unverifiable"}
-)
-_SAFE_FLUSH_OBLIGATION_STATUSES: Final[frozenset[str]] = frozenset(
-    {"ok", "backfilled", "unverifiable"}
-)
 _IMAGE_GENERATION_TOOL_NAMES: Final[frozenset[str]] = frozenset(
     {"image_generate"}
 )
@@ -796,11 +798,9 @@ _MAX_STAGED_ATTACHMENT_BYTES = 30 * 1024 * 1024
 _PDF_ATTACHMENT_TEXT_LIMIT = 200_000
 _TEXT_ATTACHMENT_TEXT_LIMIT = 200_000
 
-# Image, PDF, and text-family allow-list. Mirrors
-# gateway.rpc_sessions._ALLOWED_MEDIA_TYPES; intentionally duplicated to avoid
-# an engine -> gateway import cycle. Provider-facing conversion is more
-# conservative: images become image blocks; text-family and PDFs become text
-# file-context blocks after local decoding/extraction.
+# Image, PDF, and text-family allow-list used by provider-facing conversion:
+# images become image blocks; text-family and PDFs become text file-context
+# blocks after local decoding/extraction.
 _ALLOWED_ENGINE_MEDIA_TYPES: frozenset[str] = frozenset(
     {
         "image/png",
@@ -1010,6 +1010,7 @@ class TurnRunner:
         turn_capture_services: dict[str, Any] | None = None,
         session_flush_service: SessionFlushService | None = None,
         session_lock_provider: Callable[[str], asyncio.Lock] | None = None,
+        config_persist: Callable[[Any], None] | None = None,
         diagnostics_state: Any | None = None,
     ) -> None:
         self._provider_selector = provider_selector
@@ -1023,6 +1024,7 @@ class TurnRunner:
         self._memory_retrievers = memory_retrievers
         self._turn_capture_services = turn_capture_services
         self._session_flush_service = session_flush_service
+        self._config_persist = config_persist
         self._diagnostics_state = diagnostics_state
         # Per-session lock provider.
         # Gateway path: task_runtime._get_session_lock_for_turn (wired in boot.py).
@@ -2374,10 +2376,11 @@ class TurnRunner:
             if hasattr(self._session_manager, "get_session"):
                 node = await self._session_manager.get_session(session_key)
             else:
-                from opensquilla.gateway.session_services import get_session_storage
-
-                storage = get_session_storage(self._session_manager)
-                node = await storage.get_session(session_key) if storage is not None else None
+                storage = getattr(self._session_manager, "storage", None)
+                if storage is None:
+                    storage = getattr(self._session_manager, "_storage", None)
+                get_session = getattr(storage, "get_session", None)
+                node = await get_session(session_key) if callable(get_session) else None
         except Exception:
             return None
         session_id = getattr(node, "session_id", None)
@@ -2457,16 +2460,16 @@ class TurnRunner:
                 )
 
         if disabled and cfg is not None:
-            try:
-                from opensquilla.gateway.rpc_config import _persist_config
-
-                _persist_config(cfg)
-            except Exception as exc:  # noqa: BLE001 - runtime config already disabled
-                log.warning(
-                    "tool_result_summary_disable_persist_failed",
-                    model=model_label,
-                    error=str(exc),
-                )
+            persist_config = self._config_persist
+            if callable(persist_config):
+                try:
+                    persist_config(cfg)
+                except Exception as exc:  # noqa: BLE001 - runtime config already disabled
+                    log.warning(
+                        "tool_result_summary_disable_persist_failed",
+                        model=model_label,
+                        error=str(exc),
+                    )
 
         base_message = event.message.strip() if event.message else (
             f"Tool result summarization failed for model {model_label!r}."
@@ -2673,83 +2676,34 @@ class TurnRunner:
         """Build tool definitions and handler from registry, filtered by ToolContext."""
         if self._tool_registry is None:
             return [], None
-        from opensquilla.tools.dispatch import build_tool_handler
-        from opensquilla.tools.policy import apply_tool_policy_from_config
-        from opensquilla.tools.registry import filter_by_profile, resolve_profile
 
-        if ctx is not None:
-            ctx = apply_tool_policy_from_config(
-                ctx,
-                available_tools=self._tool_registry.list_names(),
-                config=self._config,
-            )
-            ctx = self._apply_runtime_capability_denies(ctx)
-            log.debug(
-                "tool_policy.policy_pre",
-                allowed_tool_count=len(self._tool_registry.to_tool_definitions(ctx)),
-                denied_count=len(ctx.denied_tools),
-                profile=resolve_profile(ctx).value,
-            )
-        log.info(
-            "tool_context_created",
-            caller_kind=ctx.caller_kind if ctx else "none",
-            denied_count=len(ctx.denied_tools) if ctx else 0,
-        )
-        tool_defs = self._tool_registry.to_tool_definitions(ctx)
-        profile = resolve_profile(ctx)
-        tool_defs = filter_by_profile(tool_defs, profile)
-        # layered intentionally — policy first, profile second.
-        log.debug(
-            "tool_policy.profile_post",
-            allowed_tool_count=len(tool_defs),
-            denied_count=len(ctx.denied_tools) if ctx else 0,
-            profile=profile.value,
-        )
-        if metadata is not None:
-            metadata["tool_profile"] = profile.value
-        known_skill_names: set[str] = set()
-        if self._skill_loader is not None:
-            try:
-                known_skill_names = {
-                    skill.name
-                    for skill in self._skill_loader.load_all()
-                    if not getattr(skill, "disable_model_invocation", False)
-                }
-            except Exception:
-                known_skill_names = set()
-        tool_handler = build_tool_handler(
+        from opensquilla.tools.execution_surface import build_tool_execution_surface
+
+        surface = build_tool_execution_surface(
             self._tool_registry,
             ctx,
-            known_skill_names=known_skill_names,
+            config=self._config,
+            session_manager=getattr(self, "_session_manager", None),
+            gateway_config=getattr(self, "_config", None),
+            skill_loader=self._skill_loader,
+            metadata=metadata,
         )
-        return tool_defs, tool_handler
+        return surface.definitions, surface.handler
 
     def _filter_tool_defs_by_capability(self, tool_defs: list) -> list:
         """Compatibility shim; runtime capability filtering is resolved in ToolContext."""
         return tool_defs
 
     def _apply_runtime_capability_denies(self, ctx: ToolContext) -> ToolContext:
-        from opensquilla.tools.policy import (
-            ToolSurfaceCapabilities,
-            detect_runtime_tool_surface_capabilities,
-            resolve_runtime_tool_surface,
+        from opensquilla.tools.execution_surface import (
+            apply_execution_runtime_capability_denies,
         )
 
-        detected = detect_runtime_tool_surface_capabilities(
-            channel_backing=(
-                ctx.caller_kind in {CallerKind.CHANNEL, CallerKind.WEB}
-                and bool(ctx.channel_id)
-            )
+        return apply_execution_runtime_capability_denies(
+            ctx,
+            session_manager=getattr(self, "_session_manager", None),
+            gateway_config=getattr(self, "_config", None),
         )
-        capabilities = ToolSurfaceCapabilities(
-            session_manager=getattr(self, "_session_manager", None) is not None,
-            task_runtime=detected.task_runtime,
-            scheduler=detected.scheduler,
-            gateway_config=getattr(self, "_config", None) is not None,
-            channel_backing=detected.channel_backing,
-            image_generation=detected.image_generation,
-        )
-        return resolve_runtime_tool_surface(ctx, capabilities=capabilities)
 
     @staticmethod
     def _extra_context_for_tool_context(ctx: ToolContext | None) -> dict[str, str]:
@@ -3568,163 +3522,20 @@ class TurnRunner:
         compaction_provider: Any | None = None,
         compaction_model: str | None = None,
     ) -> str:
-        """Flush memory and compact transcript when the router upgrades into t3.
-
-        Returns a status string so the caller can distinguish non-applicable
-        routes, flush failures that may still fall back to generic preflight,
-        and compact failures that should trip the circuit without retrying.
-        """
-        router_cfg = getattr(self._config, "squilla_router", None)
-        if not getattr(router_cfg, "upgrade_to_t3_compaction_enabled", False):
-            return _T3_NOT_APPLICABLE
-
-        routed_tier = turn.metadata.get("routed_tier")
-        if routed_tier != "t3":
-            return _T3_NOT_APPLICABLE
-
-        if not turn.metadata.get("routing_applied", False):
-            return _T3_NOT_APPLICABLE
-
-        routing_extra = turn.metadata.get("routing_extra", {})
-        previous = routing_extra.get("previous_tier")
-        if previous is None:
-            final = routing_extra.get("final_tier")
-            base = routing_extra.get("base_tier")
-            if final == "t3" and base in {"t0", "t1", "t2"}:
-                previous = base
-            else:
-                return _T3_NOT_APPLICABLE
-
-        if previous not in {"t0", "t1", "t2"}:
-            return _T3_NOT_APPLICABLE
-
-        if session_key.startswith(("cron:", "subagent:")):
-            return _T3_NOT_APPLICABLE
-
-        if self._session_manager is None:
-            return _T3_NOT_APPLICABLE
-
-        if self._compaction_circuit_open(session_key):
-            return _T3_HANDLED
-
-        try:
-            transcript = await self._session_manager.get_transcript(session_key)
-        except KeyError:
-            return _T3_HANDLED
-        if not transcript:
-            return _T3_HANDLED
-
-        log.info(
-            "t3_upgrade_compaction.triggered",
-            session_key=session_key,
-            previous_tier=previous,
-            final_tier="t3",
-            context_window_tokens=context_window_tokens,
+        return await PreflightCompactionCoordinator(
+            session_manager=self._session_manager,
+            session_flush_service=self._session_flush_service,
+            config=self._config,
+            compaction_circuit_open=self._compaction_circuit_open,
+            record_compaction_failure=self._record_compaction_failure,
+            record_compaction_success=self._record_compaction_success,
+        ).maybe_compact_on_t3_upgrade(
+            session_key,
+            turn,
+            context_window_tokens,
+            compaction_provider=compaction_provider,
+            compaction_model=compaction_model,
         )
-
-        if self._pre_compaction_flush_enabled():
-            if self._session_flush_service is None:
-                log.warning(
-                    "t3_upgrade_compaction.flush_failed",
-                    session_key=session_key,
-                    error="flush_service_unavailable",
-                )
-                self._record_compaction_failure(session_key)
-                return _T3_FLUSH_FAILED
-
-            flush_t0 = time.monotonic()
-            try:
-                from opensquilla.session.keys import parse_agent_id
-
-                receipt = await self._session_flush_service.execute(
-                    transcript,
-                    session_key,
-                    agent_id=parse_agent_id(session_key),
-                    message_window=0,
-                    segment_mode="auto",
-                    timeout=self._pre_compaction_flush_timeout_seconds(),
-                )
-                if not self._flush_receipt_allows_destructive_compaction(receipt):
-                    log.warning(
-                        "t3_upgrade_compaction.flush_failed",
-                        session_key=session_key,
-                        error=getattr(receipt, "error", None) or "degraded_flush_receipt",
-                        mode=getattr(receipt, "mode", "unknown"),
-                        integrity_status=getattr(receipt, "integrity_status", None),
-                        indexed_chunk_count=getattr(receipt, "indexed_chunk_count", None),
-                        output_coverage_status=getattr(
-                            receipt,
-                            "output_coverage_status",
-                            None,
-                        ),
-                        invalid_candidate_count=getattr(
-                            receipt,
-                            "invalid_candidate_count",
-                            None,
-                        ),
-                        candidate_missing_ids=getattr(receipt, "candidate_missing_ids", None),
-                        obligation_status=getattr(receipt, "obligation_status", None),
-                        obligation_missing_ids=getattr(receipt, "obligation_missing_ids", None),
-                    )
-                    self._record_compaction_failure(session_key)
-                    return _T3_FLUSH_FAILED
-                log.info(
-                    "t3_upgrade_compaction.flush_done",
-                    session_key=session_key,
-                    mode=getattr(receipt, "mode", "unknown"),
-                    message_count=getattr(receipt, "message_count", 0),
-                    duration_ms=int((time.monotonic() - flush_t0) * 1000),
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "t3_upgrade_compaction.flush_failed",
-                    session_key=session_key,
-                    error=str(exc),
-                )
-                self._record_compaction_failure(session_key)
-                return _T3_FLUSH_FAILED
-
-        try:
-            compaction_config = None
-            if compaction_provider is not None or compaction_model:
-                from opensquilla.session.compaction import build_compaction_config_from_provider
-
-                compaction_config = build_compaction_config_from_provider(
-                    compaction_provider,
-                    model_override=compaction_model,
-                    compaction_config=getattr(getattr(self, "_config", None), "compaction", None),
-                )
-            from opensquilla.session.compaction import call_compact_with_optional_config
-
-            result = await call_compact_with_optional_config(
-                self._session_manager.compact,
-                session_key,
-                context_window_tokens,
-                compaction_config,
-            )
-            self._record_compaction_success(session_key)
-            if result:
-                notify_compaction(session_key)
-            log.info(
-                "t3_upgrade_compaction.compact_done",
-                session_key=session_key,
-                summary_produced=bool(result),
-                summary_length=len(result) if result else 0,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "t3_upgrade_compaction.compact_failed",
-                session_key=session_key,
-                error=str(exc),
-            )
-            self._record_compaction_failure(session_key)
-            return _T3_COMPACT_FAILED
-
-        return _T3_HANDLED
 
     async def _maybe_preflight_compact(
         self,
@@ -3734,191 +3545,29 @@ class TurnRunner:
         compaction_provider: Any | None = None,
         compaction_model: str | None = None,
     ) -> None:
-        """Compact proactively if session history exceeds token budget.
-
-        Called before _load_history(). Uses SessionManager.compact() directly
-        because no Agent state exists yet — the DB is the sole source of truth.
-        Safe to re-compact from DB at this point (no double-compaction risk).
-        """
-        if self._session_manager is None:
-            return
-        # Skip ephemeral sessions
-        if session_key.startswith(("cron:", "subagent:")):
-            return
-        if self._compaction_circuit_open(session_key):
-            return
-        try:
-            transcript = await self._session_manager.get_transcript(session_key)
-        except KeyError:
-            return  # session doesn't exist yet
-        if not transcript:
-            return
-
-        from opensquilla.session.tokenizer import estimate_tokens
-
-        total_tokens = sum(estimate_tokens(e.content or "") for e in transcript)
-        ratio = self._preflight_compact_ratio()
-        threshold = int(context_window_tokens * ratio)
-        if total_tokens <= threshold:
-            return
-
-        log.info(
-            "preflight_compaction.triggered",
-            session_key=session_key,
-            total_tokens=total_tokens,
-            threshold=threshold,
-            ratio=ratio,
+        await PreflightCompactionCoordinator(
+            session_manager=self._session_manager,
+            session_flush_service=self._session_flush_service,
+            config=self._config,
+            compaction_circuit_open=self._compaction_circuit_open,
+            record_compaction_failure=self._record_compaction_failure,
+            record_compaction_success=self._record_compaction_success,
+        ).maybe_preflight_compact(
+            session_key,
+            context_window_tokens,
+            compaction_provider=compaction_provider,
+            compaction_model=compaction_model,
         )
-        if self._pre_compaction_flush_enabled():
-            if self._session_flush_service is None:
-                log.warning(
-                    "preflight_compaction.flush_failed",
-                    session_key=session_key,
-                    error="flush_service_unavailable",
-                )
-                self._record_compaction_failure(session_key)
-                return
-
-            try:
-                from opensquilla.session.keys import parse_agent_id
-
-                receipt = await self._session_flush_service.execute(
-                    transcript,
-                    session_key,
-                    agent_id=parse_agent_id(session_key),
-                    message_window=0,
-                    segment_mode="auto",
-                    timeout=self._pre_compaction_flush_timeout_seconds(),
-                )
-                if not self._flush_receipt_allows_destructive_compaction(receipt):
-                    log.warning(
-                        "preflight_compaction.flush_failed",
-                        session_key=session_key,
-                        error=getattr(receipt, "error", None) or "degraded_flush_receipt",
-                        mode=getattr(receipt, "mode", "unknown"),
-                        integrity_status=getattr(receipt, "integrity_status", None),
-                        indexed_chunk_count=getattr(receipt, "indexed_chunk_count", None),
-                        output_coverage_status=getattr(
-                            receipt,
-                            "output_coverage_status",
-                            None,
-                        ),
-                        invalid_candidate_count=getattr(
-                            receipt,
-                            "invalid_candidate_count",
-                            None,
-                        ),
-                        candidate_missing_ids=getattr(receipt, "candidate_missing_ids", None),
-                        obligation_status=getattr(receipt, "obligation_status", None),
-                        obligation_missing_ids=getattr(receipt, "obligation_missing_ids", None),
-                    )
-                    self._record_compaction_failure(session_key)
-                    return
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "preflight_compaction.flush_failed",
-                    session_key=session_key,
-                    error=str(exc),
-                )
-                self._record_compaction_failure(session_key)
-                return
-        compaction_config = None
-        if compaction_provider is not None or compaction_model:
-            from opensquilla.session.compaction import build_compaction_config_from_provider
-
-            compaction_config = build_compaction_config_from_provider(
-                compaction_provider,
-                model_override=compaction_model,
-                compaction_config=getattr(getattr(self, "_config", None), "compaction", None),
-            )
-        from opensquilla.session.compaction import call_compact_with_optional_config
-
-        try:
-            result = await call_compact_with_optional_config(
-                self._session_manager.compact,
-                session_key,
-                context_window_tokens,
-                compaction_config,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "preflight_compaction.compact_failed",
-                session_key=session_key,
-                error=str(exc),
-            )
-            self._record_compaction_failure(session_key)
-            return
-        self._record_compaction_success(session_key)
-        if result:
-            notify_compaction(session_key)
 
     def _pre_compaction_flush_enabled(self) -> bool:
-        from opensquilla.memory.flush_config import is_session_flush_enabled
-
-        if not is_session_flush_enabled():
-            return False
-
-        memory_cfg = getattr(self._config, "memory", None)
-        if memory_cfg is None:
-            return self._session_flush_service is not None
-
-        raw_enabled = getattr(memory_cfg, "flush_enabled", True)
-        if isinstance(raw_enabled, str):
-            return raw_enabled.strip().lower() not in {"0", "false", "no", "off"}
-        return bool(raw_enabled)
+        return pre_compaction_flush_enabled(self._config, self._session_flush_service)
 
     def _pre_compaction_flush_timeout_seconds(self) -> float:
-        memory_cfg = getattr(self._config, "memory", None)
-        raw_timeout = getattr(memory_cfg, "flush_timeout_seconds", 5.0)
-        try:
-            timeout = float(raw_timeout)
-        except (TypeError, ValueError):
-            return 5.0
-        return max(timeout, 0.0)
+        return pre_compaction_flush_timeout_seconds(self._config)
 
-    @staticmethod
-    def _receipt_value(receipt: Any, name: str, default: Any) -> Any:
-        if isinstance(receipt, Mapping):
-            return receipt.get(name, default)
-        return getattr(receipt, name, default)
-
-    @staticmethod
-    def _receipt_int(value: Any) -> int:
-        try:
-            return int(value or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    def _flush_receipt_allows_destructive_compaction(self, receipt: Any) -> bool:
-        if self._receipt_value(receipt, "mode", None) != "llm":
-            return False
-        if self._receipt_int(self._receipt_value(receipt, "indexed_chunk_count", 0)) <= 0:
-            return False
-        integrity_status = str(
-            self._receipt_value(receipt, "integrity_status", "unverified") or "unverified"
-        )
-        if integrity_status != "ok":
-            return False
-        output_coverage_status = str(
-            self._receipt_value(receipt, "output_coverage_status", "unverified")
-            or "unverified"
-        )
-        if output_coverage_status not in _SAFE_FLUSH_OUTPUT_COVERAGE_STATUSES:
-            return False
-        if self._receipt_int(self._receipt_value(receipt, "invalid_candidate_count", 0)) > 0:
-            return False
-        if self._receipt_value(receipt, "candidate_missing_ids", []):
-            return False
-        obligation_status = str(
-            self._receipt_value(receipt, "obligation_status", "unverified") or "unverified"
-        )
-        if obligation_status not in _SAFE_FLUSH_OBLIGATION_STATUSES:
-            return False
-        return not self._receipt_value(receipt, "obligation_missing_ids", [])
+    _flush_receipt_allows_destructive_compaction = staticmethod(
+        flush_receipt_allows_destructive_compaction
+    )
 
     def _compaction_circuit_open(self, session_key: str) -> bool:
         state = getattr(self, "_compaction_failures", {}).get(session_key)
@@ -3958,16 +3607,7 @@ class TurnRunner:
         self._compaction_failures.pop(session_key, None)
 
     def _preflight_compact_ratio(self) -> float:
-        raw_ratio = getattr(self._config, "preflight_compact_ratio", None)
-        if raw_ratio is None:
-            return _DEFAULT_PREFLIGHT_COMPACT_RATIO
-        try:
-            ratio = float(raw_ratio)
-        except (TypeError, ValueError):
-            return _DEFAULT_PREFLIGHT_COMPACT_RATIO
-        if ratio <= 0.0 or ratio > 1.0:
-            return _DEFAULT_PREFLIGHT_COMPACT_RATIO
-        return ratio
+        return preflight_compact_ratio(self._config)
 
     async def _load_history(
         self,

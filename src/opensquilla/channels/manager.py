@@ -12,10 +12,14 @@ from typing import Any
 import structlog
 from starlette.routing import Route
 
-from opensquilla.channels.registry import build_managed_channel
+from opensquilla.channels.debounce import _DefaultDebounceCoordinator
+from opensquilla.channels.delivery import resolve_delivery_target as resolve_channel_delivery_target
+from opensquilla.channels.ingress import ChannelInFlightSetPort, ChannelIngressPort
+from opensquilla.channels.runtime_assembly import (
+    build_channel_runtime_assembly,
+    collect_channel_webhook_routes,
+)
 from opensquilla.channels.types import ChannelHealth, DeliveryTargetResolution, ManagedChannel
-from opensquilla.gateway._debounce import _DefaultDebounceCoordinator
-from opensquilla.gateway.channel_dispatch import run_channel_dispatch
 from opensquilla.session.keys import DmScope, build_direct_key, build_group_key, build_thread_key
 
 log = structlog.get_logger(__name__)
@@ -26,8 +30,8 @@ class ChannelManager:
     """Manages lifecycle of ManagedChannel instances.
 
     Responsibilities:
-    - Build adapters from gateway config entries (from_config)
-    - Collect webhook routes for Starlette registration
+    - Hold adapters assembled from gateway config entries (from_config)
+    - Expose collected webhook routes for Starlette registration
     - Start/stop/restart individual channels or all at once
     - Run dispatch loops with exponential-backoff retry
     - Build proper session keys via session/keys.py
@@ -41,6 +45,7 @@ class ChannelManager:
     _task_runtime: Any = None
     _rpc_dispatcher: Any = None
     _channel_rpc_context_factory: Callable[[Any], Any] | None = None
+    _channel_ingress: ChannelIngressPort | None = None
     _debounce_coordinator: Any = field(default_factory=_DefaultDebounceCoordinator)
     _agent_ids: dict[str, str] = field(default_factory=dict)
     _channel_types: dict[str, str] = field(default_factory=dict)
@@ -79,33 +84,17 @@ class ChannelManager:
         task_runtime: Any = None,
         rpc_dispatcher: Any = None,
         channel_rpc_context_factory: Callable[[Any], Any] | None = None,
+        channel_ingress: ChannelIngressPort | None = None,
     ) -> ChannelManager:
         """Build adapter instances from gateway config entries.
 
         Each entry's ``type`` field selects the adapter class.
         Disabled entries are skipped.
         """
-        channels: dict[str, ManagedChannel] = {}
-        agent_ids: dict[str, str] = {}
-        channel_types: dict[str, str] = {}
-        for entry in entries:
-            if not entry.enabled:
-                log.info("channel.skipped_disabled", name=entry.name)
-                continue
-
-            adapter = build_managed_channel(entry)
-            if adapter is None:
-                log.warning("channel.unknown_type", type=entry.type, name=entry.name)
-                continue
-
-            channels[entry.name] = adapter
-            agent_ids[entry.name] = getattr(entry, "agent_id", "main")
-            channel_types[entry.name] = entry.type
-            setattr(adapter, "debounce_window_s", getattr(entry, "debounce_window_s", 0.0))
-            log.info("channel.adapter_created", name=entry.name, type=entry.type)
+        assembly = build_channel_runtime_assembly(entries, logger=log)
 
         return cls(
-            _channels=channels,
+            _channels=assembly.channels,
             _turn_runner=turn_runner,
             _session_manager=session_manager,
             _event_bridge=event_bridge,
@@ -113,8 +102,9 @@ class ChannelManager:
             _task_runtime=task_runtime,
             _rpc_dispatcher=rpc_dispatcher,
             _channel_rpc_context_factory=channel_rpc_context_factory,
-            _agent_ids=agent_ids,
-            _channel_types=channel_types,
+            _channel_ingress=channel_ingress,
+            _agent_ids=assembly.agent_ids,
+            _channel_types=assembly.channel_types,
         )
 
     # ── Webhook routes ───────────────────────────────────────
@@ -122,18 +112,11 @@ class ChannelManager:
     def collect_webhook_routes(self) -> list[Route]:
         """Extract Starlette Routes from adapters that support webhooks.
 
-        Slack and Feishu adapters expose ``create_webhook_route()``;
-        Discord uses a persistent WebSocket and has no webhook.
+        Webhook-capable adapters expose their Starlette route through the
+        channels runtime assembly boundary; persistent WebSocket adapters do
+        not contribute webhook routes.
         """
-        routes: list[Route] = []
-        for name, adapter in self._channels.items():
-            if getattr(adapter, "transport_name", "webhook") != "webhook":
-                continue
-            if hasattr(adapter, "create_webhook_route"):
-                route = adapter.create_webhook_route()
-                routes.append(route)
-                log.info("channel.webhook_route_collected", channel=name, path=route.path)
-        return routes
+        return collect_channel_webhook_routes(self._channels, logger=log)
 
     # ── Lifecycle ────────────────────────────────────────────
 
@@ -167,8 +150,6 @@ class ChannelManager:
 
     async def _safe_start(self, name: str) -> None:
         """Start a single channel with 30 s timeout, then launch dispatch loop."""
-        from opensquilla.gateway.channel_dispatch import _ChannelInFlightSet, _compute_channel_cap
-
         adapter = self._channels[name]
         startup_timeout = float(getattr(adapter, "startup_timeout_s", 30.0))
         try:
@@ -179,10 +160,15 @@ class ChannelManager:
                 with contextlib.suppress(Exception):
                     await stop()
             raise
+        if self._channel_ingress is None:
+            stop = getattr(adapter, "stop", None)
+            if callable(stop):
+                with contextlib.suppress(Exception):
+                    await stop()
+            raise RuntimeError("Channel ingress is not configured")
         entry_agent_id = self._agent_ids.get(name, "main")
         key_builder = partial(self._build_session_key, name, agent_id=entry_agent_id)
-        cap = _compute_channel_cap(self._config)
-        in_flight = _ChannelInFlightSet(cap)
+        in_flight = self._channel_ingress.create_in_flight_set(self._config)
         self._in_flight_sets[name] = in_flight
         self._tasks[name] = asyncio.create_task(
             self._dispatch_with_retry(name, key_builder, in_flight=in_flight),
@@ -193,7 +179,7 @@ class ChannelManager:
         self,
         name: str,
         key_builder: Callable[[Any], str],
-        in_flight: Any = None,
+        in_flight: ChannelInFlightSetPort | None = None,
     ) -> None:
         """Inner retry loop. Returns once retries are exhausted.
 
@@ -206,7 +192,9 @@ class ChannelManager:
 
         for attempt in range(self._max_retries + 1):
             try:
-                await run_channel_dispatch(
+                if self._channel_ingress is None:
+                    raise RuntimeError("Channel ingress is not configured")
+                await self._channel_ingress.run_dispatch(
                     channel=self._channels[name],
                     turn_runner=self._turn_runner,
                     session_manager=self._session_manager,
@@ -219,7 +207,7 @@ class ChannelManager:
                     channel_rpc_context_factory=self._channel_rpc_context_factory,
                     debounce_coordinator=self._debounce_coordinator,
                     debounce_window_s=getattr(self._channels[name], "debounce_window_s", 0.0),
-                    _in_flight=in_flight,
+                    in_flight=in_flight,
                 )
             except asyncio.CancelledError:
                 raise  # intentional shutdown — never retry
@@ -242,7 +230,7 @@ class ChannelManager:
         self,
         name: str,
         key_builder: Callable[[Any], str],
-        in_flight: Any = None,
+        in_flight: ChannelInFlightSetPort | None = None,
     ) -> None:
         """Outer cycle loop wrapping the inner retry budget.
 
@@ -370,71 +358,10 @@ class ChannelManager:
         first-class multi-account channel config.
         """
 
-        target_name = target.strip()
-        target_type = target_name.lower()
-        account = account_id.strip()
-        to = to.strip()
-        thread = thread_id.strip()
-
-        if not target_name:
-            return DeliveryTargetResolution(ok=False, reason="unsupported_target")
-
-        candidates = [
-            name
-            for name, channel_type in self._channel_types.items()
-            if channel_type.lower() == target_type
-        ]
-        if account:
-            if account not in candidates:
-                return DeliveryTargetResolution(ok=False, reason="unsupported_account")
-            return self._build_delivery_resolution(
-                adapter_name=account,
-                channel_type=target_type,
-                to=to,
-                account_id=account,
-                thread_id=thread,
-            )
-
-        if target_name in self._channels:
-            adapter_name = target_name
-            channel_type = self._channel_types.get(adapter_name, adapter_name).lower()
-            return self._build_delivery_resolution(
-                adapter_name=adapter_name,
-                channel_type=channel_type,
-                to=to,
-                account_id=account,
-                thread_id=thread,
-            )
-
-        if not candidates:
-            return DeliveryTargetResolution(ok=False, reason="unsupported_target")
-        if len(candidates) > 1:
-            return DeliveryTargetResolution(ok=False, reason="ambiguous_account")
-
-        return self._build_delivery_resolution(
-            adapter_name=candidates[0],
-            channel_type=target_type,
-            to=to,
-            account_id=account,
-            thread_id=thread,
-        )
-
-    def _build_delivery_resolution(
-        self,
-        *,
-        adapter_name: str,
-        channel_type: str,
-        to: str,
-        account_id: str,
-        thread_id: str,
-    ) -> DeliveryTargetResolution:
-        if thread_id and channel_type not in {"slack"}:
-            return DeliveryTargetResolution(ok=False, reason="unsupported_thread")
-        return DeliveryTargetResolution(
-            ok=True,
-            adapter=self._channels.get(adapter_name),
-            adapter_name=adapter_name,
-            channel_type=channel_type,
+        return resolve_channel_delivery_target(
+            channels=self._channels,
+            channel_types=self._channel_types,
+            target=target,
             to=to,
             account_id=account_id,
             thread_id=thread_id,

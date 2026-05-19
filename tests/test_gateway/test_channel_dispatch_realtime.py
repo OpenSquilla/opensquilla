@@ -12,21 +12,24 @@ from opensquilla.artifacts import ArtifactStore
 from opensquilla.channels.stream_policy import resolve_channel_stream_policy
 from opensquilla.channels.types import Attachment, IncomingMessage, OutgoingMessage
 from opensquilla.engine.types import ArtifactEvent, DoneEvent, TextDeltaEvent
+from opensquilla.gateway import channel_dispatch
 from opensquilla.gateway.attachment_ingest import (
     MAX_STAGED_PDF_BYTES,
     MAX_TOTAL_ATTACHMENT_BYTES,
     AttachmentTotalTooLargeError,
 )
+from opensquilla.gateway.channel_artifacts import (
+    artifact_fallback_lines,
+    deliver_artifacts_as_channel_files,
+)
 from opensquilla.gateway.channel_dispatch import (
-    _artifact_fallback_lines,
-    _deliver_artifacts_as_channel_files,
     _deliver_runtime_channel_reply,
     _dispatch_combined_message_after_debounce,
-    _ingest_channel_message_attachments,
     _run_turn_batch_path,
     _run_turn_with_streaming,
-    _RuntimeChannelStreamRelay,
 )
+from opensquilla.gateway.channel_message_io import ingest_channel_message_attachments
+from opensquilla.gateway.channel_streaming import RuntimeChannelStreamRelay
 from opensquilla.gateway.config import AgentEntryConfig, GatewayConfig
 from opensquilla.gateway.routing import build_channel_route_envelope
 from opensquilla.safety.permission_matrix import Principal, is_tool_allowed
@@ -88,6 +91,10 @@ def test_channel_stream_policy_uses_typing_placeholder_without_stream_editing() 
     assert policy.mode == "typing_final"
     assert policy.relay_stream is False
     assert policy.typing_keepalive is True
+
+
+def test_channel_dispatch_preserves_runtime_stream_relay_compat_alias() -> None:
+    assert channel_dispatch._RuntimeChannelStreamRelay is RuntimeChannelStreamRelay
 
 
 def test_channel_stream_policy_allows_adapter_final_only_override() -> None:
@@ -489,7 +496,7 @@ async def test_unlisted_channel_sender_keeps_restricted_tool_context_for_agent_t
 
 
 def test_channel_artifact_fallback_uses_only_channel_safe_absolute_links() -> None:
-    assert _artifact_fallback_lines(
+    assert artifact_fallback_lines(
         [
             {
                 "id": "art-1",
@@ -499,7 +506,7 @@ def test_channel_artifact_fallback_uses_only_channel_safe_absolute_links() -> No
         ]
     ) == ["Generated file: report.txt -> available in WebUI"]
 
-    assert _artifact_fallback_lines(
+    assert artifact_fallback_lines(
         [
             {
                 "id": "art-2",
@@ -512,7 +519,7 @@ def test_channel_artifact_fallback_uses_only_channel_safe_absolute_links() -> No
         "https://gateway.example/artifacts/art-2?sig=short"
     ]
 
-    assert _artifact_fallback_lines(
+    assert artifact_fallback_lines(
         [
             {
                 "id": "art-3",
@@ -538,7 +545,7 @@ async def test_runtime_channel_stream_relay_emits_artifact_fallback() -> None:
             return None
 
     channel = StreamingChannel()
-    relay = _RuntimeChannelStreamRelay.maybe_start(channel, _message(), FakeTaskRuntime())
+    relay = RuntimeChannelStreamRelay.maybe_start(channel, _message(), FakeTaskRuntime())
 
     assert relay is not None
 
@@ -571,7 +578,7 @@ async def test_runtime_channel_stream_relay_appends_artifact_fallback_to_text() 
             return None
 
     channel = StreamingChannel()
-    relay = _RuntimeChannelStreamRelay.maybe_start(channel, _message(), FakeTaskRuntime())
+    relay = RuntimeChannelStreamRelay.maybe_start(channel, _message(), FakeTaskRuntime())
 
     assert relay is not None
 
@@ -626,7 +633,7 @@ async def test_runtime_channel_stream_relay_sends_artifact_with_adapter_upload(
 
     config = SimpleNamespace(attachments=SimpleNamespace(media_root=str(tmp_path)))
     channel = StreamingFileChannel()
-    relay = _RuntimeChannelStreamRelay.maybe_start(
+    relay = RuntimeChannelStreamRelay.maybe_start(
         channel,
         _message(),
         FakeTaskRuntime(),
@@ -677,7 +684,7 @@ async def test_channel_file_delivery_dedupes_same_artifact_material(tmp_path) ->
     channel = FileChannel()
     config = SimpleNamespace(attachments=SimpleNamespace(media_root=str(tmp_path)))
 
-    undelivered = await _deliver_artifacts_as_channel_files(
+    undelivered = await deliver_artifacts_as_channel_files(
         channel,
         _message(),
         [first.to_dict(), second.to_dict()],
@@ -736,7 +743,7 @@ async def test_runtime_channel_stream_relay_does_not_redeliver_transcript_artifa
     config = SimpleNamespace(attachments=SimpleNamespace(media_root=str(tmp_path)))
     channel = StreamingFileChannel()
     runtime = FakeTaskRuntime()
-    relay = _RuntimeChannelStreamRelay.maybe_start(
+    relay = RuntimeChannelStreamRelay.maybe_start(
         channel,
         _message(),
         runtime,
@@ -866,6 +873,13 @@ async def test_channel_batch_turn_uses_agent_registry_model() -> None:
 
 @pytest.mark.asyncio
 async def test_channel_ingest_resolves_adapter_bytes_to_engine_attachment() -> None:
+    from opensquilla.gateway import channel_dispatch
+
+    assert (
+        channel_dispatch._ingest_channel_message_attachments
+        is ingest_channel_message_attachments
+    )
+
     class ResolvingChannel(_FakeChannel):
         channel_id = "test"
 
@@ -890,7 +904,7 @@ async def test_channel_ingest_resolves_adapter_bytes_to_engine_attachment() -> N
         ],
     )
 
-    result = await _ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
+    result = await ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
 
     assert result.text == "read"
     assert result.failures == []
@@ -935,7 +949,7 @@ async def test_channel_ingest_hard_rejects_aggregate_attachment_cap() -> None:
     )
 
     with pytest.raises(AttachmentTotalTooLargeError, match="total raw bytes"):
-        await _ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
+        await ingest_channel_message_attachments(channel=ResolvingChannel(), msg=msg)
 
 
 @pytest.mark.asyncio

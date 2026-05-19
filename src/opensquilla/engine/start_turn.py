@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from opensquilla.observability.decision_log import PipelineStepRecord
-
-if TYPE_CHECKING:
-    # Type-check only: runtime import would cycle through opensquilla.tools.
-    from opensquilla.gateway.routing import RouteEnvelope
-    from opensquilla.gateway.task_runtime import TaskHandle, TaskRuntime
 
 
 def _ingress_step_record() -> PipelineStepRecord:
@@ -23,8 +18,8 @@ def _ingress_step_record() -> PipelineStepRecord:
 
 
 async def start_turn_via_runtime(
-    runtime: TaskRuntime,
-    envelope: RouteEnvelope,
+    runtime: Any,
+    envelope: Any,
     message: str,
     *,
     attachments: list[dict[str, Any]] | None = None,
@@ -33,7 +28,7 @@ async def start_turn_via_runtime(
     no_memory_capture: bool = False,
     semantic_message: str | None = None,
     stream_event_sink: Callable[[Any], Awaitable[None]] | None = None,
-) -> TaskHandle:
+) -> Any:
     """Enqueue a turn. Exceptions propagate — recovery is surface-specific.
 
     For DecisionLog ownership: the helper passes a
