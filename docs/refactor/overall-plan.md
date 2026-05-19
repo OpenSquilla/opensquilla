@@ -25,9 +25,20 @@ observe-only for this refactor line.
   provider runtime/materialization/status, channel transport/dispatch/reply,
   tools policy/execution/security, session runtime/persistence/queues, or Web UI
   RPC/view-state contracts.
+- Prefer one larger plan/test cycle for a related component family over repeated
+  micro-plans for individual helper functions or isolated small defects. If a
+  common coupling pattern appears in multiple files or sibling modules, group it
+  into one coherent substage with shared acceptance criteria and one final
+  comprehensive verification pass.
 - Use Superpowers planning to group related architecture work, identify shared
   ownership boundaries up front, and run one unified focused verification set
   plus the full refactor gate for the batch.
+- Avoid spending refactor time repeatedly planning and testing the same class of
+  issue at tiny granularity. Local RED/GREEN checks still happen before code
+  changes, but the stage should optimize for unified architecture movement and a
+  complete end-of-substage gate rather than many redundant stop-start cycles.
+  In short: avoid repeated micro-planning/micro-testing for tiny points inside
+  the same component family or coupling class.
 - Keep every batch behavior-compatible. Larger refactors must add or update tests
   so CLI text, RPC payloads, WebSocket events, provider defaults, channel
   replies, public imports, and release hygiene remain at least as complete as the
