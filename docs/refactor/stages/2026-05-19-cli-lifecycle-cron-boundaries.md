@@ -358,8 +358,8 @@ Co-authored-by: Codex <noreply@openai.com>
   - `git worktree remove ../opensquilla-refactor-agent-cli-gateway`
   - `git worktree remove ../opensquilla-refactor-agent-cli-cron`
   - `git worktree prune`
-  - `find /Users/cwan0785 -maxdepth 1 -type d -name 'opensquilla-refactor-*'`
-    returned only `/Users/cwan0785/opensquilla-refactor-integration`.
+  - `find <workspace-parent> -maxdepth 1 -type d -name 'opensquilla-refactor-*'`
+    returned only the integration refactor worktree.
 - Residual risk:
   - Low. Cron/gateway CLI command shells now delegate to workflow/presenter
     modules; existing command names, flags, RPC method names, payload keys,
