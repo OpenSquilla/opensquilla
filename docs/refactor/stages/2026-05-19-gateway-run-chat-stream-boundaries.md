@@ -265,17 +265,17 @@ changes and must not revert unrelated edits.
 - [x] Confirm `spawn_agent` status.
 - [x] Create fixed active worktree on `codex/refactor-gateway-run-chat-stream-boundaries`.
 - [x] Write this stage plan before production edits.
-- [ ] Commit this stage plan as the worker base.
-- [ ] Launch two external workers with `scripts/refactor_external_agent.sh`.
-- [ ] Gateway-run worker writes RED boundary tests and records RED output.
+- [x] Commit this stage plan as the worker base.
+- [x] Launch two external workers with `scripts/refactor_external_agent.sh`.
+- [x] Gateway-run worker writes RED boundary tests and records RED output.
 - [x] Chat-stream worker writes RED boundary tests and records RED output.
 - [x] Chat-stream worker implements presenter extraction and records
       GREEN/check/gate evidence.
-- [ ] Workers implement their disjoint boundaries and record GREEN/check/gate evidence.
-- [ ] Main thread reviews both diffs for behavior compatibility and ownership.
-- [ ] Merge both worker branches into the active child.
-- [ ] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
+- [x] Workers implement their disjoint boundaries and record GREEN/check/gate evidence.
+- [x] Main thread reviews both diffs for behavior compatibility and ownership.
+- [x] Merge both worker branches into the active child.
+- [x] Run focused green command and touched-file checks.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
 - [ ] Commit child verification/stage record update with:
 
 ```text
@@ -306,6 +306,36 @@ Co-authored-by: Codex <noreply@openai.com>
 - `git diff --check HEAD^ HEAD`
 - `uv run --extra dev pytest`
 - gateway smoke through `scripts/refactor_gate.sh`
+
+### Child verification evidence
+
+- Worker review:
+  - Gateway-run worker commit `5f0b1ac` reviewed for ownership, behavior
+    compatibility, and exactly one required co-author trailer.
+  - Chat-stream worker commit `58db8af` reviewed for ownership, behavior
+    compatibility, and exactly one required co-author trailer.
+- Active child merge commits:
+  - `1a26663` merged `codex/refactor-gateway-run-boundary-worker`.
+  - `5245502` merged `codex/refactor-chat-stream-boundary-worker`.
+- Main-thread compatibility fix:
+  - Preserved `opensquilla.cli.gateway_cmd.gateway_startup_guidance` as a
+    compatibility wrapper around the new presenter function and restored the
+    existing test import path.
+- Focused post-merge command:
+  - `uv run --extra dev pytest tests/test_cli/test_gateway_run_cli_boundary.py tests/test_cli/test_chat_stream_boundary.py tests/test_cli/test_gateway_cmd.py::test_gateway_startup_guidance_shows_operator_next_steps tests/test_cli/test_gateway_cmd.py::test_gateway_start_with_wildcard_listen_keeps_bind_and_reports_probe_host tests/test_cli/test_chat_cmd.py::test_gateway_stream_renders_task_group_status_without_buffer_pollution tests/test_cli/test_chat_cmd.py::test_gateway_stream_collects_artifact_events tests/test_cli/test_chat_cmd.py::test_standalone_turnrunner_stream_collects_artifacts -q`
+  - Result: `18 passed`.
+- Touched-file checks:
+  - `uv run --extra dev ruff check src/opensquilla/cli/gateway_cmd.py src/opensquilla/cli/gateway_run_workflows.py src/opensquilla/cli/gateway_run_presenters.py src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_stream_presenters.py tests/test_cli/test_gateway_run_cli_boundary.py tests/test_cli/test_chat_stream_boundary.py tests/test_cli/test_gateway_cmd.py tests/test_cli/test_chat_cmd.py`
+    result: passed.
+  - `uv run --extra dev mypy src/opensquilla/cli --show-error-codes`
+    result: passed, no issues found in `129 source files`.
+  - `git diff --check` result: passed.
+- Full active child gate:
+  - Command: `scripts/refactor_gate.sh`
+  - Result: passed.
+  - Gate evidence: ruff passed, mypy passed (`562 source files`), whitespace
+    passed, pytest `2695 passed, 8 skipped`, gateway smoke passed, refactor gate
+    complete.
 
 ## Rollback
 
@@ -339,11 +369,20 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Gateway-run worker commit:
+- `5f0b1ac` (`Refactor gateway run CLI boundary`)
 - Chat-stream worker commit:
+- `58db8af` (`Refactor chat stream presenter boundary`)
+- Active child worker merges:
+- `1a26663` (`Merge gateway run boundary worker`)
+- `5245502` (`Merge chat stream boundary worker`)
 - Child verification commit:
+- pending
 - Integration merge:
 - Integration record:
 - Verification evidence:
+- Active child focused command: `18 passed`.
+- Active child full `scripts/refactor_gate.sh`: `2695 passed, 8 skipped`,
+  gateway smoke passed.
 - Cleanup evidence:
 - Residual risk:
 - Next recommended slice:

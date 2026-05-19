@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import typer
 
-from opensquilla.cli import gateway_lifecycle_workflows, gateway_run_workflows
+from opensquilla.cli import (
+    gateway_lifecycle_workflows,
+    gateway_run_presenters,
+    gateway_run_workflows,
+)
+
+
+def gateway_startup_guidance(host: str, port: int) -> tuple[str, ...]:
+    """Compatibility wrapper for gateway run startup guidance."""
+
+    return gateway_run_presenters.gateway_startup_guidance(host, port)
 
 
 def run_gateway(
