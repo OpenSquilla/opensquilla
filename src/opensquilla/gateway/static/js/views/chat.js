@@ -151,6 +151,33 @@ const ChatView = (() => {
   function _stripDirectiveTags(text) {
     return text.replace(_DIRECTIVE_TAG_RE, '').replace(/^\n+/, '');
   }
+  const _PROTOCOL_TEXT_MARKER_RE = /<\s*(?:minimax:tool_call|tool_calls?|tvoe_calls|invoke\b|parameter\b|effect_calls\b|details\b|angle\s+brackets\b)/i;
+  const _PROTOCOL_TEXT_PARAMETER_RE = /<\s*parameter\s+name\s*=\s*["'](?:path|content|command|code|patch)["']/i;
+  const _PROTOCOL_TEXT_INVOKE_RE = /<\s*invoke\s+name\s*=\s*["'][A-Za-z_][A-Za-z0-9_.:-]*["']/i;
+  const _PROTOCOL_TEXT_HTML_RE = /<!doctype\s+html\b|<html\b|<\/html\s*>/i;
+  const _PROTOCOL_TEXT_CLOSE_RE = /<\/\s*invoke\s*>|<\/\s*(?:tool_calls?|tvoe_calls)\s*>/i;
+  const _PROTOCOL_TEXT_STANDALONE_RE = /<\s*(?:parameter|effect_calls|tool_calls?|tvoe_calls|angle\s+brackets)\s*>/i;
+  const _PROTOCOL_TEXT_DETAILS_RE = /<\s*details\s*>\s*<\s*summary\s*>\s*View areas around line\b/i;
+
+  function _looksLikeProtocolTextSuffix(suffix) {
+    if (/<\s*minimax:tool_call\s*>/i.test(suffix)) return true;
+    if (_PROTOCOL_TEXT_STANDALONE_RE.test(suffix)) return true;
+    if (_PROTOCOL_TEXT_DETAILS_RE.test(suffix)) return true;
+    if (_PROTOCOL_TEXT_PARAMETER_RE.test(suffix)) return true;
+    if (_PROTOCOL_TEXT_INVOKE_RE.test(suffix) && _PROTOCOL_TEXT_CLOSE_RE.test(suffix)) return true;
+    if (_PROTOCOL_TEXT_HTML_RE.test(suffix) && _PROTOCOL_TEXT_INVOKE_RE.test(suffix)) return true;
+    return false;
+  }
+
+  function _stripProtocolTextLeak(text) {
+    text = String(text || '');
+    if (!text) return text;
+    const match = _PROTOCOL_TEXT_MARKER_RE.exec(text);
+    if (!match) return text;
+    const suffix = text.slice(match.index);
+    if (!_looksLikeProtocolTextSuffix(suffix)) return text;
+    return text.slice(0, match.index).trimEnd();
+  }
 
   // Server-side per-turn time prefix: [YYYY-MM-DDTHH:MM±HH:MM Day TZ_NAME]\n{body}
   const _TIME_PREFIX_RE = /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}[+\-]\d{2}:\d{2} (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Za-z0-9_+\-/]+\]\n/;
@@ -2902,7 +2929,7 @@ const ChatView = (() => {
   }
 
   function _historyFallbackText(role, text) {
-    if (role === 'assistant') return _stripDirectiveTags(text || '').trim();
+    if (role === 'assistant') return _stripProtocolTextLeak(_stripDirectiveTags(text || '')).trim();
     if (role === 'user') return _stripTimePrefix(text || '').trim();
     return (text || '').trim();
   }
@@ -3454,7 +3481,7 @@ const ChatView = (() => {
     _renderRafId = null;
     if (!_renderDirty || !_streamBubble) { _renderDirty = false; return; }
     if (_activeTextSeg && _activeTextRaw) {
-      _activeTextSeg.innerHTML = Markdown.render(_stripDirectiveTags(_activeTextRaw));  // eslint-disable-line no-unsanitized/property
+      _activeTextSeg.innerHTML = Markdown.render(_stripProtocolTextLeak(_stripDirectiveTags(_activeTextRaw)));  // eslint-disable-line no-unsanitized/property
       Markdown.bindCopy(_activeTextSeg);
     }
     _renderDirty = false;
@@ -3472,7 +3499,7 @@ const ChatView = (() => {
     _streamIdlePausedForApproval = false;
     if (_streamBubble) {
       _streamBubble.classList.remove('streaming');
-      const cleanedText = _stripDirectiveTags(_streamRaw).trim();
+      const cleanedText = _stripProtocolTextLeak(_stripDirectiveTags(_streamRaw)).trim();
 
       // Suppress sentinel tokens that the LLM may emit instead of a real reply.
       // Don't suppress when aborted — we want the interrupted bubble to show
@@ -3507,7 +3534,7 @@ const ChatView = (() => {
       // Final render: render each text segment with its own content
       for (const seg of _segments) {
         if (seg.type !== 'text' || !seg.el) continue;
-        const segText = _stripDirectiveTags(seg.raw).trim();
+        const segText = _stripProtocolTextLeak(_stripDirectiveTags(seg.raw)).trim();
         if (segText) {
           seg.el.innerHTML = Markdown.render(segText);  // eslint-disable-line no-unsanitized/property
           Markdown.bindCopy(seg.el);
@@ -3980,7 +4007,7 @@ const ChatView = (() => {
 
       for (const seg of segments) {
         if (seg.type === 'text') {
-          const text = _stripDirectiveTags(seg.text || '').trim();
+          const text = _stripDirectiveTags(_stripProtocolTextLeak(seg.text || '')).trim();
           if (!text) continue;
           const textDiv = document.createElement('div');
           textDiv.className = 'msg-text-seg';
@@ -4187,7 +4214,7 @@ const ChatView = (() => {
     body.className = 'msg-body';
     body.textContent = '';
     if (role === 'assistant' && text) {
-      body.innerHTML = Markdown.render(_stripDirectiveTags(text));
+      body.innerHTML = Markdown.render(_stripProtocolTextLeak(_stripDirectiveTags(text)));
       Markdown.bindCopy(body);
       Markdown.bindHighlight(body);
     } else if (isSubagentCompletion) {

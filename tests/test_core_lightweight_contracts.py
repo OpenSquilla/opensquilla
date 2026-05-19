@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 
 from opensquilla.engine.session_sanitize import sanitize_session_messages
-from opensquilla.engine.tool_text_compat import strip_synthetic_tool_call_suffix
+from opensquilla.engine.tool_text_compat import (
+    ProtocolTextLeakGuard,
+    strip_protocol_text_leak,
+    strip_synthetic_tool_call_suffix,
+)
 from opensquilla.provider.openai import _build_openai_messages, _usage_fields
 from opensquilla.provider.openrouter_attribution import openrouter_app_headers
 from opensquilla.provider.types import ContentBlockText, ContentBlockToolResult, Message
@@ -55,6 +59,81 @@ def test_minimax_tool_call_text_is_removed_as_machine_payload() -> None:
     text = "<minimax:tool_call>{}</minimax:tool_call>"
 
     assert strip_synthetic_tool_call_suffix(text, ["web_search"]) == ""
+
+
+def test_malformed_text_tool_protocol_is_removed_before_user_display() -> None:
+    text = (
+        "Let me write the dashboard now.\n\n"
+        '<tvoe_calls><invoke name="write_file">'
+        '<parameter name="path">index.html</parameter>'
+        '<parameter name="content"><!DOCTYPE html><html><body>app</body></html>'
+        "</parameter></invoke></tvoe_calls>"
+    )
+
+    assert strip_protocol_text_leak(text) == "Let me write the dashboard now."
+
+
+def test_tool_scaffold_details_summary_is_removed_before_user_display() -> None:
+    text = (
+        "Let me read the specific problematic areas to fix them.\n\n"
+        "<details>"
+        "<summary>View areas around line 10393, 14751, and nearby</summary>\n\n"
+        "<parameter>\n\n"
+        "I see two real HTML issues."
+    )
+
+    assert strip_protocol_text_leak(text) == (
+        "Let me read the specific problematic areas to fix them."
+    )
+
+
+def test_streaming_protocol_guard_holds_split_tool_protocol() -> None:
+    guard = ProtocolTextLeakGuard()
+
+    assert guard.push("Let me write the dashboard now.\n\n<tvoe") == (
+        "Let me write the dashboard now."
+    )
+    assert (
+        guard.push(
+            '_calls><invoke name="write_file">'
+            '<parameter name="content"><!DOCTYPE html><html></html>'
+        )
+        == ""
+    )
+    assert guard.flush() == ""
+
+
+def test_streaming_protocol_guard_releases_unconfirmed_literal_marker() -> None:
+    guard = ProtocolTextLeakGuard()
+
+    assert guard.push("Explain literal <invoke") == "Explain literal"
+    assert guard.flush() == " <invoke"
+
+
+def test_streaming_protocol_guard_drops_tool_scaffold_before_tool_use() -> None:
+    guard = ProtocolTextLeakGuard()
+
+    assert guard.push("Let me read the specific problematic areas.\n\n<details>") == (
+        "Let me read the specific problematic areas."
+    )
+    assert (
+        guard.push(
+            "<summary>View areas around line 10393, 14751, and nearby</summary>"
+        )
+        == ""
+    )
+    assert guard.flush_before_tool_use() == ""
+    assert guard.push("Fixed the issues.") == "Fixed the issues."
+
+
+def test_streaming_protocol_guard_releases_regular_details_without_tool_use() -> None:
+    guard = ProtocolTextLeakGuard()
+
+    assert guard.push("Here is a collapsible note.\n\n<details>") == (
+        "Here is a collapsible note."
+    )
+    assert guard.push("<summary>More</summary>Visible note.</details>") == ""
+    assert guard.flush() == "\n\n<details><summary>More</summary>Visible note.</details>"
 
 
 def test_session_sanitize_removes_block_metadata_without_mutating_original_content() -> None:

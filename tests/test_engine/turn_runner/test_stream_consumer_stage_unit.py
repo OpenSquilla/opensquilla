@@ -277,6 +277,91 @@ def test_text_delta_handler_appends_to_both_buffers() -> None:
     assert state.current_text_parts == ["hi"]
 
 
+def test_text_delta_handler_suppresses_malformed_tool_protocol_html() -> None:
+    state = _make_state()
+    handler = _TextDeltaHandler()
+    payload = (
+        "Let me write the dashboard now.\n\n"
+        '<tvoe_calls><invoke name="write_file">'
+        '<parameter name="path">index.html</parameter>'
+        '<parameter name="content"><!DOCTYPE html><html><body>app</body></html>'
+        "</parameter></invoke></tvoe_calls>"
+    )
+
+    out = handler.handle(TextDeltaEvent(text=payload), state)
+
+    assert out.text == "Let me write the dashboard now."
+    assert state.final_text_parts == ["Let me write the dashboard now."]
+    assert state.current_text_parts == ["Let me write the dashboard now."]
+    assert "<!DOCTYPE html>" not in "".join(state.final_text_parts)
+
+
+def test_text_delta_handler_holds_split_malformed_tool_protocol_html() -> None:
+    state = _make_state()
+    handler = _TextDeltaHandler()
+
+    first = handler.handle(
+        TextDeltaEvent(text="Let me write the dashboard now.\n\n<tvoe"),
+        state,
+    )
+    second = handler.handle(
+        TextDeltaEvent(
+            text=(
+                '_calls><invoke name="write_file">'
+                '<parameter name="content"><!DOCTYPE html><html></html>'
+            )
+        ),
+        state,
+    )
+
+    assert first.text == "Let me write the dashboard now."
+    assert second.text == ""
+    assert state.final_text_parts == ["Let me write the dashboard now."]
+    assert "<tvoe" not in "".join(state.final_text_parts)
+
+
+def test_tool_use_start_handler_drops_tool_scaffold_text_segment() -> None:
+    state = _make_state()
+    text_handler = _TextDeltaHandler()
+    tool_handler = _ToolUseStartHandler()
+
+    first = text_handler.handle(
+        TextDeltaEvent(
+            text=(
+                "Let me read the specific problematic areas to fix them.\n\n"
+                "<details>"
+            )
+        ),
+        state,
+    )
+    second = text_handler.handle(
+        TextDeltaEvent(
+            text=(
+                "<summary>View areas around line 10393, 14751, and nearby"
+                "</summary>"
+            )
+        ),
+        state,
+    )
+    tool_handler.handle(
+        ToolUseStartEvent(
+            tool_use_id="t1",
+            tool_name="exec_command",
+            synthetic_from_text=False,
+        ),
+        state,
+    )
+
+    assert first.text == "Let me read the specific problematic areas to fix them."
+    assert second.text == ""
+    assert state.turn_segments[0] == {
+        "type": "text",
+        "text": "Let me read the specific problematic areas to fix them.",
+    }
+    assert "<details>" not in "".join(state.final_text_parts)
+    assert "<summary>" not in "".join(state.final_text_parts)
+
+
 def test_tool_use_start_handler_flushes_text_and_appends_segment() -> None:
     state = _make_state()
     state.current_text_parts = ["pre"]

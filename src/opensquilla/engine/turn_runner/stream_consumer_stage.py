@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 import structlog
 
 from opensquilla.engine.hooks.types import CompactionState
+from opensquilla.engine.tool_text_compat import ProtocolTextLeakGuard
 
 if TYPE_CHECKING:
     from opensquilla.engine.agent import Agent
@@ -199,6 +200,9 @@ class _StreamState:
     error_message: str | None = None
     pending_error_event: ErrorEvent | None = None
     done_event: DoneEvent | None = None
+    protocol_text_guard: ProtocolTextLeakGuard = field(
+        default_factory=ProtocolTextLeakGuard
+    )
 
     # PASSED IN by the harness -- references, not copies.
     final_text_parts: list[str] = field(default_factory=list)
@@ -267,9 +271,11 @@ class _TextDeltaHandler:
         event: TextDeltaEvent,
         state: _StreamState,
     ) -> TextDeltaEvent:
-        state.final_text_parts.append(event.text)
-        state.current_text_parts.append(event.text)
-        return event
+        cleaned_delta = state.protocol_text_guard.push(event.text)
+        if cleaned_delta:
+            state.final_text_parts.append(cleaned_delta)
+            state.current_text_parts.append(cleaned_delta)
+        return replace(event, text=cleaned_delta)
 
 class _ToolUseStartHandler:
     """Strip synthetic-tool-call text, flush the current text segment, append tool_use segment.
@@ -289,6 +295,11 @@ class _ToolUseStartHandler:
         from opensquilla.engine.tool_text_compat import (
             strip_synthetic_tool_call_text,
         )
+
+        pending_text = state.protocol_text_guard.flush_before_tool_use()
+        if pending_text:
+            state.final_text_parts.append(pending_text)
+            state.current_text_parts.append(pending_text)
 
         if event.synthetic_from_text and state.current_text_parts:
             raw_current_text = "".join(state.current_text_parts)
@@ -444,10 +455,19 @@ class _DoneHandler:
         turn = inp.turn
         metadata = turn.metadata
 
-        normalized_text = _normalize_heartbeat_text(
-            event.text,
-            run_kind=inp.run_kind,
-            heartbeat_ack_max_chars=inp.heartbeat_ack_max_chars,
+        pending_text = state.protocol_text_guard.flush()
+        if pending_text:
+            state.final_text_parts.append(pending_text)
+            state.current_text_parts.append(pending_text)
+
+        from opensquilla.engine.tool_text_compat import strip_protocol_text_leak
+
+        normalized_text = strip_protocol_text_leak(
+            _normalize_heartbeat_text(
+                event.text,
+                run_kind=inp.run_kind,
+                heartbeat_ack_max_chars=inp.heartbeat_ack_max_chars,
+            )
         )
         routed_tier = metadata.get("routed_tier")
         routing_source = metadata.get("routing_source", "none")

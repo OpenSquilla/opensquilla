@@ -735,7 +735,11 @@ def test_chat_history_fallback_identity_normalizes_assistant_directives() -> Non
     end = source.index("  function _pushIdentityElement", start)
     body = source[start:end]
 
-    assert "if (role === 'assistant') return _stripDirectiveTags(text || '').trim();" in body
+    assert (
+        "if (role === 'assistant') return "
+        "_stripProtocolTextLeak(_stripDirectiveTags(text || '')).trim();"
+        in body
+    )
 
 
 def test_chat_first_delta_marks_render_dirty_before_flush() -> None:
@@ -773,8 +777,25 @@ def test_chat_history_replacement_preserves_message_body_rendering() -> None:
     render_body = source[render_start:render_end]
 
     assert "_renderMessageBody(body, role, text, options);" in replace_body
-    assert "Markdown.render(_stripDirectiveTags(text))" in render_body
+    assert "Markdown.render(_stripProtocolTextLeak(_stripDirectiveTags(text)))" in render_body
     assert "Markdown.bindHighlight(body);" in render_body
+
+
+def test_chat_history_text_segments_use_protocol_leak_guard() -> None:
+    source = CHAT_JS.read_text(encoding="utf-8")
+    reconstruct_start = source.index("function _reconstructToolCalls")
+    reconstruct_end = source.index("  /* ── Message Rendering", reconstruct_start)
+    reconstruct_body = source[reconstruct_start:reconstruct_end]
+    render_start = source.index("function _renderMessageBody")
+    render_end = source.index("  function _scrollToBottom", render_start)
+    render_body = source[render_start:render_end]
+
+    assert "function _stripProtocolTextLeak" in source
+    assert "_stripProtocolTextLeak(seg.text || '')" in reconstruct_body
+    assert "_stripProtocolTextLeak(_stripDirectiveTags(text))" in render_body
+    assert "View areas around line" in source
+    assert "effect_calls" in source
+    assert "angle\\s+brackets" in source
 
 
 def test_approval_monitor_uses_adaptive_timeout_backoff() -> None:
