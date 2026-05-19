@@ -240,10 +240,13 @@ Co-authored-by: Codex <noreply@openai.com>
     gateway smoke start/status/stop/status returned `{"ok": true, ...}` and
     final line was `Refactor gate complete.`
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active` and
+- [x] Remove `../opensquilla-refactor-active` and
       `../opensquilla-refactor-agent-boot-prelude`, run `git worktree prune`,
       and verify no extra refactor worktree directories remain beyond
       `../opensquilla-refactor-integration`.
+  - Cleanup command removed both worktrees and ran `git worktree prune`.
+  - Final worktree list no longer includes `opensquilla-refactor-active` or
+    `opensquilla-refactor-agent-boot-prelude`.
 
 ## Child gate
 
@@ -286,7 +289,7 @@ Co-authored-by: Codex <noreply@openai.com>
   - Worker merge: `8800915`
 - Child verification commit: `dabdf4b`
 - Integration merge: `a14b463`
-- Integration record: pending this record update.
+- Integration record: `503affb`
 - Verification evidence:
   - RED focused command: `6 failed, 3 passed in 0.58s`.
   - GREEN focused command: `9 passed in 0.51s`.
@@ -299,7 +302,10 @@ Co-authored-by: Codex <noreply@openai.com>
     2 warnings`; gateway smoke completed start/status/stop/status.
   - Integration `scripts/refactor_gate.sh`: `2665 passed, 6 skipped,
     2 warnings`; gateway smoke completed start/status/stop/status.
-- Cleanup evidence:
+- Cleanup evidence: `../opensquilla-refactor-active` and
+  `../opensquilla-refactor-agent-boot-prelude` removed; `git worktree prune`
+  completed; final `git worktree list --porcelain` shows no temporary refactor
+  worktrees beyond `../opensquilla-refactor-integration`.
 - Residual risk:
   - Worktree cleanup remains for the coordinating main thread.
 - Next recommended slice:
