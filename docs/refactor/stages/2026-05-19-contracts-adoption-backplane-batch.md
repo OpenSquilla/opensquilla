@@ -133,16 +133,16 @@ Make `src/opensquilla/contracts` ports more than passive DTO exports by adding a
 - [x] Implement the cohesive behavior-compatible module batch without dropping existing feature coverage.
 - [x] Run the focused test and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh`.
-- [ ] Commit with:
+- [x] Commit with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run `git worktree prune`, and verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
+- [x] Remove `../opensquilla-refactor-active`, run `git worktree prune`, and verify no extra refactor worktree directories remain beyond `../opensquilla-refactor-integration`.
 
 ## Child gate
 
@@ -168,8 +168,8 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Completion record
 
-- Child commit:
-- Integration merge:
+- Child commit: `7d9b630`.
+- Integration merge: `2c00a7c`.
 - Verification evidence:
   - Child focused tests: `9 passed in 1.73s`.
   - Child touched checks:
@@ -177,6 +177,8 @@ Co-authored-by: Codex <noreply@openai.com>
     - Mypy touched backplane: `Success: no issues found in 1 source file`
     - `git diff --check`: exit 0.
   - Child full gate: `scripts/refactor_gate.sh` completed with `2836 passed, 8 skipped, 2 warnings` and gateway smoke passed on port `65468`.
+  - Integration full gate: `scripts/refactor_gate.sh` completed with `2838 passed, 6 skipped, 2 warnings` and gateway smoke passed on port `49238`.
+  - Cleanup: `git worktree remove ../opensquilla-refactor-active` and `git worktree prune` completed; `git worktree list` shows only the integration worktree for the refactor line.
 - Residual risk:
   - This stage introduces a composition seam and export only; concrete subsystem consumers are not migrated wholesale in this slice to avoid changing public runtime behavior. Future slices can inject `ContractBackplane` where application-level assembly needs a single contract port bundle.
 - Next recommended slice:
