@@ -276,15 +276,15 @@ changes and must not revert unrelated edits.
 - [x] Merge both worker branches into the active child.
 - [x] Run focused green command and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh` in the active child worktree.
-- [ ] Commit child verification/stage record update with:
+- [x] Commit child verification/stage record update with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active`,
       `../opensquilla-refactor-agent-gateway-run`, and
       `../opensquilla-refactor-agent-chat-stream`; run `git worktree prune`;
@@ -306,6 +306,23 @@ Co-authored-by: Codex <noreply@openai.com>
 - `git diff --check HEAD^ HEAD`
 - `uv run --extra dev pytest`
 - gateway smoke through `scripts/refactor_gate.sh`
+
+### Integration verification evidence
+
+- Integration merge:
+  - `0d42412` merged child branch
+    `codex/refactor-gateway-run-chat-stream-boundaries`.
+- Full integration gate:
+  - Command: `scripts/refactor_gate.sh`
+  - Result: passed.
+  - Gate evidence: ruff passed, mypy passed (`562 source files`),
+    whitespace passed, pytest `2697 passed, 6 skipped`, gateway smoke passed,
+    final line `Refactor gate complete.`
+- Merge hygiene checks to run before the integration verification commit:
+  - `git diff --check`
+  - `git diff --check HEAD^ HEAD`
+  - conflict marker scan for this stage's touched files and stage record
+  - local path hygiene scan for this stage record
 
 ### Child verification evidence
 
@@ -376,13 +393,24 @@ Co-authored-by: Codex <noreply@openai.com>
 - `1a26663` (`Merge gateway run boundary worker`)
 - `5245502` (`Merge chat stream boundary worker`)
 - Child verification commit:
-- pending
+- `881525b` (`Record gateway run chat stream child verification`)
 - Integration merge:
+- `0d42412` (`Merge gateway run chat stream boundaries`)
 - Integration record:
+- pending
 - Verification evidence:
 - Active child focused command: `18 passed`.
 - Active child full `scripts/refactor_gate.sh`: `2695 passed, 8 skipped`,
   gateway smoke passed.
+- Integration full `scripts/refactor_gate.sh`: `2697 passed, 6 skipped`,
+  gateway smoke passed.
 - Cleanup evidence:
+- pending
 - Residual risk:
+- Low. The main compatibility risk was the existing
+  `gateway_cmd.gateway_startup_guidance` import path; it is preserved through a
+  wrapper and covered by the restored test.
 - Next recommended slice:
+- Continue with a coarse CLI/runtime boundary that has independent file
+  ownership, rechecking `spawn_agent` first and otherwise using the external
+  worker pool.
