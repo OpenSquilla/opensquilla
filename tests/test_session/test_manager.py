@@ -9,6 +9,7 @@ import pytest_asyncio
 
 from opensquilla.session.manager import SessionManager
 from opensquilla.session.models import SessionIntent, SessionStatus, SessionSummary, TranscriptEntry
+from opensquilla.session.repository import SessionPersistenceRepository
 from opensquilla.session.storage import SessionStorage
 
 
@@ -40,6 +41,67 @@ async def test_get_session_returns_existing_without_touching(manager):
     assert fetched.session_key == node.session_key
     assert fetched.session_id == node.session_id
     assert missing is None
+
+
+class RecordingSessionPersistenceRepository(SessionPersistenceRepository):
+    def __init__(self, storage: SessionStorage) -> None:
+        super().__init__(storage)
+        self.calls: list[tuple[str, str]] = []
+
+    async def get_session(self, session_key: str):
+        self.calls.append(("get_session", session_key))
+        return await super().get_session(session_key)
+
+    async def save_session(self, node):
+        self.calls.append(("save_session", node.session_key))
+        await super().save_session(node)
+
+    async def append_transcript_entry(
+        self, entry: TranscriptEntry, *, expected_epoch: int | None = None
+    ) -> None:
+        self.calls.append(("append_transcript_entry", entry.session_key))
+        await super().append_transcript_entry(entry, expected_epoch=expected_epoch)
+
+    async def get_transcript(self, session_id: str, limit: int | None = None):
+        self.calls.append(("get_transcript", session_id))
+        return await super().get_transcript(session_id, limit=limit)
+
+
+@pytest.mark.asyncio
+async def test_manager_routes_session_reads_and_transcript_writes_through_repository():
+    storage = SessionStorage(":memory:")
+    await storage.connect()
+    repository = RecordingSessionPersistenceRepository(storage)
+    manager = SessionManager(
+        storage,
+        inject_time_prefix=False,
+        persistence_repository=repository,
+    )
+    try:
+        node = await manager.create("agent:main:repo-boundary")
+
+        fetched = await manager.get_session("agent:main:repo-boundary")
+        entry = await manager.append_message(
+            "agent:main:repo-boundary",
+            "user",
+            "repository-owned transcript write",
+            token_count=7,
+        )
+        transcript = await manager.get_transcript("agent:main:repo-boundary")
+        updated = await storage.get_session("agent:main:repo-boundary")
+    finally:
+        await storage.close()
+
+    assert fetched is not None
+    assert fetched.session_id == node.session_id
+    assert entry.content == "repository-owned transcript write"
+    assert [row.content for row in transcript] == ["repository-owned transcript write"]
+    assert updated is not None
+    assert updated.total_tokens == 7
+    assert ("get_session", "agent:main:repo-boundary") in repository.calls
+    assert ("save_session", "agent:main:repo-boundary") in repository.calls
+    assert ("append_transcript_entry", "agent:main:repo-boundary") in repository.calls
+    assert ("get_transcript", node.session_id) in repository.calls
 
 
 @pytest.mark.asyncio
