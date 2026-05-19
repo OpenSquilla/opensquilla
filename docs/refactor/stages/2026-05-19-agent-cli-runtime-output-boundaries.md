@@ -198,6 +198,20 @@ changes and must not revert unrelated edits.
   - `uv run --extra dev ruff check src/opensquilla/cli/agent_cmd.py src/opensquilla/cli/agent_runtime_config.py src/opensquilla/cli/agent_outputs.py tests/test_cli/test_agent_runtime_config_boundary.py tests/test_cli/test_agent_output_boundary.py tests/test_cli/test_agent_cmd.py tests/test_agent_cmd_no_key.py`
   - `uv run --extra dev mypy src/opensquilla/cli --show-error-codes`
   - `git diff --check`
+- Agent-runtime-config worker evidence:
+  - RED command:
+    `uv run --extra dev pytest tests/test_cli/test_agent_runtime_config_boundary.py tests/test_cli/test_agent_cmd.py::test_run_agent_once_uses_agent_registry_model_when_model_not_explicit tests/test_cli/test_agent_cmd.py::test_run_agent_once_explicit_model_overrides_agent_registry_model tests/test_cli/test_agent_cmd.py::test_run_agent_once_uses_configured_agent_workspace_without_global_workspace tests/test_cli/test_agent_cmd.py::test_run_agent_once_passes_bypass_permissions_to_tool_context tests/test_cli/test_agent_cmd.py::test_run_agent_once_uses_permissions_environment_default tests/test_cli/test_agent_cmd.py::test_run_agent_once_rejects_invalid_permissions -q`
+  - RED result: failed during collection with
+    `ImportError: cannot import name 'agent_runtime_config' from 'opensquilla.cli'`.
+  - GREEN command: same focused command after extracting runtime config helpers.
+  - GREEN result: `10 passed in 0.50s`.
+  - Touched-file ruff:
+    `uv run --extra dev ruff check src/opensquilla/cli/agent_cmd.py src/opensquilla/cli/agent_runtime_config.py tests/test_cli/test_agent_runtime_config_boundary.py`
+    -> `All checks passed!`.
+  - Whitespace check: `git diff --check` -> clean.
+  - Refactor gate: `scripts/refactor_gate.sh` -> ruff passed, mypy passed,
+    whitespace clean, `2713 passed, 8 skipped, 2 warnings in 58.29s`, gateway
+    smoke start/status/stop/status passed, `Refactor gate complete`.
 
 ## Files
 
@@ -221,9 +235,10 @@ changes and must not revert unrelated edits.
 - [x] Write this stage plan before production edits.
 - [ ] Commit this stage plan as the worker base.
 - [ ] Launch two external workers with `scripts/refactor_external_agent.sh`.
-- [ ] Agent-runtime-config worker writes RED boundary tests and records RED output.
+- [x] Agent-runtime-config worker writes RED boundary tests and records RED output.
 - [ ] Agent-output worker writes RED boundary tests and records RED output.
-- [ ] Workers implement their disjoint boundaries and record GREEN/check/gate evidence.
+- [x] Agent-runtime-config worker implements boundary and records GREEN/check/gate evidence.
+- [ ] Agent-output worker implements boundary and records GREEN/check/gate evidence.
 - [ ] Main thread reviews both diffs for behavior compatibility and ownership.
 - [ ] Merge both worker branches into the active child.
 - [ ] Run focused green command and touched-file checks.
