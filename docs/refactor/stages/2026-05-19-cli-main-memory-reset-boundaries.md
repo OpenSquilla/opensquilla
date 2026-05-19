@@ -242,6 +242,8 @@ changes and must not revert unrelated edits.
       `git show HEAD:docs/refactor/stages/2026-05-19-cli-lifecycle-cron-boundaries.md`
       confirms the same local-home path lines already exist at HEAD, and that
       file is outside the memory worker ownership boundary.
+    - The hygiene failure was fixed in active child commit `0272bef` before
+      the worker branches were merged for child verification.
 
 ### Reset worker evidence
 
@@ -317,15 +319,15 @@ changes and must not revert unrelated edits.
 - [x] Confirm `spawn_agent` status.
 - [x] Create fixed active worktree on `codex/refactor-cli-main-memory-reset-boundaries`.
 - [x] Write this stage plan before production edits.
-- [ ] Commit this stage plan as the worker base.
-- [ ] Launch two external workers with `scripts/refactor_external_agent.sh`.
-- [ ] Memory worker writes RED boundary tests and records RED output.
+- [x] Commit this stage plan as the worker base.
+- [x] Launch two external workers with `scripts/refactor_external_agent.sh`.
+- [x] Memory worker writes RED boundary tests and records RED output.
 - [x] Reset worker writes RED boundary tests and records RED output.
 - [x] Workers implement their disjoint boundaries and record GREEN/check/gate evidence.
-- [ ] Main thread reviews both diffs for behavior compatibility and ownership.
-- [ ] Merge both worker branches into the active child.
-- [ ] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
+- [x] Main thread reviews both diffs for behavior compatibility and ownership.
+- [x] Merge both worker branches into the active child.
+- [x] Run focused green command and touched-file checks.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
 - [ ] Commit child verification/stage record update with:
 
 ```text
@@ -349,6 +351,35 @@ Co-authored-by: Codex <noreply@openai.com>
 - `uv run --extra dev pytest`
 - gateway smoke through `scripts/refactor_gate.sh`
 
+### Child verification evidence
+
+- Worker review:
+  - Memory worker commit `2eb0f98` reviewed for ownership, behavior
+    compatibility, and exactly one required co-author trailer.
+  - Reset worker commit `26f168d` reviewed for ownership, behavior
+    compatibility, and exactly one required co-author trailer.
+- Active child merge commits:
+  - `88c7cee` merged `codex/refactor-cli-memory-boundary-worker`.
+  - `06e44ae` merged `codex/refactor-cli-reset-boundary-worker`.
+- Conflict scan:
+  - `rg -n "<<<<<<<|>>>>>>>|=======" src/opensquilla/cli docs/refactor/stages/2026-05-19-cli-main-memory-reset-boundaries.md`
+    returned no matches.
+- Focused post-merge command:
+  - `uv run --extra dev pytest tests/test_cli/test_memory_cli_boundary.py tests/test_cli/test_reset_cli_boundary.py tests/test_cli/test_cli_product_completeness.py::test_memory_status_json_reuses_doctor_rpc tests/test_cli/test_cli_product_completeness.py::test_memory_list_json_uses_gateway_rpc tests/test_cli/test_cli_product_completeness.py::test_memory_search_and_show_use_gateway_rpcs -q`
+  - Result: `14 passed`.
+- Touched-file checks:
+  - `uv run --extra dev ruff check src/opensquilla/cli/main.py src/opensquilla/cli/memory_workflows.py src/opensquilla/cli/memory_presenters.py src/opensquilla/cli/reset_workflows.py src/opensquilla/cli/reset_presenters.py tests/test_cli/test_memory_cli_boundary.py tests/test_cli/test_reset_cli_boundary.py tests/test_cli/test_cli_product_completeness.py`
+    result: passed.
+  - `uv run --extra dev mypy src/opensquilla/cli --show-error-codes`
+    result: passed, no issues found in `126 source files`.
+  - `git diff --check` result: passed.
+- Full active child gate:
+  - Command: `scripts/refactor_gate.sh`
+  - Result: passed.
+  - Gate evidence: ruff passed, mypy passed (`559 source files`), whitespace
+    passed, pytest `2682 passed, 8 skipped`, gateway smoke passed, refactor gate
+    complete.
+
 ## Integration gate
 
 - `uv run --extra dev ruff check src tests`
@@ -368,12 +399,21 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Memory worker commit:
+- `2eb0f98` (`Refactor memory CLI RPC boundary`)
 - Reset worker commit:
+- `26f168d` (`Refactor reset CLI boundary`)
 - Active child support commits:
+- `0272bef` (`Fix CLI lifecycle cron cleanup path record`)
+- `88c7cee` (`Merge CLI memory boundary worker`)
+- `06e44ae` (`Merge CLI reset boundary worker`)
 - Child verification commit:
+- pending
 - Integration merge:
 - Integration record:
 - Verification evidence:
+- Active child focused command: `14 passed`.
+- Active child full `scripts/refactor_gate.sh`: `2682 passed, 8 skipped`,
+  gateway smoke passed.
 - Cleanup evidence:
 - Residual risk:
 - Next recommended slice:
