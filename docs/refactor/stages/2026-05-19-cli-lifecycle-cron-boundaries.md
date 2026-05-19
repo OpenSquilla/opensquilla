@@ -291,15 +291,15 @@ Thin two independent CLI command surfaces in parallel:
 - [x] Merge both worker branches into the active child.
 - [x] Run focused green command and touched-file checks.
 - [x] Run `scripts/refactor_gate.sh` in the active child worktree.
-- [ ] Commit child verification/stage record update with:
+- [x] Commit child verification/stage record update with:
 
 ```text
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
 - [ ] Remove `../opensquilla-refactor-active`,
       `../opensquilla-refactor-agent-cli-gateway`, and
       `../opensquilla-refactor-agent-cli-cron`; run `git worktree prune`; verify
@@ -342,12 +342,16 @@ Co-authored-by: Codex <noreply@openai.com>
   - `fcb39f5` (`Merge gateway lifecycle CLI boundary worker`)
   - `d2ce4dc` (`Merge cron CLI boundary worker`)
 - Child verification commit:
+  - `6e5b7f5` (`Record CLI lifecycle cron child verification`)
 - Integration merge:
+  - `7022051` (`Merge CLI lifecycle and cron boundaries`)
 - Integration record:
 - Verification evidence:
   - Child focused CLI suite: `25 passed in 3.67s`.
   - Child `scripts/refactor_gate.sh`: `2671 passed, 8 skipped, 2 warnings in
     51.63s`; gateway smoke completed on port `64403`.
+  - Integration `scripts/refactor_gate.sh`: `2673 passed, 6 skipped, 2
+    warnings in 28.21s`; gateway smoke completed on port `64544`.
 - Cleanup evidence:
 - Residual risk:
   - Low. Cron/gateway CLI command shells now delegate to workflow/presenter
