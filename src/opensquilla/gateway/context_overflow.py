@@ -31,7 +31,10 @@ import structlog
 
 from opensquilla.engine.cache_break_monitor import notify_compaction
 from opensquilla.gateway.config import ContextOverflowPolicy, GatewayConfig
-from opensquilla.session.compaction import call_compact_with_optional_config
+from opensquilla.session.compaction import (
+    call_compact_with_optional_config,
+    estimate_entry_replay_tokens,
+)
 from opensquilla.session.compaction_lifecycle import (
     CompactionLifecycleResult,
     flush_receipt_allows_destructive_compaction,
@@ -83,11 +86,7 @@ def _estimate_payload_tokens(message: str, transcript: list[Any]) -> int:
 
     total = estimate_tokens(message or "")
     for entry in transcript or []:
-        content = getattr(entry, "content", None)
-        if isinstance(content, str):
-            total += estimate_tokens(content)
-        elif content is not None:
-            total += estimate_tokens(str(content))
+        total += estimate_entry_replay_tokens(entry)
     return total
 
 

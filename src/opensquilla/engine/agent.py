@@ -29,6 +29,7 @@ from opensquilla.engine.cache_break_monitor import (
 from opensquilla.engine.fallback import FallbackPolicy, backoff_sleep
 from opensquilla.engine.history import limit_turns, repair_tool_pairing
 from opensquilla.engine.session_sanitize import (
+    project_historical_tool_payloads,
     sanitize_session_messages,
     session_payload_chars,
 )
@@ -148,6 +149,7 @@ _TOOL_RESULT_SUMMARY_SYSTEM = (
 _LARGE_JSON_TOOL_FIELD_KEYS: frozenset[str] = frozenset({"body", "body_base64"})
 _LARGE_JSON_TOOL_FIELD_CHARS = 20_000
 _TOOL_ARGUMENT_PROJECTION_PREFIX = "[tool_use_argument_projection]\n"
+_HISTORICAL_TOOL_ARGUMENT_PROJECTION_PREFIX = "[historical_tool_argument_omitted]\n"
 _INVALID_PROVIDER_CONTEXT_PROJECTION_PREFIX = "[invalid_provider_context_projection:"
 _INVALID_PROVIDER_CONTEXT_ARGUMENTS_KEY = "_invalid_provider_context_arguments"
 _TOOL_ARGUMENT_HEARTBEAT_CHARS = 4096
@@ -1542,10 +1544,6 @@ class Agent:
         # Some reasoning tool-call providers require the prior assistant
         # tool-call message to carry its reasoning_content while reasoning is
         # enabled, so keep that narrow field only for tool-call history.
-        loaded_history = list(self._history)
-        self._write_context_stage("session:loaded", loaded_history)
-        sanitized_history, sanitize_result = sanitize_session_messages(loaded_history)
-        sanitized_history = repair_tool_pairing(sanitized_history)
         caps_reasoning_format = (
             getattr(self.config.model_capabilities, "reasoning_format", "")
             if self.config.model_capabilities is not None
@@ -1559,6 +1557,14 @@ class Agent:
                 and _is_deepseek_model_id(self.config.model_id)
             )
         )
+        loaded_history = list(self._history)
+        self._write_context_stage("session:loaded", loaded_history)
+        sanitized_history, sanitize_result = sanitize_session_messages(loaded_history)
+        sanitized_history, historical_projection_result = project_historical_tool_payloads(
+            sanitized_history,
+            preserve_reasoning_content=preserve_reasoning_content,
+        )
+        sanitized_history = repair_tool_pairing(sanitized_history)
         sanitized_history = drop_reasoning(
             sanitized_history,
             preserve_tool_call_reasoning=thinking_enabled,
@@ -1569,6 +1575,7 @@ class Agent:
             "session:sanitized",
             sanitized_history,
             sanitize=sanitize_result,
+            historical_projection=historical_projection_result.__dict__,
         )
         history = limit_turns(sanitized_history, self.config.max_history_turns)
         history = repair_tool_pairing(history)
@@ -3968,7 +3975,7 @@ class Agent:
             )
         for argument_name, value in tc.arguments.items():
             if not isinstance(value, str) or not value.startswith(
-                _TOOL_ARGUMENT_PROJECTION_PREFIX
+                (_TOOL_ARGUMENT_PROJECTION_PREFIX, _HISTORICAL_TOOL_ARGUMENT_PROJECTION_PREFIX)
             ):
                 continue
             return self._projection_rehydrate_error(

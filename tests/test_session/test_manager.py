@@ -420,8 +420,8 @@ async def test_compact_with_result_preserves_tool_metadata_for_boundary_cut(mana
 
     result = await manager.compact_with_result(
         "agent:main:main",
-        context_window_tokens=20,
-        config=CompactionConfig(safety_margin=0.5),
+        context_window_tokens=50,
+        config=CompactionConfig(safety_margin=1.0),
     )
 
     assert result.removed_count == 1
@@ -432,6 +432,38 @@ async def test_compact_with_result_preserves_tool_metadata_for_boundary_cut(mana
     assert transcript[0].tool_calls == [{"id": "call_1", "type": "function"}]
     assert transcript[1].role == "tool"
     assert transcript[1].tool_call_id == "call_1"
+
+
+@pytest.mark.asyncio
+async def test_compact_counts_tool_calls_when_token_count_is_underreported(manager):
+    await manager.create("agent:main:main")
+    large_content = "x" * 5000
+    await manager.append_message(
+        "agent:main:main",
+        "assistant",
+        "small visible answer",
+        tool_calls=[
+            {
+                "type": "tool_use",
+                "tool_use_id": "write-stale",
+                "name": "write_file",
+                "input": {"path": "index.html", "content": large_content},
+            }
+        ],
+        token_count=1,
+    )
+
+    result = await manager.compact_with_result(
+        "agent:main:main",
+        context_window_tokens=400,
+        config=CompactionConfig(safety_margin=1.0),
+    )
+
+    assert result.removed_count == 1
+    assert result.summary
+    assert large_content not in result.summary
+    node = await manager._storage.get_session("agent:main:main")
+    assert node.compaction_count == 1
 
 
 def _fail_next_transcript_insert(monkeypatch: pytest.MonkeyPatch, storage: SessionStorage) -> None:

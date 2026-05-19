@@ -10,7 +10,10 @@ import pytest
 
 from opensquilla.engine import Agent, AgentConfig, ToolResult, ToolResultEvent
 from opensquilla.engine.history import limit_turns
-from opensquilla.engine.session_sanitize import sanitize_session_messages
+from opensquilla.engine.session_sanitize import (
+    project_historical_tool_payloads,
+    sanitize_session_messages,
+)
 from opensquilla.engine.types import ThinkingLevel
 from opensquilla.memory.session_flush import _usage_from_complete_response
 from opensquilla.provider import (
@@ -226,6 +229,112 @@ def test_session_sanitize_strips_block_metadata_without_compressing_content() ->
     assert block.content == "result text with details that must remain factual"
     assert "details" not in block.model_dump(mode="json")
     assert "timestamp" not in block.model_dump(mode="json")
+
+
+def test_historical_replay_projection_compacts_tool_payloads_and_reasoning() -> None:
+    large_argument = "STALE_ARGUMENT_START\n" + ("x" * 6000)
+    large_result = "STALE_RESULT_START\n" + ("y" * 6000)
+    messages = [
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockToolUse(
+                    id="write-1",
+                    name="write_file",
+                    input={"path": "index.html", "content": large_argument},
+                )
+            ],
+            reasoning_content="hidden reasoning\n" + ("r" * 4000),
+        ),
+        Message(
+            role="user",
+            content=[
+                ContentBlockToolResult(
+                    tool_use_id="write-1",
+                    content=large_result,
+                    is_error=False,
+                )
+            ],
+        ),
+    ]
+
+    projected, result = project_historical_tool_payloads(messages)
+
+    assert result.tool_uses_projected == 1
+    assert result.tool_results_projected == 1
+    assert result.reasoning_chars_removed > 0
+    assert projected[0].reasoning_content is None
+    tool_use = projected[0].content[0]
+    assert isinstance(tool_use, ContentBlockToolUse)
+    assert tool_use.input["path"] == "index.html"
+    assert tool_use.input["content"].startswith("[historical_tool_argument_omitted]\n")
+    assert large_argument not in tool_use.input["content"]
+    tool_result = projected[1].content[0]
+    assert isinstance(tool_result, ContentBlockToolResult)
+    assert str(tool_result.content).startswith("[historical_tool_result_compacted]")
+    assert large_result not in str(tool_result.content)
+    assert messages[0].reasoning_content is not None
+    assert messages[0].content[0].input["content"] == large_argument
+
+
+def test_historical_replay_projection_compacts_nested_tool_payloads() -> None:
+    large_content = "CONTENT_START\n" + ("c" * 3000)
+    large_nested = {"blob": "NESTED_START\n" + ("n" * 20_000)}
+    messages = [
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockToolUse(
+                    id="nested-1",
+                    name="write_file",
+                    input={
+                        "path": "index.html",
+                        "content": large_content,
+                        "metadata": large_nested,
+                    },
+                )
+            ],
+        )
+    ]
+
+    projected, result = project_historical_tool_payloads(messages)
+
+    assert result.tool_uses_projected == 1
+    tool_use = projected[0].content[0]
+    assert isinstance(tool_use, ContentBlockToolUse)
+    assert tool_use.input["path"] == "index.html"
+    assert tool_use.input["content"].startswith("[historical_tool_argument_omitted]\n")
+    assert tool_use.input["metadata"].startswith("[historical_tool_argument_omitted]\n")
+    payload = json.dumps(tool_use.input, ensure_ascii=False)
+    assert "c" * 1000 not in payload
+    assert "n" * 1000 not in payload
+    assert messages[0].content[0].input["metadata"] == large_nested
+
+
+def test_historical_replay_projection_compacts_list_tool_results() -> None:
+    large_result = [{"type": "text", "text": "LIST_RESULT_START\n" + ("y" * 8000)}]
+    messages = [
+        Message(
+            role="user",
+            content=[
+                ContentBlockToolResult(
+                    tool_use_id="list-result-1",
+                    content=large_result,
+                    is_error=False,
+                )
+            ],
+        )
+    ]
+
+    projected, result = project_historical_tool_payloads(messages)
+
+    assert result.tool_results_projected == 1
+    tool_result = projected[0].content[0]
+    assert isinstance(tool_result, ContentBlockToolResult)
+    assert isinstance(tool_result.content, str)
+    assert tool_result.content.startswith("[historical_tool_result_compacted]")
+    assert "y" * 1000 not in tool_result.content
+    assert messages[0].content[0].content == large_result
 
 
 def test_tool_result_compression_default_behavior_is_unchanged() -> None:
@@ -1015,6 +1124,113 @@ async def test_agent_uses_sanitized_request_view_and_records_context_stages() ->
         "stream:context",
         "session:after",
     ]
+
+
+@pytest.mark.asyncio
+async def test_agent_provider_view_omits_loaded_history_tool_arguments() -> None:
+    provider = CapturingProvider()
+    large_argument = "STALE_HISTORY_ARGUMENT\n" + ("x" * 20_000)
+    agent = Agent(
+        provider=provider,
+        config=AgentConfig(max_iterations=1, flush_enabled=False),
+    )
+    agent.set_history(
+        [
+            Message(
+                role="assistant",
+                content=[
+                    ContentBlockToolUse(
+                        id="write-stale",
+                        name="write_file",
+                        input={"path": "index.html", "content": large_argument},
+                    )
+                ],
+                reasoning_content="old reasoning\n" + ("r" * 10_000),
+            ),
+            Message(
+                role="user",
+                content=[
+                    ContentBlockToolResult(
+                        tool_use_id="write-stale",
+                        content='{"status":"ok"}',
+                        is_error=False,
+                    )
+                ],
+            ),
+        ]
+    )
+
+    events = [event async for event in agent.run_turn("new task")]
+
+    assert any(event.kind == "done" for event in events)
+    assert provider.calls
+    payload = json.dumps(
+        [message.model_dump(mode="json") for message in provider.calls[0]["messages"]],
+        ensure_ascii=False,
+    )
+    assert large_argument not in payload
+    assert "x" * 1000 not in payload
+    assert "old reasoning" not in payload
+    assert "historical_tool_argument_omitted" in payload
+
+
+@pytest.mark.asyncio
+async def test_agent_preserves_deepseek_reasoning_while_projecting_history_payload() -> None:
+    provider = CapturingProvider()
+    large_argument = "DEEPSEEK_STALE_ARGUMENT\n" + ("x" * 20_000)
+    reasoning = "I reasoned before the historical tool call."
+    agent = Agent(
+        provider=provider,
+        config=AgentConfig(
+            max_iterations=1,
+            thinking=ThinkingLevel.HIGH,
+            model_id="deepseek-v4-flash",
+            model_capabilities=ModelCapabilities(
+                supports_reasoning=True,
+                supports_tools=True,
+                reasoning_format="deepseek",
+            ),
+            flush_enabled=False,
+        ),
+    )
+    agent.set_history(
+        [
+            Message(
+                role="assistant",
+                content=[
+                    ContentBlockToolUse(
+                        id="deepseek-stale",
+                        name="write_file",
+                        input={"path": "index.html", "content": large_argument},
+                    )
+                ],
+                reasoning_content=reasoning,
+            ),
+            Message(
+                role="user",
+                content=[
+                    ContentBlockToolResult(
+                        tool_use_id="deepseek-stale",
+                        content='{"status":"ok"}',
+                        is_error=False,
+                    )
+                ],
+            ),
+        ]
+    )
+
+    events = [event async for event in agent.run_turn("continue")]
+
+    assert any(event.kind == "done" for event in events)
+    sent_assistant = provider.calls[0]["messages"][0]
+    assert sent_assistant.reasoning_content == reasoning
+    payload = json.dumps(
+        [message.model_dump(mode="json") for message in provider.calls[0]["messages"]],
+        ensure_ascii=False,
+    )
+    assert large_argument not in payload
+    assert "x" * 1000 not in payload
+    assert "historical_tool_argument_omitted" in payload
 
 
 @pytest.mark.asyncio

@@ -737,6 +737,7 @@ class SessionManager:
                 "token_count": e.token_count,
                 "tool_calls": e.tool_calls,
                 "tool_call_id": e.tool_call_id,
+                "reasoning_content": e.reasoning_content,
             }
             for e in entries
         ]

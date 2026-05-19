@@ -23,6 +23,9 @@ from opensquilla.session.compaction import CompactionConfig
 @dataclass
 class _FakeEntry:
     content: str
+    tool_calls: list[dict[str, Any]] | None = None
+    reasoning_content: str | None = None
+    token_count: int | None = None
 
 
 class _FakeSessionManager:
@@ -203,6 +206,59 @@ async def test_refuse_returns_stable_error_envelope() -> None:
     assert env["error_class"] == "context_overflow"
     assert env["retry_allowed"] is False
     assert isinstance(env["user_message"], str) and env["user_message"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_context_overflow_counts_tool_call_arguments() -> None:
+    cfg = _cfg(ContextOverflowPolicy.REFUSE, budget=100)
+    transcript = [
+        _FakeEntry(
+            content="small visible answer",
+            token_count=1,
+            tool_calls=[
+                {
+                    "type": "tool_use",
+                    "tool_use_id": "write-stale",
+                    "name": "write_file",
+                    "input": {"path": "index.html", "content": "x" * 5000},
+                }
+            ],
+        )
+    ]
+
+    outcome = await apply_context_overflow_policy(
+        config=cfg,
+        message="next",
+        transcript=transcript,
+        session_key="s-tool-payload",
+    )
+
+    assert outcome.over_budget is True
+    assert outcome.refusal is not None
+    assert outcome.estimated_tokens > cfg.context_budget_tokens
+
+
+@pytest.mark.asyncio
+async def test_gateway_context_overflow_counts_reasoning_content() -> None:
+    cfg = _cfg(ContextOverflowPolicy.REFUSE, budget=100)
+    transcript = [
+        _FakeEntry(
+            content="small visible answer",
+            token_count=1,
+            reasoning_content="reasoning " + ("r" * 5000),
+        )
+    ]
+
+    outcome = await apply_context_overflow_policy(
+        config=cfg,
+        message="next",
+        transcript=transcript,
+        session_key="s-reasoning-payload",
+    )
+
+    assert outcome.over_budget is True
+    assert outcome.refusal is not None
+    assert outcome.estimated_tokens > cfg.context_budget_tokens
 
 
 @pytest.mark.asyncio

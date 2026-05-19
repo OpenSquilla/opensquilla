@@ -57,6 +57,7 @@ log = structlog.get_logger("opensquilla.tools.dispatch")
 __all__ = ["build_tool_handler"]
 
 _TOOL_ARGUMENT_PROJECTION_PREFIX = "[tool_use_argument_projection]\n"
+_HISTORICAL_TOOL_ARGUMENT_PROJECTION_PREFIX = "[historical_tool_argument_omitted]\n"
 _COMPACTED_TOOL_ARGUMENT_MARKERS = frozenset(
     {
         "_opensquilla_compacted_tool_arguments",
@@ -199,7 +200,9 @@ def _check_non_executable_arguments(
         )
 
     for argument_name, value in arguments.items():
-        if isinstance(value, str) and value.startswith(_TOOL_ARGUMENT_PROJECTION_PREFIX):
+        if isinstance(value, str) and value.startswith(
+            (_TOOL_ARGUMENT_PROJECTION_PREFIX, _HISTORICAL_TOOL_ARGUMENT_PROJECTION_PREFIX)
+        ):
             log.warning(
                 "dispatch.projected_tool_arguments_refused",
                 tool=tool_call.tool_name,

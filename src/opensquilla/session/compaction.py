@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 from dataclasses import dataclass, field
@@ -144,11 +145,47 @@ def _estimate_tokens(text: str) -> int:
     return estimate_tokens(text)
 
 
+def _entry_get(entry: Any, key: str, default: Any = None) -> Any:
+    if isinstance(entry, dict):
+        return entry.get(key, default)
+    return getattr(entry, key, default)
+
+
+def _json_text(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def estimate_entry_replay_tokens(entry: Any) -> int:
+    """Estimate the model-replay size of a persisted transcript entry."""
+
+    content = _entry_get(entry, "content") or ""
+    token_count = _entry_get(entry, "token_count")
+    try:
+        persisted_tokens = int(token_count or 0)
+    except (TypeError, ValueError):
+        persisted_tokens = 0
+    content_tokens = persisted_tokens or (_estimate_tokens(str(content)) if content else 0)
+
+    extra_parts: list[str] = []
+    content = _entry_get(entry, "content") or ""
+    tool_calls = _entry_get(entry, "tool_calls")
+    if tool_calls:
+        extra_parts.append(_json_text(tool_calls))
+    tool_call_id = _entry_get(entry, "tool_call_id")
+    if tool_call_id:
+        extra_parts.append(str(tool_call_id))
+    reasoning_content = _entry_get(entry, "reasoning_content")
+    if reasoning_content:
+        extra_parts.append(str(reasoning_content))
+    extra_tokens = _estimate_tokens("\n".join(extra_parts)) if extra_parts else 0
+    return content_tokens + extra_tokens
+
+
 def _entry_tokens(entry: dict[str, Any]) -> int:
-    if entry.get("token_count"):
-        return int(entry["token_count"])
-    content = entry.get("content") or ""
-    return _estimate_tokens(str(content))
+    return estimate_entry_replay_tokens(entry)
 
 
 def _chunk_entries(entries: list[dict[str, Any]], chunk_ratio: float) -> list[list[dict[str, Any]]]:
@@ -203,13 +240,96 @@ def _summarize_if_envelope(content: str) -> str:
     return text
 
 
+def _preview_text(text: str, max_chars: int = 240) -> str:
+    if len(text) <= max_chars:
+        return text
+    head_chars = max_chars // 2
+    tail_chars = max_chars - head_chars
+    omitted = len(text) - head_chars - tail_chars
+    return f"{text[:head_chars]}\n[...omitted {omitted} chars...]\n{text[-tail_chars:]}"
+
+
+def _summarize_tool_value(value: Any) -> str:
+    if isinstance(value, str):
+        if len(value) <= 240:
+            return value
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+        return f"<string chars={len(value)} sha256={digest} preview={_preview_text(value)!r}>"
+    if isinstance(value, (int, float, bool)) or value is None:
+        return repr(value)
+    rendered = _json_text(value)
+    if len(rendered) <= 240:
+        return rendered
+    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+    return f"<json chars={len(rendered)} sha256={digest} preview={_preview_text(rendered)!r}>"
+
+
+def _summarize_tool_calls_for_llm(tool_calls: Any) -> str:
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return ""
+    lines = ["[tool payload summary]"]
+    for index, segment in enumerate(tool_calls, start=1):
+        if not isinstance(segment, dict):
+            lines.append(f"- segment {index}: {type(segment).__name__}")
+            continue
+        seg_type = segment.get("type") or "unknown"
+        if seg_type == "tool_use" or isinstance(segment.get("function"), dict):
+            tool_name = segment.get("name") or segment.get("function", {}).get("name") or "unknown"
+            tool_id = segment.get("tool_use_id") or segment.get("id") or "unknown"
+            raw_input = segment.get("input")
+            if raw_input is None and isinstance(segment.get("function"), dict):
+                raw_input = segment["function"].get("arguments")
+            if isinstance(raw_input, str):
+                try:
+                    parsed_input = json.loads(raw_input)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    parsed_input = {"_raw": raw_input}
+            elif isinstance(raw_input, dict):
+                parsed_input = raw_input
+            else:
+                parsed_input = {}
+            keys = sorted(str(key) for key in parsed_input)
+            lines.append(f"- tool_use {tool_id}: {tool_name} keys={keys}")
+            for key in keys:
+                lines.append(f"  {key}: {_summarize_tool_value(parsed_input.get(key))}")
+            continue
+        if seg_type == "tool_result":
+            result = segment.get("result", "")
+            rendered = result if isinstance(result, str) else _json_text(result)
+            digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+            lines.append(
+                "- tool_result "
+                f"{segment.get('tool_use_id') or 'unknown'}: "
+                f"is_error={bool(segment.get('is_error'))} "
+                f"chars={len(rendered)} sha256={digest} "
+                f"preview={_preview_text(rendered)!r}"
+            )
+            continue
+        if seg_type == "text":
+            text = str(segment.get("text") or "")
+            lines.append(f"- text chars={len(text)} preview={_preview_text(text)!r}")
+            continue
+        lines.append(f"- {seg_type} keys={sorted(str(key) for key in segment)}")
+    return "\n".join(lines)
+
+
 def _format_chunk_for_llm(chunk: list[dict[str, Any]]) -> str:
     """Format conversation entries into readable text for the compaction LLM."""
     lines: list[str] = []
     for entry in chunk:
         role = entry.get("role", "unknown")
         content = _summarize_if_envelope(str(entry.get("content") or ""))
-        lines.append(f"[{role}]: {content}")
+        rendered_parts = [f"[{role}]: {content}"]
+        tool_summary = _summarize_tool_calls_for_llm(entry.get("tool_calls"))
+        if tool_summary:
+            rendered_parts.append(tool_summary)
+        reasoning_content = entry.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content:
+            rendered_parts.append(
+                "[assistant reasoning omitted from compaction input: "
+                f"{len(reasoning_content)} chars]"
+            )
+        lines.append("\n".join(part for part in rendered_parts if part))
     return "\n\n".join(lines)
 
 
