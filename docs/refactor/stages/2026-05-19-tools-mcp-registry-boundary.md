@@ -200,8 +200,14 @@ Co-authored-by: Codex <noreply@openai.com>
 
 ## Integration gate
 
-- Not run by this worker. User explicitly said do not merge to integration and
-  do not cleanup.
+- Integration merge: `1b5e36c` (`Merge tools MCP registry boundary`).
+- Full integration gate: `scripts/refactor_gate.sh` passed after replacing
+  local absolute paths in the dispatch record; ruff passed; mypy passed with no
+  issues in 574 source files; whitespace passed; pytest `2813 passed, 6
+  skipped, 2 warnings`; gateway smoke start/status/stop passed on port `61461`.
+- Cleanup evidence: removed `../opensquilla-refactor-agent-tools`, deleted
+  `codex/refactor-tools-mcp-registry-boundary`, ran `git worktree prune`, and
+  verified `git worktree list` contained no Tools worker worktree.
 
 ## Rollback
 
@@ -213,43 +219,44 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Child commit:
-- `585489c` (`Refactor tools MCP registry lifecycle boundary`).
+  - `585489c` (`Refactor tools MCP registry lifecycle boundary`).
 - Integration merge:
-- `1b5e36c` (`Merge tools MCP registry boundary`).
+  - `1b5e36c` (`Merge tools MCP registry boundary`).
 - Verification evidence:
-- Red: `uv run --extra dev pytest tests/test_tools/test_registry_lifecycle_boundary.py tests/test_mcp/test_discovery_lifecycle.py::test_tool_registry_lifecycle_owner_can_remove_mcp_registered_surface -q`
-  failed as expected with `TypeError: ToolRegistry.register() got an unexpected keyword argument 'owner'`
-  and missing dispatch visibility-boundary ownership.
-- First green: same command passed with `7 passed in 0.33s`.
-- Focused green:
-  `uv run --extra dev pytest tests/test_tools/test_registry_lifecycle_boundary.py tests/test_mcp/test_discovery_lifecycle.py tests/test_tools/test_registry_visibility.py tests/test_tools/test_dispatch_envelope.py -q`
-  passed with `30 passed in 1.25s`.
-- Touched ruff:
-  `uv run --extra dev ruff check src/opensquilla/tools/registry.py src/opensquilla/tools/dispatch.py src/opensquilla/tools/visibility.py tests/test_tools/test_registry_lifecycle_boundary.py tests/test_mcp/test_discovery_lifecycle.py`
-  passed with `All checks passed!`.
-- Touched mypy:
-  `uv run --extra dev mypy src/opensquilla/tools/registry.py src/opensquilla/tools/dispatch.py src/opensquilla/tools/visibility.py --show-error-codes`
-  passed with `Success: no issues found in 3 source files`.
-- Whitespace: `git diff --check` passed.
-- Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed with
-  no issues in 574 source files; whitespace passed; pytest passed with
-  `2811 passed, 8 skipped, 2 warnings in 64.80s`; gateway smoke
-  start/status/stop passed on port `60730`.
-- Integration gate: `scripts/refactor_gate.sh` passed after replacing local
-  absolute paths in the dispatch record; ruff passed; mypy passed with no
-  issues in 574 source files; whitespace passed; pytest passed with
-  `2813 passed, 6 skipped, 2 warnings`; gateway smoke start/status/stop
-  passed on port `61461`.
+  - Red: `uv run --extra dev pytest tests/test_tools/test_registry_lifecycle_boundary.py tests/test_mcp/test_discovery_lifecycle.py::test_tool_registry_lifecycle_owner_can_remove_mcp_registered_surface -q`
+    failed as expected with `TypeError: ToolRegistry.register() got an
+    unexpected keyword argument 'owner'` and missing dispatch
+    visibility-boundary ownership.
+  - First green: same command passed with `7 passed in 0.33s`.
+  - Focused green:
+    `uv run --extra dev pytest tests/test_tools/test_registry_lifecycle_boundary.py tests/test_mcp/test_discovery_lifecycle.py tests/test_tools/test_registry_visibility.py tests/test_tools/test_dispatch_envelope.py -q`
+    passed with `30 passed in 1.25s`.
+  - Touched ruff:
+    `uv run --extra dev ruff check src/opensquilla/tools/registry.py src/opensquilla/tools/dispatch.py src/opensquilla/tools/visibility.py tests/test_tools/test_registry_lifecycle_boundary.py tests/test_mcp/test_discovery_lifecycle.py`
+    passed with `All checks passed!`.
+  - Touched mypy:
+    `uv run --extra dev mypy src/opensquilla/tools/registry.py src/opensquilla/tools/dispatch.py src/opensquilla/tools/visibility.py --show-error-codes`
+    passed with `Success: no issues found in 3 source files`.
+  - Whitespace: `git diff --check` passed.
+  - Child gate: `scripts/refactor_gate.sh` passed; ruff passed; mypy passed
+    with no issues in 574 source files; whitespace passed; pytest passed with
+    `2811 passed, 8 skipped, 2 warnings in 64.80s`; gateway smoke
+    start/status/stop passed on port `60730`.
+  - Integration gate: `scripts/refactor_gate.sh` passed after replacing local
+    absolute paths in the dispatch record; ruff passed; mypy passed with no
+    issues in 574 source files; whitespace passed; pytest passed with
+    `2813 passed, 6 skipped, 2 warnings`; gateway smoke start/status/stop
+    passed on port `61461`.
 - Cleanup evidence:
-- Removed `../opensquilla-refactor-agent-tools`.
-- Deleted `codex/refactor-tools-mcp-registry-boundary`.
-- Ran `git worktree prune`.
-- Verified `git worktree list` contains no tools worker worktree.
+  - Removed `../opensquilla-refactor-agent-tools`.
+  - Deleted `codex/refactor-tools-mcp-registry-boundary`.
+  - Ran `git worktree prune`.
+  - Verified `git worktree list` contains no Tools worker worktree.
 - Residual risk:
-- Low. MCP client lifecycle remains in `opensquilla.mcp.discovery`; this slice
-  gives Tools first-class registry ownership/unregister semantics for lifecycle
-  cleanup without moving MCP transport code.
+  - Low. MCP client lifecycle remains in `opensquilla.mcp.discovery`; this
+    slice gives Tools first-class registry ownership/unregister semantics for
+    lifecycle cleanup without moving MCP transport code.
 - Next recommended slice:
-- Wire MCP discovery/close orchestration to the new registry owner boundary if
-  integration wants closed MCP servers to automatically remove their registered
-  tool surface.
+  - Wire MCP discovery/close orchestration to the new registry owner boundary if
+    integration wants closed MCP servers to automatically remove their
+    registered tool surface.
