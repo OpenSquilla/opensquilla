@@ -246,21 +246,44 @@ changes and must not revert unrelated edits.
     pytest `2704 passed, 8 skipped, 2 warnings`; gateway smoke start/status/stop
     completed; `Refactor gate complete.`
 
+## Chat-input-builders worker evidence
+
+- Worker branch: `codex/refactor-chat-input-builders-worker`.
+- Worker worktree: `../opensquilla-refactor-agent-chat-input-builders`.
+- Worker HEAD before edits: `e04a349` (`Plan chat IO and stream support boundaries`).
+- RED command:
+  - `uv run --extra dev pytest tests/test_cli/test_chat_input_builders_boundary.py tests/test_cli/test_chat_file_command.py tests/test_cli/test_chat_path_command.py -q`
+  - Result: failed as expected with an import error for missing
+    `opensquilla.cli.chat_input_builders`.
+- GREEN command:
+  - `uv run --extra dev pytest tests/test_cli/test_chat_input_builders_boundary.py tests/test_cli/test_chat_file_command.py tests/test_cli/test_chat_path_command.py -q`
+  - Result: `37 passed`.
+- Touched-file ruff:
+  - `uv run --extra dev ruff check src/opensquilla/cli/chat_cmd.py src/opensquilla/cli/chat_input_builders.py tests/test_cli/test_chat_input_builders_boundary.py tests/test_cli/test_chat_file_command.py tests/test_cli/test_chat_path_command.py`
+  - Result: `All checks passed!`.
+- Whitespace:
+  - `git diff --check`
+  - Result: passed.
+- Full worker gate:
+  - `scripts/refactor_gate.sh`
+  - Result: ruff passed; mypy passed; pytest `2700 passed, 8 skipped`;
+    gateway smoke start/status/stop completed; `Refactor gate complete.`
+
 ## Steps
 
 - [x] Run `scripts/refactor_preflight.sh --expect-branch codex/refactor-architecture`.
 - [x] Confirm `spawn_agent` status.
 - [x] Create fixed active worktree on `codex/refactor-chat-io-stream-support-boundaries`.
 - [x] Write this stage plan before production edits.
-- [ ] Commit this stage plan as the worker base.
-- [ ] Launch two external workers with `scripts/refactor_external_agent.sh`.
-- [ ] Chat-stream-support worker writes RED boundary tests and records RED output.
-- [ ] Chat-input-builders worker writes RED boundary tests and records RED output.
-- [ ] Workers implement their disjoint boundaries and record GREEN/check/gate evidence.
-- [ ] Main thread reviews both diffs for behavior compatibility and ownership.
-- [ ] Merge both worker branches into the active child.
-- [ ] Run focused green command and touched-file checks.
-- [ ] Run `scripts/refactor_gate.sh` in the active child worktree.
+- [x] Commit this stage plan as the worker base.
+- [x] Launch two external workers with `scripts/refactor_external_agent.sh`.
+- [x] Chat-stream-support worker writes RED boundary tests and records RED output.
+- [x] Chat-input-builders worker writes RED boundary tests and records RED output.
+- [x] Workers implement their disjoint boundaries and record GREEN/check/gate evidence.
+- [x] Main thread reviews both diffs for behavior compatibility and ownership.
+- [x] Merge both worker branches into the active child.
+- [x] Run focused green command and touched-file checks.
+- [x] Run `scripts/refactor_gate.sh` in the active child worktree.
 - [ ] Commit child verification/stage record update with:
 
 ```text
@@ -303,12 +326,29 @@ Co-authored-by: Codex <noreply@openai.com>
 ## Completion record
 
 - Chat-stream-support worker commit:
+- `db502ec` (`refactor: extract chat stream support helpers`)
 - Chat-input-builders worker commit:
+- `6378dfd` (`refactor: extract chat input builders`)
 - Active child worker merges:
+- `774224c` (`Merge chat stream support worker`)
+- `49175ff` (`Merge chat input builders worker`)
 - Child verification commit:
+- pending
 - Integration merge:
 - Integration record:
 - Verification evidence:
+- Focused merged command: `50 passed in 3.55s`.
+- Touched-file ruff: `All checks passed!`.
+- Touched-file mypy: `Success: no issues found in 131 source files`.
+- `git diff --check`: passed.
+- Active child full `scripts/refactor_gate.sh`: ruff passed, mypy passed with no
+  issues in `564 source files`, whitespace passed, pytest `2709 passed, 8
+  skipped, 2 warnings`, gateway smoke start/status/stop/status passed, final
+  line `Refactor gate complete.`
 - Cleanup evidence:
 - Residual risk:
+- Low. The moved helpers remain available as private compatibility aliases from
+  `chat_cmd.py`; focused boundary tests and existing chat command tests preserve
+  stream wrapping, timeout terminal text, image/path/file payloads, local gateway
+  detection, uploads, and artifact collection.
 - Next recommended slice:
