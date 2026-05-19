@@ -8,6 +8,11 @@ Open pull requests against `dev` by default. OpenSquilla uses `dev` as the activ
 
 Use `main` only for maintainer-directed release candidates, release stabilization, documentation-only preview, or urgent hotfix work that starts from the current published line. When in doubt, target `dev`; maintainers will route release-ready changes from `dev` to `main`. If a pull request was opened against `main` by mistake, retarget it to `dev` before review.
 
+After a release, maintainers may start a new development cycle from the
+latest `main` release point. When that requires replacing the active
+`dev` branch, the previous branch will be archived and contributors
+will be asked to rebase or retarget open pull requests.
+
 ## Default Checks
 
 Install development dependencies:

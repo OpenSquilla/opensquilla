@@ -12,7 +12,7 @@ body:
     attributes:
       label: OpenSquilla version or commit
       description: Use the release version or commit hash where the issue occurs.
-      placeholder: "0.1.0 or commit hash"
+      placeholder: "0.2.0 or commit hash"
     validations:
       required: true
   - type: dropdown
