@@ -148,7 +148,7 @@ Create a coarse browser runtime contract harness for the Web UI core runtime mod
 Co-authored-by: Codex <noreply@openai.com>
 ```
 
-- [ ] Record child hash, verification, residual risk, and next recommended slice.
+- [x] Record child hash, verification, residual risk, and next recommended slice.
 
 ## Child gate
 
