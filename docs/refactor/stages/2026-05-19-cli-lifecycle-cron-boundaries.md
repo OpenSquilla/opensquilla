@@ -300,7 +300,7 @@ Co-authored-by: Codex <noreply@openai.com>
 - [x] Merge child into integration with `git merge --no-ff`.
 - [x] Run `scripts/refactor_gate.sh` in integration.
 - [x] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`,
+- [x] Remove `../opensquilla-refactor-active`,
       `../opensquilla-refactor-agent-cli-gateway`, and
       `../opensquilla-refactor-agent-cli-cron`; run `git worktree prune`; verify
       no extra refactor worktree directories remain beyond
@@ -346,6 +346,7 @@ Co-authored-by: Codex <noreply@openai.com>
 - Integration merge:
   - `7022051` (`Merge CLI lifecycle and cron boundaries`)
 - Integration record:
+  - `afcfc1a` (`Record CLI lifecycle cron integration verification`)
 - Verification evidence:
   - Child focused CLI suite: `25 passed in 3.67s`.
   - Child `scripts/refactor_gate.sh`: `2671 passed, 8 skipped, 2 warnings in
@@ -353,6 +354,12 @@ Co-authored-by: Codex <noreply@openai.com>
   - Integration `scripts/refactor_gate.sh`: `2673 passed, 6 skipped, 2
     warnings in 28.21s`; gateway smoke completed on port `64544`.
 - Cleanup evidence:
+  - `git worktree remove ../opensquilla-refactor-active`
+  - `git worktree remove ../opensquilla-refactor-agent-cli-gateway`
+  - `git worktree remove ../opensquilla-refactor-agent-cli-cron`
+  - `git worktree prune`
+  - `find /Users/cwan0785 -maxdepth 1 -type d -name 'opensquilla-refactor-*'`
+    returned only `/Users/cwan0785/opensquilla-refactor-integration`.
 - Residual risk:
   - Low. Cron/gateway CLI command shells now delegate to workflow/presenter
     modules; existing command names, flags, RPC method names, payload keys,
