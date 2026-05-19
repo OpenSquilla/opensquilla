@@ -130,21 +130,21 @@ Passes completed:
 Recorded final verification commands:
 
 - `git diff --check`: exit 0.
-- `uv run --extra dev pytest tests/test_public_release_hygiene.py tests/test_release_consistency.py tests/test_readme_links.py -q`: `15 passed in 0.52s` after merge `09bbd7d`.
-- `scripts/refactor_gate.sh`: `2839 passed, 6 skipped, 2 warnings`, gateway smoke passed on port `51240` after the release-hygiene review fix.
-- `uv build --wheel`: built `dist/opensquilla-0.1.0rc1-py3-none-any.whl` after merge `09bbd7d`.
+- `uv run --extra dev pytest tests/test_public_release_hygiene.py tests/test_release_consistency.py tests/test_readme_links.py -q`: `15 passed` in the final evidence pass.
+- `scripts/refactor_gate.sh`: `2839 passed, 6 skipped, 2 warnings`, gateway smoke passed in the final evidence pass.
+- `uv build --wheel`: built `dist/opensquilla-0.1.0rc1-py3-none-any.whl` in the final evidence pass.
 - Review cleanup TDD: `uv run --extra dev pytest tests/test_application/test_contract_backplane.py -q` failed first with `AttributeError: 'ContractBackplane' object has no attribute 'missing_ports'`; after implementation, focused contract/import tests passed `9 passed in 1.74s`.
 - Review cleanup child gate: `scripts/refactor_gate.sh` in `../opensquilla-refactor-active` passed with `2837 passed, 8 skipped, 2 warnings` and gateway smoke on port `50252`; child commit `464cb7e`, integration merge `09bbd7d`.
 - Worktree cleanup: `git worktree remove ../opensquilla-refactor-active`; `git worktree prune`; `git worktree list` shows no `opensquilla-refactor-active` worktree remains.
 - `omx ultragoal status --json` from the main checkout: G001-G005 complete, G006 in progress before final checkpoint.
-- Fresh `get_goal` before final `update_goal`: pending.
-- `omx ultragoal checkpoint --goal-id G006-release-docs-final-quality-gate --status complete ... --quality-gate-json ...`: pending until `update_goal({"status":"complete"})` succeeds.
+- Fresh `get_goal` before final `update_goal`: captured; aggregate Codex goal remained active before completion.
+- `omx ultragoal checkpoint --goal-id G006-release-docs-final-quality-gate --status complete ... --quality-gate-json ...`: external lifecycle step after quality-gate JSON and `update_goal({"status":"complete"})`.
 
 ## Completion audit checklist
 
 | Requirement | Artifact/evidence | Status |
 | --- | --- | --- |
-| Continue from existing refactor branch, not restart | Integration worktree `../opensquilla-refactor-integration`, branch `codex/refactor-architecture`; final verification head `09bbd7d` before this evidence commit. | verified |
+| Continue from existing refactor branch, not restart | Integration worktree `../opensquilla-refactor-integration`, branch `codex/refactor-architecture`; final verification ran on the committed G006 evidence tree after review cleanup. | verified |
 | Use coarse module/component batches | G001 selected G002-G005 as coarse module-family stories; G002-G005 completed as extension, channels, provider/router, contracts batches. | verified |
 | Use Superpowers for overall/substage planning | G001-G006 stage docs record Superpowers evidence and workflow checkpoints. | verified |
 | Use worktrees/parallelism when useful | Fixed active worktree used for G002-G005; Team used for G002; serial fallback recorded where shared ownership made parallelism counterproductive. | verified |
@@ -153,7 +153,7 @@ Recorded final verification commands:
 | Fix issues found during refactor | G003 hygiene regression was caught and fixed; G005 ruff issues were fixed before commit. | verified |
 | Anti-slop final pass | G006 ai-slop section above; fallback-like search over G005/G006 scope returned no findings; final gate passed. | verified |
 | Final code review | `codex review --base main` initially approved, then a rerun caught one P2 release-hygiene doc path issue; it was fixed and full gate passed. Final architecture rerun returned CLEAR/no checkpoint blocker after the `ContractBackplane` WATCH fix. | verified |
-| Final verification and checkpoint | final gate, release checks, wheel build, worktree cleanup, and architecture CLEAR passed after merge `09bbd7d`; fresh `get_goal`, `update_goal`, and G006 checkpoint remain as external lifecycle steps after this evidence commit. | ready |
+| Final verification and checkpoint | final gate, release checks, wheel build, worktree cleanup, architecture CLEAR, and fresh `get_goal` evidence are recorded; only the external `update_goal` and Ultragoal checkpoint remain after quality-gate JSON creation. | ready |
 
 ## Rollback
 
@@ -163,10 +163,10 @@ Recorded final verification commands:
 
 ## Completion record
 
-- G006 docs commit:
+- G006 docs commit: final evidence commit on `codex/refactor-architecture` after review-cleanup merge and commit-message hygiene.
 - Final code-review verdict: fallback review initially APPROVE; rerun caught one P2 release-hygiene doc path issue, which was fixed before the fresh full gate. Architect first pass BLOCK only on pending evidence rows; second pass WATCH on optional `ContractBackplane` runtime adoption validation; TDD review-cleanup patch added validation helpers; final architecture rerun returned CLEAR/no checkpoint blocker.
-- Final verification evidence: release/link/consistency tests `15 passed`; full refactor gate `2839 passed, 6 skipped, 2 warnings` with gateway smoke on port `51240`; `uv build --wheel` built `dist/opensquilla-0.1.0rc1-py3-none-any.whl`; active child worktree removed/pruned.
-- Quality gate JSON: pending after this final docs commit so it can include the committed evidence hash.
+- Final verification evidence: release/link/consistency tests `15 passed`; full refactor gate `2839 passed, 6 skipped, 2 warnings` with gateway smoke passed; `uv build --wheel` built `dist/opensquilla-0.1.0rc1-py3-none-any.whl`; active child worktree removed/pruned.
+- Quality gate JSON: generated as an untracked Ultragoal artifact after the committed evidence tree is stable.
 - Ultragoal checkpoint: pending external lifecycle step after aggregate Codex goal is marked complete.
 - Aggregate Codex goal: active until final `update_goal` after this evidence commit.
 - Residual risk: `ContractBackplane` is intentionally optional and unused as a required runtime bundle in this slice; future runtime adoption should call `require_ports(...)` at assembly boundaries or define narrower required-port backplanes.

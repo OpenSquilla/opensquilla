@@ -211,7 +211,7 @@ The continuation run for component/plugin decoupling completed the implementatio
 5. G005 contracts adoption/backplane batch: added `opensquilla.application.ContractBackplane` as an application-facing contract-port composition seam across tools, session, provider, channel, and memory ports; runtime consumer migration remains deferred to future slices so public behavior stays unchanged; completed child/integration gates and cleanup.
 6. G006 release/docs final quality gate: records the final anti-slop pass, code review, full refactor gate, wheel build, and completion audit before closing the aggregate goal.
 
-Final verification evidence is recorded in `docs/refactor/stages/2026-05-19-release-docs-final-quality-gate.md`: release hygiene/link consistency tests, `scripts/refactor_gate.sh`, `uv build --wheel`, and the final architecture CLEAR rerun passed after the review-cleanup merge. The remaining lifecycle items are quality-gate JSON, `update_goal`, and the Ultragoal checkpoint.
+Final verification evidence is recorded in `docs/refactor/stages/2026-05-19-release-docs-final-quality-gate.md`: release hygiene/link consistency tests, `scripts/refactor_gate.sh`, `uv build --wheel`, and the final architecture CLEAR rerun passed after the review-cleanup merge. The remaining lifecycle items after the committed evidence tree are quality-gate JSON, `update_goal`, and the Ultragoal checkpoint.
 
 ## Standard Slice Lifecycle
 
