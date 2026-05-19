@@ -9,6 +9,7 @@ from .approval_queue import (
     get_approval_queue,
     reset_approval_queue,
 )
+from .backplane import ContractBackplane
 from .intent_cache import IntentApprovalCache, get_intent_cache, reset_intent_cache
 from .turn import (
     HistoryServicePort,
@@ -34,6 +35,7 @@ from .wizard import (
 __all__ = [
     "ApprovalQueue",
     "ApprovalSettings",
+    "ContractBackplane",
     "HistoryServicePort",
     "IntentApprovalCache",
     "MemoryOrchestratorPort",
