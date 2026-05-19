@@ -78,7 +78,7 @@ Refactor channel adapter config and external ingress routing as one coherent beh
   - `spawn_agent` probe: two `explore` agents were spawned for independent lane mapping; both failed with `429 Too Many Requests`, so no worker edits were accepted.
   - External worker fallback: not used for implementation because the selected remaining batch is a single shared-file boundary centered on `ChannelManager`; splitting would create more conflict than throughput. If later RED tests expose independent adapter-module defects, use `scripts/refactor_external_agent.sh` before adding serial sub-slices.
 - Serena evidence:
-  - Serena project `/Users/cwan0785/opensquilla-refactor-integration` was activated.
+  - Serena project for the integration worktree was activated.
   - Serena project memories read: multi-branch parallelism preference, Serena usage preference, and per-substage Superpowers evidence requirements.
   - Serena symbol lookups informed the decision to keep dispatch/reply boundaries stable and focus this batch on `ChannelManager.from_config` plus `collect_webhook_routes`.
 
@@ -148,11 +148,11 @@ Refactor channel adapter config and external ingress routing as one coherent beh
 - [x] Implement `channels.runtime_assembly` and delegate from `ChannelManager`.
 - [x] Run the focused GREEN command and touched-file ruff.
 - [x] Run `scripts/refactor_gate.sh` in the child worktree.
-- [ ] Commit with the required Co-authored-by trailer.
-- [ ] Merge child into integration with `git merge --no-ff`.
-- [ ] Run `scripts/refactor_gate.sh` in integration.
-- [ ] Record child hash, integration hash, verification, and next slice.
-- [ ] Remove `../opensquilla-refactor-active`, run `git worktree prune`, and verify cleanup.
+- [x] Commit with the required Co-authored-by trailer.
+- [x] Merge child into integration with `git merge --no-ff`.
+- [x] Run `scripts/refactor_gate.sh` in integration.
+- [x] Record child hash, integration hash, verification, and next slice.
+- [x] Remove `../opensquilla-refactor-active`, run `git worktree prune`, and verify cleanup.
 - [ ] Checkpoint Ultragoal G003 with a fresh active `get_goal` JSON; do not call `update_goal`.
 
 ## Child gate
@@ -174,13 +174,17 @@ Refactor channel adapter config and external ingress routing as one coherent beh
 
 ## Completion record
 
-- Child commit: pending.
-- Integration merge: pending.
+- Child commit: `df82ba3` (`Separate channel ingress assembly from lifecycle management`).
+- Integration merge: `f61d8d0` (`Merge channels external ingress boundary batch`).
 - Verification evidence:
   - RED: `uv run --extra dev pytest tests/test_channels/test_channel_runtime_assembly_boundary.py -q` failed before implementation with `ModuleNotFoundError: No module named 'opensquilla.channels.runtime_assembly'`.
   - GREEN boundary: `uv run --extra dev pytest tests/test_channels/test_channel_runtime_assembly_boundary.py -q` -> `4 passed in 0.28s`.
   - Focused compatibility: `uv run --extra dev pytest tests/test_channels/test_channel_runtime_assembly_boundary.py tests/test_channels/test_channel_manager_ingress.py tests/test_channels/test_channel_manager_lifecycle.py tests/test_channels/test_channel_gateway_boundary.py tests/test_gateway/test_channel_manager_wiring_boundary.py tests/test_gateway/test_rpc_channels.py tests/test_cli/test_channels_cmd.py tests/test_onboarding/test_channel_specs.py -q` -> `85 passed in 1.21s`.
   - Touched-file lint: `uv run --extra dev ruff check src/opensquilla/channels/runtime_assembly.py src/opensquilla/channels/manager.py tests/test_channels/test_channel_runtime_assembly_boundary.py` -> `All checks passed!`.
   - Child gate: `scripts/refactor_gate.sh` -> ruff pass, mypy pass on 580 source files, whitespace pass, pytest `2831 passed, 8 skipped`, gateway smoke start/status/stop/status pass, `Refactor gate complete.`
-- Residual risk: integration merge/gate and cleanup still pending.
+  - Integration gate first run after merge exposed release hygiene failure: `tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths` failed on a tracked absolute local path in this stage doc.
+  - Hygiene fix check: `uv run --extra dev pytest tests/test_public_release_hygiene.py::test_tracked_public_files_do_not_contain_real_secret_shapes_or_local_paths -q` -> `1 passed in 0.36s`.
+  - Integration gate after hygiene fix: `scripts/refactor_gate.sh` -> ruff pass, mypy pass on 580 source files, whitespace pass, pytest `2833 passed, 6 skipped`, gateway smoke start/status/stop/status pass, `Refactor gate complete.`
+  - Cleanup: `git worktree remove ../opensquilla-refactor-active`; `git worktree prune`; `git worktree list` no longer lists `../opensquilla-refactor-active`.
+- Residual risk: no known G003 blocker after child gate, integration merge, integration gate, and active child worktree cleanup. Ultragoal checkpoint remains leader-owned follow-up step.
 - Next recommended slice: G004 provider and router integration batch.
