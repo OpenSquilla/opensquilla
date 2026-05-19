@@ -1,0 +1,236 @@
+"""Shared migration orchestration outside Typer command handlers."""
+
+from __future__ import annotations
+
+import contextlib
+import io
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal, cast
+
+from opensquilla.migration.hermes import (
+    MIGRATION_OPTIONS as HERMES_MIGRATION_OPTIONS,
+)
+from opensquilla.migration.hermes import (
+    MIGRATION_PRESETS as HERMES_MIGRATION_PRESETS,
+)
+from opensquilla.migration.hermes import (
+    SKILL_CONFLICT_MODES as HERMES_SKILL_CONFLICT_MODES,
+)
+from opensquilla.migration.hermes import (
+    HermesMigrationOptions,
+    HermesMigrator,
+    _is_valid_hermes_home,
+)
+from opensquilla.migration.openclaw import (
+    MIGRATION_OPTIONS as OPENCLAW_MIGRATION_OPTIONS,
+)
+from opensquilla.migration.openclaw import (
+    MIGRATION_PRESETS as OPENCLAW_MIGRATION_PRESETS,
+)
+from opensquilla.migration.openclaw import (
+    PERSONA_CONFLICT_MODES,
+    MigrationOptions,
+    OpenClawMigrator,
+    _is_valid_openclaw_home,
+)
+from opensquilla.migration.openclaw import (
+    SKILL_CONFLICT_MODES as OPENCLAW_SKILL_CONFLICT_MODES,
+)
+
+SOURCE_ORDER: tuple[str, ...] = ("openclaw", "hermes")
+
+
+class MigrationOptionError(ValueError):
+    """Raised when a shared migration option is invalid for a selected source."""
+
+
+@dataclass(frozen=True)
+class DetectedMigrationSource:
+    name: Literal["openclaw", "hermes"]
+    path: Path
+
+
+@dataclass(frozen=True)
+class MigrationBatchOptions:
+    config: Path | None = None
+    apply: bool = False
+    migrate_secrets: bool = False
+    overwrite: bool = False
+    preset: str = "full"
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+    skill_conflict: str = "skip"
+    persona_conflict: str = "use-opensquilla"
+    quiet: bool = True
+
+
+@dataclass(frozen=True)
+class MigrationBatchResult:
+    selected: tuple[str, ...]
+    reports: dict[str, dict[str, Any]]
+    apply: bool
+
+    @property
+    def has_error(self) -> bool:
+        return any(report_has_error(report) for report in self.reports.values())
+
+    @property
+    def output_dirs(self) -> dict[str, str]:
+        return {
+            name: str(report.get("output_dir", ""))
+            for name, report in self.reports.items()
+            if report.get("output_dir")
+        }
+
+
+def detect_default_sources() -> list[DetectedMigrationSource]:
+    """Discover default OpenClaw and Hermes homes in canonical migration order."""
+
+    found: list[DetectedMigrationSource] = []
+    openclaw_home = Path.home() / ".openclaw"
+    if _is_valid_openclaw_home(openclaw_home):
+        found.append(DetectedMigrationSource("openclaw", openclaw_home))
+    hermes_home = Path.home() / ".hermes"
+    if _is_valid_hermes_home(hermes_home):
+        found.append(DetectedMigrationSource("hermes", hermes_home))
+    return found
+
+
+def canonical_source_selection(
+    selected: list[str] | tuple[str, ...],
+    detected: list[DetectedMigrationSource],
+) -> tuple[str, ...]:
+    detected_names = {source.name for source in detected}
+    unknown = sorted(set(selected) - set(SOURCE_ORDER))
+    if unknown:
+        raise MigrationOptionError(
+            f"Unknown migration source: {', '.join(unknown)} "
+            f"(known: {', '.join(SOURCE_ORDER)})"
+        )
+    missing = sorted(set(selected) - detected_names)
+    if missing:
+        raise MigrationOptionError(
+            f"Requested source not detected: {', '.join(missing)}. "
+            f"Found: {', '.join(sorted(detected_names)) or '(none)'}"
+        )
+    return tuple(name for name in SOURCE_ORDER if name in selected)
+
+
+def validate_batch_options(selected: tuple[str, ...], options: MigrationBatchOptions) -> None:
+    for name in selected:
+        if name == "openclaw":
+            _validate_openclaw_options(options)
+        elif name == "hermes":
+            _validate_hermes_options(options)
+        else:
+            raise MigrationOptionError(f"Unknown migration source: {name}")
+
+
+def run_migration_batch(
+    detected: list[DetectedMigrationSource],
+    selected: list[str] | tuple[str, ...],
+    options: MigrationBatchOptions,
+) -> MigrationBatchResult:
+    canonical = canonical_source_selection(tuple(selected), detected)
+    validate_batch_options(canonical, options)
+    detected_by_name = {source.name: source.path for source in detected}
+    reports: dict[str, dict[str, Any]] = {}
+    for name in canonical:
+        reports[name] = run_one_migration(name, detected_by_name[name], options)
+    return MigrationBatchResult(selected=canonical, reports=reports, apply=options.apply)
+
+
+def run_one_migration(
+    name: str,
+    source_path: Path,
+    options: MigrationBatchOptions,
+) -> dict[str, Any]:
+    if name == "openclaw":
+        migration_options = MigrationOptions(
+            source=source_path,
+            config_path=options.config,
+            apply=options.apply,
+            migrate_secrets=options.migrate_secrets,
+            overwrite=options.overwrite,
+            preset=options.preset,
+            include=options.include,
+            exclude=options.exclude,
+            skill_conflict=options.skill_conflict,  # type: ignore[arg-type]
+            persona_conflict=options.persona_conflict,  # type: ignore[arg-type]
+        )
+        migrator: Any = OpenClawMigrator(migration_options)
+    elif name == "hermes":
+        hermes_options = HermesMigrationOptions(
+            source=source_path,
+            config_path=options.config,
+            apply=options.apply,
+            migrate_secrets=options.migrate_secrets,
+            overwrite=options.overwrite,
+            preset=options.preset,
+            include=options.include,
+            exclude=options.exclude,
+            skill_conflict=options.skill_conflict,  # type: ignore[arg-type]
+        )
+        migrator = HermesMigrator(hermes_options)
+    else:
+        raise MigrationOptionError(f"Unknown migration source: {name}")
+
+    if options.quiet:
+        with contextlib.redirect_stdout(io.StringIO()):
+            return cast(dict[str, Any], migrator.migrate())
+    return cast(dict[str, Any], migrator.migrate())
+
+
+def report_has_error(report: dict[str, Any]) -> bool:
+    return any(item.get("status") == "error" for item in report.get("items", []))
+
+
+def report_status_counts(report: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in report.get("items", []):
+        status = str(item.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _validate_openclaw_options(options: MigrationBatchOptions) -> None:
+    if options.preset not in OPENCLAW_MIGRATION_PRESETS:
+        raise MigrationOptionError(f"Unknown migration preset: {options.preset}")
+    unknown_include = sorted(set(options.include) - OPENCLAW_MIGRATION_OPTIONS)
+    if unknown_include:
+        raise MigrationOptionError(
+            f"Unknown migration option in include: {', '.join(unknown_include)}"
+        )
+    unknown_exclude = sorted(set(options.exclude) - OPENCLAW_MIGRATION_OPTIONS)
+    if unknown_exclude:
+        raise MigrationOptionError(
+            f"Unknown migration option in exclude: {', '.join(unknown_exclude)}"
+        )
+    if options.skill_conflict not in OPENCLAW_SKILL_CONFLICT_MODES:
+        raise MigrationOptionError(
+            f"Unknown skill conflict behavior: {options.skill_conflict}"
+        )
+    if options.persona_conflict not in PERSONA_CONFLICT_MODES:
+        raise MigrationOptionError(
+            f"Unknown persona conflict behavior: {options.persona_conflict}"
+        )
+
+
+def _validate_hermes_options(options: MigrationBatchOptions) -> None:
+    if options.preset not in HERMES_MIGRATION_PRESETS:
+        raise MigrationOptionError(f"Unknown Hermes migration preset: {options.preset}")
+    unknown_include = sorted(set(options.include) - HERMES_MIGRATION_OPTIONS)
+    if unknown_include:
+        raise MigrationOptionError(
+            f"Unknown Hermes migration option in include: {', '.join(unknown_include)}"
+        )
+    unknown_exclude = sorted(set(options.exclude) - HERMES_MIGRATION_OPTIONS)
+    if unknown_exclude:
+        raise MigrationOptionError(
+            f"Unknown Hermes migration option in exclude: {', '.join(unknown_exclude)}"
+        )
+    if options.skill_conflict not in HERMES_SKILL_CONFLICT_MODES:
+        raise MigrationOptionError(
+            f"Unknown Hermes skill conflict behavior: {options.skill_conflict}"
+        )

@@ -77,6 +77,7 @@ def onboard_command(
     skip_channels: bool = typer.Option(False, "--skip-channels"),
     skip_search: bool = typer.Option(False, "--skip-search"),
     skip_image_generation: bool = typer.Option(False, "--skip-image-generation"),
+    skip_migration: bool = typer.Option(False, "--skip-migration"),
     if_needed: bool = typer.Option(False, "--if-needed"),
 ) -> None:
     """Run first-run onboarding (interactive or non-interactive)."""
@@ -139,6 +140,7 @@ def onboard_command(
         base_url=base_url or None,
         router_mode=router,
         minimal=minimal,
+        skip_migration=skip_migration,
     )
     result = run_interactive_onboard(options)
     if "tty_required" in result.warnings:

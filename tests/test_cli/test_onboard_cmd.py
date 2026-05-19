@@ -53,6 +53,35 @@ def test_onboard_accepts_skip_image_generation_option(tmp_path, monkeypatch):
     assert data["image_generation"]["enabled"] is False
 
 
+def test_onboard_passes_skip_migration_to_interactive_flow(tmp_path, monkeypatch):
+    from opensquilla.cli import onboard_cmd
+    from opensquilla.onboarding.config_store import PersistResult
+
+    target = tmp_path / "c.toml"
+    monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))
+    captured: dict[str, bool] = {}
+
+    def fake_run_interactive_onboard(options):
+        captured["skip_migration"] = options.skip_migration
+        return PersistResult(
+            path=target,
+            backup_path=None,
+            restart_required=False,
+            warnings=[],
+        )
+
+    monkeypatch.setattr(
+        onboard_cmd,
+        "run_interactive_onboard",
+        fake_run_interactive_onboard,
+    )
+
+    result = runner.invoke(app, ["onboard", "--skip-migration"])
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["skip_migration"] is True
+
+
 def test_onboard_noninteractive_provider_can_use_env_key_and_router(tmp_path, monkeypatch):
     target = tmp_path / "c.toml"
     monkeypatch.setenv("OPENSQUILLA_GATEWAY_CONFIG_PATH", str(target))

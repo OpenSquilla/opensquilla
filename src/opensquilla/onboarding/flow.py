@@ -7,8 +7,18 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
+from opensquilla.migration.orchestrator import (
+    DetectedMigrationSource,
+    MigrationBatchOptions,
+    MigrationBatchResult,
+    MigrationOptionError,
+    detect_default_sources,
+    report_status_counts,
+    run_migration_batch,
+)
 from opensquilla.onboarding.channel_specs import (
     ChannelSetupField,
     ChannelSetupSpec,
@@ -88,6 +98,8 @@ def _styled(q):
         text=_wrap("text"),
         confirm=_wrap("confirm"),
         password=_wrap("password"),
+        checkbox=_wrap("checkbox"),
+        Choice=getattr(q, "Choice", None),
     )
 
 
@@ -104,6 +116,7 @@ class OnboardOptions:
     base_url: str | None = None
     router_mode: str = "recommended"
     minimal: bool = False
+    skip_migration: bool = False
 
 
 def _is_tty() -> bool:
@@ -947,6 +960,338 @@ def _print_channel_saved(name: str) -> None:
     )
 
 
+_MIGRATION_SOURCE_LABELS = {
+    "openclaw": "OpenClaw",
+    "hermes": "Hermes Agent",
+}
+
+
+def _config_path_from_loaded_config(cfg: Any) -> Path:
+    raw = getattr(cfg, "config_path", "") or default_config_path()
+    return Path(raw).expanduser()
+
+
+def _run_onboard_migration_step(
+    questionary,
+    *,
+    config_path: Path,
+) -> MigrationBatchResult | None:
+    """Run the interactive onboarding migration pre-step.
+
+    Migration is intentionally isolated from the rest of onboarding: detection,
+    dry-run, apply, and report rendering failures all degrade to "skip migration"
+    so provider setup can continue normally.
+    """
+
+    try:
+        detected = detect_default_sources()
+        if not detected:
+            return None
+        _print_detected_migration_sources(detected)
+        source_labels = " / ".join(
+            _MIGRATION_SOURCE_LABELS.get(source.name, source.name)
+            for source in detected
+        )
+        should_migrate = bool(
+            _ask_or_cancel(
+                questionary.confirm(
+                    f"Import existing {source_labels} data now?",
+                    default=True,
+                ),
+                section="migration",
+            )
+        )
+        if not should_migrate:
+            console.print("[dim]Migration skipped.[/dim]")
+            return None
+
+        selected = _ask_migration_sources(questionary, detected)
+        if not selected:
+            console.print("[yellow]No migration source selected; skipping migration.[/yellow]")
+            return None
+
+        migrate_secrets = bool(
+            _ask_or_cancel(
+                questionary.confirm(
+                    "Import API keys and secrets from old .env files?",
+                    default=False,
+                ),
+                section="migration",
+            )
+        )
+        dry_run_options = _onboard_migration_options(
+            config_path=config_path,
+            apply=False,
+            migrate_secrets=migrate_secrets,
+        )
+        dry_run = run_migration_batch(detected, selected, dry_run_options)
+        _print_migration_summary(dry_run, title="Migration preview")
+        if dry_run.has_error:
+            console.print(
+                warning_panel(
+                    "Migration preview found errors. Onboarding will continue without "
+                    "applying migration; retry later with `opensquilla migrate --apply`."
+                )
+            )
+            return None
+
+        apply_now = bool(
+            _ask_or_cancel(
+                questionary.confirm("Apply this migration now?", default=True),
+                section="migration",
+            )
+        )
+        if not apply_now:
+            console.print("[dim]Migration not applied.[/dim]")
+            return None
+
+        applied_options = _onboard_migration_options(
+            config_path=config_path,
+            apply=True,
+            migrate_secrets=migrate_secrets,
+        )
+        applied = run_migration_batch(detected, selected, applied_options)
+        _print_migration_summary(applied, title="Migration complete")
+        if applied.has_error:
+            console.print(
+                warning_panel(
+                    "Migration reported errors after apply. Onboarding will continue; "
+                    "review the migration report before relying on imported data."
+                )
+            )
+            return None
+        return applied
+    except UserCancelledError:
+        console.print("[yellow]Migration setup cancelled — continuing onboarding.[/yellow]")
+        return None
+    except KeyboardInterrupt:
+        console.print("[yellow]Migration interrupted — continuing onboarding.[/yellow]")
+        return None
+    except MigrationOptionError as exc:
+        console.print(
+            warning_panel(
+                f"Migration options were rejected: {exc}. "
+                "Onboarding will continue without migration."
+            )
+        )
+        return None
+    except Exception as exc:
+        console.print(
+            warning_panel(
+                f"Migration failed before onboarding completed: {exc}. "
+                "Onboarding will continue without migration."
+            )
+        )
+        return None
+
+
+def _onboard_migration_options(
+    *,
+    config_path: Path,
+    apply: bool,
+    migrate_secrets: bool,
+) -> MigrationBatchOptions:
+    return MigrationBatchOptions(
+        config=config_path,
+        apply=apply,
+        migrate_secrets=migrate_secrets,
+        overwrite=False,
+        preset="full",
+        include=(),
+        exclude=(),
+        skill_conflict="skip",
+        persona_conflict="use-opensquilla",
+    )
+
+
+def _print_detected_migration_sources(detected: list[DetectedMigrationSource]) -> None:
+    console.print(f"[bold {ACCENT}]◆[/] [bold]Existing agent data detected[/]")
+    for source in detected:
+        label = _MIGRATION_SOURCE_LABELS.get(source.name, source.name)
+        console.print(f"  [{ACCENT_SOFT}]✓[/] {label} [dim]{source.path}[/dim]")
+
+
+def _ask_migration_sources(
+    questionary,
+    detected: list[DetectedMigrationSource],
+) -> list[str]:
+    if len(detected) == 1:
+        return [detected[0].name]
+    choice_cls = getattr(questionary, "Choice", None)
+    if choice_cls is None:
+        choices = [
+            f"{_MIGRATION_SOURCE_LABELS.get(source.name, source.name)} ({source.path})"
+            for source in detected
+        ]
+        selected = _ask_or_cancel(
+            questionary.checkbox("Migration sources", choices=choices),
+            section="migration",
+        )
+        selected_text = {str(value).split(" ", 1)[0].lower() for value in selected}
+        return [source.name for source in detected if source.name in selected_text]
+    choices = [
+        choice_cls(
+            title=f"{_MIGRATION_SOURCE_LABELS.get(source.name, source.name)} ({source.path})",
+            value=source.name,
+            checked=True,
+        )
+        for source in detected
+    ]
+    selected = _ask_or_cancel(
+        questionary.checkbox("Migration sources", choices=choices),
+        section="migration",
+    )
+    return [str(value) for value in selected]
+
+
+def _print_migration_summary(result: MigrationBatchResult, *, title: str) -> None:
+    console.print(f"[bold {ACCENT}]◆[/] [bold]{title}[/]")
+    mode = "applied" if result.apply else "dry-run"
+    for name in result.selected:
+        report = result.reports.get(name, {})
+        label = _MIGRATION_SOURCE_LABELS.get(name, name)
+        counts = report_status_counts(report)
+        pieces = [
+            f"{status}={count}"
+            for status, count in sorted(counts.items())
+            if count
+        ]
+        summary = ", ".join(pieces) if pieces else "no changes"
+        console.print(f"  {label}: {mode}; {summary}")
+        output_dir = str(report.get("output_dir") or "")
+        report_file = Path(output_dir) / "report.json" if output_dir else None
+        if output_dir and (result.apply or (report_file is not None and report_file.is_file())):
+            console.print(f"    [dim]Report:[/dim] {output_dir}")
+
+
+def _migration_result_path(
+    cfg: Any,
+    migration_result: MigrationBatchResult | None,
+    *,
+    config_path: Path,
+) -> PersistResult:
+    if migration_result is None:
+        return PersistResult(
+            path=_config_path_from_loaded_config(cfg),
+            backup_path=None,
+            restart_required=False,
+        )
+    return PersistResult(
+        path=config_path,
+        backup_path=None,
+        restart_required=bool(migration_result.apply),
+    )
+
+
+def _reload_after_migration(config_path: Path, fallback: Any):
+    try:
+        return load_config(config_path)
+    except Exception as exc:
+        console.print(
+            warning_panel(
+                f"Imported configuration could not be reloaded: {exc}. "
+                "Continuing with the pre-migration onboarding state."
+            )
+        )
+        return fallback
+
+
+def _keep_imported_provider(questionary, cfg: Any) -> bool:
+    llm = getattr(cfg, "llm", None)
+    provider = str(getattr(llm, "provider", "") or "")
+    model = str(getattr(llm, "model", "") or "")
+    if provider:
+        console.print(
+            f"[bold {ACCENT}]◆[/] [bold]Imported provider settings found[/]"
+        )
+        console.print(f"  Provider: [{ACCENT_SOFT}]{markup_escape(provider)}[/]")
+        if model:
+            console.print(f"  Model: [{ACCENT_SOFT}]{markup_escape(model)}[/]")
+    return bool(
+        _ask_or_cancel(
+            questionary.confirm("Keep imported provider settings?", default=True),
+            section="provider",
+        )
+    )
+
+
+def _complete_imported_provider_credentials(questionary, cfg: Any):
+    llm = getattr(cfg, "llm", None)
+    provider = str(getattr(llm, "provider", "") or "")
+    model = str(getattr(llm, "model", "") or "")
+    base_url = str(getattr(llm, "base_url", "") or "")
+    imported_env_key = str(getattr(llm, "api_key_env", "") or "")
+    if not provider or not model:
+        return None
+    try:
+        spec = get_provider_setup_spec(provider)
+    except KeyError:
+        return None
+    if not spec.runtime_supported or not spec.requires_api_key:
+        return None
+    if spec.requires_base_url and not base_url:
+        return None
+
+    console.print(
+        warning_panel(
+            "Provider settings were imported, but no usable API key is available. "
+            "Set the key now to finish onboarding."
+        )
+    )
+    credentials = _ask_imported_provider_credentials(
+        questionary,
+        spec,
+        imported_env_key=imported_env_key,
+    )
+    res = upsert_llm_provider(
+        cfg,
+        provider_id=provider,
+        model=model,
+        api_key=credentials["api_key"],
+        api_key_env=credentials["api_key_env"],
+        base_url=base_url,
+    )
+    return res.config
+
+
+def _ask_imported_provider_credentials(
+    questionary,
+    spec,
+    *,
+    imported_env_key: str,
+) -> dict[str, str]:
+    choices = [_PASTE_API_KEY_CHOICE]
+    seen_env_keys: set[str] = set()
+    for env_key in (imported_env_key, spec.env_key):
+        if env_key and env_key not in seen_env_keys:
+            seen_env_keys.add(env_key)
+            choices.append(
+                _api_key_env_choice(env_key, detected=bool(os.environ.get(env_key)))
+            )
+    detected_choice = next((choice for choice in choices if _DETECTED_ENV_SUFFIX in choice), None)
+    key_source = _ask_or_cancel(
+        questionary.select(
+            "LLM API key source",
+            choices=choices,
+            default=detected_choice or _PASTE_API_KEY_CHOICE,
+        ),
+        section="provider",
+    )
+    selected_env_key = _api_key_env_from_choice(key_source or "")
+    if selected_env_key:
+        return {"api_key": "", "api_key_env": selected_env_key}
+    return {
+        "api_key": _ask_or_cancel(
+            questionary.password(
+                "API key",
+                validate=_secret_value_validator("API key"),
+            ),
+            section="provider",
+        ),
+        "api_key_env": "",
+    }
+
+
 def run_interactive_onboard(options: OnboardOptions) -> PersistResult:
     cfg = load_config()
     status = get_onboarding_status(cfg)
@@ -962,36 +1307,72 @@ def run_interactive_onboard(options: OnboardOptions) -> PersistResult:
     console.print(
         banner_panel(
             "OpenSquilla Onboarding",
-            "Provider · Router · Channel · Search",
+            "Migration · Provider · Router · Channel · Search",
         )
     )
     _wait_for_setup_start()
-    spec, provider_id = _ask_provider_choice(questionary, options)
-    answers = _ask_provider_fields(questionary, spec, options)
-    res = upsert_llm_provider(
-        cfg,
-        provider_id=provider_id,
-        model=answers["model"],
-        api_key=answers.get("api_key", ""),
-        api_key_env=answers.get("api_key_env", ""),
-        base_url=answers.get("base_url", ""),
-    )
-    cfg_after_provider = res.config
-    if options.router_mode:
-        router_payload = _ask_router_fields(
+    config_path = _config_path_from_loaded_config(cfg)
+    migration_result: MigrationBatchResult | None = None
+    if not options.skip_migration:
+        migration_result = _run_onboard_migration_step(
             questionary,
-            cfg_after_provider,
-            provider_id=provider_id,
-            requested_mode=options.router_mode,
+            config_path=config_path,
         )
-        router_res = upsert_router(
-            cfg_after_provider,
-            mode=router_payload["mode"],
-            default_tier=router_payload.get("defaultTier"),
-            tiers=router_payload.get("tiers"),
+        if migration_result is not None:
+            cfg = _reload_after_migration(config_path, cfg)
+            status = get_onboarding_status(cfg)
+
+    keep_imported = (
+        migration_result is not None
+        and not migration_result.has_error
+        and status.llm_configured
+        and _keep_imported_provider(questionary, cfg)
+    )
+    if keep_imported:
+        cfg_after_provider = cfg
+        persist = _migration_result_path(cfg, migration_result, config_path=config_path)
+    else:
+        completed_imported = (
+            _complete_imported_provider_credentials(questionary, cfg)
+            if migration_result is not None and not status.llm_configured
+            else None
         )
-        cfg_after_provider = router_res.config
-    persist = persist_config(cfg_after_provider, restart_required=False)
+        if completed_imported is not None:
+            cfg_after_provider = completed_imported
+        else:
+            if migration_result is not None and not status.llm_configured:
+                console.print(
+                    warning_panel(
+                        "Provider settings were not fully usable after migration. "
+                        "Continue provider setup to finish onboarding."
+                    )
+                )
+            spec, provider_id = _ask_provider_choice(questionary, options)
+            answers = _ask_provider_fields(questionary, spec, options)
+            res = upsert_llm_provider(
+                cfg,
+                provider_id=provider_id,
+                model=answers["model"],
+                api_key=answers.get("api_key", ""),
+                api_key_env=answers.get("api_key_env", ""),
+                base_url=answers.get("base_url", ""),
+            )
+            cfg_after_provider = res.config
+            if options.router_mode:
+                router_payload = _ask_router_fields(
+                    questionary,
+                    cfg_after_provider,
+                    provider_id=provider_id,
+                    requested_mode=options.router_mode,
+                )
+                router_res = upsert_router(
+                    cfg_after_provider,
+                    mode=router_payload["mode"],
+                    default_tier=router_payload.get("defaultTier"),
+                    tiers=router_payload.get("tiers"),
+                )
+                cfg_after_provider = router_res.config
+        persist = persist_config(cfg_after_provider, restart_required=False)
 
     if options.minimal:
         return persist
